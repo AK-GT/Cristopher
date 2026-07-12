@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from cristopher.tools.memory_tools import recall, remember
 from cristopher.tools.read_file import read_file
 from cristopher.tools.shell import run_shell
 from cristopher.tools.web_search import web_search
@@ -82,6 +83,43 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["path"],
         },
         "fn": read_file,
+    },
+    {
+        "name": "remember",
+        "description": (
+            "Guarda un hecho duradero en la memoria persistente para recordarlo en "
+            "sesiones futuras. Úsala cuando el usuario comparte preferencias, datos "
+            "personales, decisiones o contexto que conviene no olvidar."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fact": {
+                    "type": "string",
+                    "description": "El hecho a recordar, en una frase autocontenida.",
+                },
+            },
+            "required": ["fact"],
+        },
+        "fn": remember,
+    },
+    {
+        "name": "recall",
+        "description": (
+            "Busca en la memoria persistente hechos relevantes para una consulta. "
+            "Úsala cuando necesites recordar algo que el usuario te contó antes."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Qué quieres recordar (tema o pregunta).",
+                },
+            },
+            "required": ["query"],
+        },
+        "fn": recall,
     },
 ]
 

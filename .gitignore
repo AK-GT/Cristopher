@@ -15,6 +15,9 @@ __pycache__/
 workspace/
 _clones/
 
+# Memoria persistente local (SQLite) — no se versiona
+data/
+
 # SO / editores
 Thumbs.db
 .DS_Store

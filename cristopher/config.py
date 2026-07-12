@@ -27,6 +27,12 @@ MODEL = os.getenv("CRISTOPHER_MODEL", "gemini-flash-latest")
 # Directorio de trabajo donde CRISTOPHER clona repos / crea archivos temporales.
 WORKSPACE = ROOT / "workspace"
 
+# Almacén local de memoria persistente (SQLite). No se versiona (.gitignore).
+DATA = ROOT / "data"
+
+# Modelo de embeddings para el recuerdo semántico (free tier, dim 3072).
+EMBED_MODEL = os.getenv("CRISTOPHER_EMBED_MODEL", "gemini-embedding-001")
+
 
 class ConfigError(RuntimeError):
     """Fallo de configuración que impide arrancar (p. ej. falta la API key)."""
