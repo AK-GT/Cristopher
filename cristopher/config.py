@@ -24,6 +24,11 @@ load_dotenv(ROOT / ".env")
 # Sobrescribible con la variable de entorno CRISTOPHER_MODEL.
 MODEL = os.getenv("CRISTOPHER_MODEL", "gemini-flash-latest")
 
+# Cerebro de respaldo: si el principal agota su cuota (429), CRISTOPHER cae a este y
+# sigue funcionando (§8 "degrada con elegancia"). Gemma 4 tiene un bucket de cuota
+# gratuito aparte y soporta function calling. Poner "" para desactivar el fallback.
+FALLBACK_MODEL = os.getenv("CRISTOPHER_FALLBACK_MODEL", "gemma-4-31b-it")
+
 # Directorio de trabajo donde CRISTOPHER clona repos / crea archivos temporales.
 WORKSPACE = ROOT / "workspace"
 

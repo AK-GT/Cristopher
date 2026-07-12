@@ -16,7 +16,7 @@ from typing import Any, Callable
 from google import genai
 from google.genai import errors, types
 
-from cristopher.config import MODEL, get_api_key
+from cristopher.config import FALLBACK_MODEL, MODEL, get_api_key
 from cristopher.memory import get_memory
 from cristopher.tools import TOOLS, call_tool
 
@@ -110,46 +110,77 @@ class Cristopher:
             ),
         )
         self._on_step = on_step or (lambda kind, text: None)
+        # Cadena de cerebros: principal y, si agota cuota, el de respaldo (§8).
+        self._models = [MODEL]
+        if FALLBACK_MODEL and FALLBACK_MODEL != MODEL:
+            self._models.append(FALLBACK_MODEL)
         # Historia de la conversación (persiste entre turnos del REPL).
         self._contents: list[types.Content] = []
 
     def _emit(self, kind: str, text: str) -> None:
         self._on_step(kind, text)
 
-    # Errores transitorios que merecen reintento: cuota (429) y saturación (503).
-    _RETRYABLE = {429, 503}
+    # Errores transitorios que merecen reintento: cuota (429), interno (500),
+    # saturación (503).
+    _RETRYABLE = {429, 500, 503}
+
+    @staticmethod
+    def _clean_error(code) -> RuntimeError:
+        """Mensaje claro para el usuario en vez de un traceback opaco (§1)."""
+        if code == 429:
+            return RuntimeError(
+                "Cuota de Gemini agotada (429) en el modelo principal y el de respaldo. "
+                "El free tier tiene límite diario; reintenta más tarde o ajusta "
+                "CRISTOPHER_MODEL / CRISTOPHER_FALLBACK_MODEL."
+            )
+        if code in (500, 503):
+            return RuntimeError(
+                f"Los modelos de Gemini no responden ({code}) tras varios reintentos. "
+                "Prueba de nuevo en un rato."
+            )
+        return RuntimeError(f"Error del modelo de Gemini ({code}).")
 
     def _generate(self, max_retries: int = 4):
-        """Llama a Gemini con reintentos ante errores transitorios (429 cuota, 503
-        saturación). Degrada con elegancia (§8): respeta el retryDelay sugerido y, si
-        se agota, lanza un mensaje claro en vez de un traceback opaco (§1)."""
-        for attempt in range(max_retries):
-            try:
-                return self._client.models.generate_content(
-                    model=MODEL,
-                    contents=self._contents,
-                    config=self._config,
-                )
-            except errors.APIError as exc:
-                code = getattr(exc, "code", None)
-                if code not in self._RETRYABLE or attempt == max_retries - 1:
-                    if code == 429:
-                        raise RuntimeError(
-                            "Cuota de Gemini agotada (429). El free tier tiene un "
-                            "límite diario; reintenta más tarde o cambia de modelo con "
-                            "la variable CRISTOPHER_MODEL."
-                        ) from exc
-                    if code == 503:
-                        raise RuntimeError(
-                            "El modelo de Gemini está saturado (503) y sigue sin "
-                            "responder tras varios reintentos. Prueba de nuevo en un rato."
-                        ) from exc
-                    raise
-                # Espera lo que sugiera la API (retryDelay/'retry in Xs'), con tope.
-                m = re.search(r"(\d+(?:\.\d+)?)\s*s", str(exc))
-                delay = min(float(m.group(1)) if m else 2 ** attempt, 30.0)
-                self._emit("observation", f"[reintento] {code}; espero {delay:.0f}s")
-                time.sleep(delay)
+        """Llama a Gemini con reintentos ante errores transitorios (429/500/503) y
+        CADENA DE FALLBACK entre cerebros: si el principal agota su cuota, cae al de
+        respaldo (Gemma 4) y sigue (§8 "degrada con elegancia"). Si todo falla, lanza
+        un mensaje claro en vez de un traceback opaco (§1)."""
+        last_code = None
+        for mi, model in enumerate(self._models):
+            has_next = mi < len(self._models) - 1
+            for attempt in range(max_retries):
+                try:
+                    return self._client.models.generate_content(
+                        model=model,
+                        contents=self._contents,
+                        config=self._config,
+                    )
+                except errors.APIError as exc:
+                    code = getattr(exc, "code", None)
+                    last_code = code
+                    if code not in self._RETRYABLE:
+                        raise  # error duro (400, permisos…): cambiar de modelo no ayuda
+                    # Cuota agotada: no reintentes el mismo modelo, salta al de respaldo.
+                    if code == 429 and has_next:
+                        self._emit(
+                            "observation",
+                            f"[fallback] {model}: cuota agotada (429) → {self._models[mi + 1]}",
+                        )
+                        break
+                    if attempt == max_retries - 1:
+                        if has_next:
+                            self._emit(
+                                "observation",
+                                f"[fallback] {model}: {code} persistente → {self._models[mi + 1]}",
+                            )
+                            break
+                        raise self._clean_error(code) from exc
+                    # Transitorio: espera (respeta retryDelay si lo hay) y reintenta.
+                    m = re.search(r"(\d+(?:\.\d+)?)\s*s", str(exc))
+                    delay = min(float(m.group(1)) if m else 2 ** attempt, 30.0)
+                    self._emit("observation", f"[reintento] {model}: {code}; espero {delay:.0f}s")
+                    time.sleep(delay)
+        raise self._clean_error(last_code)
 
     def _recall_context(self, user_message: str) -> str:
         """Recupera hechos relevantes de la memoria y los formatea como bloque de
