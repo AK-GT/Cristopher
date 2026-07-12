@@ -40,6 +40,22 @@ SUBAGENTS = WORKSPACE / "subagents"
 # Timeout amplio: las tareas de código delegadas pueden tardar.
 SUBAGENT_TIMEOUT = 600
 
+# --- Fase 4: integraciones Google + búsqueda de élite ------------------------
+# Credenciales OAuth y token persistente (bajo data/, gitignored; §9).
+GOOGLE_DIR = DATA / "google"
+GOOGLE_CREDENTIALS = GOOGLE_DIR / "credentials.json"  # lo descarga el usuario
+GOOGLE_TOKEN = GOOGLE_DIR / "token.json"              # se genera en el consentimiento
+
+# Scopes: lectura de Calendar y Gmail + envío de correo (gateado por confirmación).
+GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.send",
+]
+
+# Búsqueda de élite (opcional). Sin ella, la búsqueda cae a DuckDuckGo.
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
+
 # Modelo de embeddings para el recuerdo semántico (free tier, dim 3072).
 EMBED_MODEL = os.getenv("CRISTOPHER_EMBED_MODEL", "gemini-embedding-001")
 

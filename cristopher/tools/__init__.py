@@ -17,6 +17,8 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from cristopher.tools.delegate import delegar_a_claude
+from cristopher.tools.elite_search import busqueda_elite
+from cristopher.tools.google_tools import buscar_correos, enviar_correo, proximo_evento
 from cristopher.tools.memory_tools import recall, remember
 from cristopher.tools.read_file import read_file
 from cristopher.tools.shell import run_shell
@@ -146,6 +148,73 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["tarea"],
         },
         "fn": delegar_a_claude,
+    },
+    {
+        "name": "busqueda_elite",
+        "description": (
+            "Búsqueda web de élite con síntesis y fuentes (Tavily; cae a DuckDuckGo si "
+            "no hay key). Úsala cuando necesites investigar un tema y dar un resumen "
+            "con enlaces a las fuentes. Mejor que web_search para preguntas de fondo."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Tema o pregunta a investigar."},
+                "max_results": {"type": "integer", "description": "Nº de fuentes (1-10)."},
+            },
+            "required": ["query"],
+        },
+        "fn": busqueda_elite,
+    },
+    {
+        "name": "proximo_evento",
+        "description": (
+            "Lee los próximos eventos del Google Calendar del usuario (fecha/hora, "
+            "título, lugar). Úsala para saber qué tiene agendado."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "n": {"type": "integer", "description": "Cuántos eventos próximos (por defecto 1)."},
+            },
+            "required": [],
+        },
+        "fn": proximo_evento,
+    },
+    {
+        "name": "buscar_correos",
+        "description": (
+            "Lee correos de Gmail: recientes o los que casan una consulta estilo Gmail "
+            "(p. ej. 'is:unread from:x@y.com'). Devuelve remitente, asunto, fecha y "
+            "resumen. Solo lectura."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Consulta Gmail; vacío = recientes."},
+                "n": {"type": "integer", "description": "Nº de correos (por defecto 5)."},
+            },
+            "required": [],
+        },
+        "fn": buscar_correos,
+    },
+    {
+        "name": "enviar_correo",
+        "description": (
+            "Envía un correo por Gmail. SIEMPRE pide confirmación del usuario antes de "
+            "enviar (acción irreversible). Redacta el borrador y úsala; el usuario "
+            "confirmará o cancelará el envío."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Destinatario."},
+                "subject": {"type": "string", "description": "Asunto."},
+                "body": {"type": "string", "description": "Cuerpo del mensaje."},
+            },
+            "required": ["to", "subject", "body"],
+        },
+        "fn": enviar_correo,
     },
 ]
 

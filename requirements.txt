@@ -1,4 +1,10 @@
-# CRISTOPHER — Fase 1 (MVP del bucle). Dependencias mínimas.
-google-genai>=1.0.0     # SDK unificado de Gemini: gemini-2.5-flash + function calling
+# CRISTOPHER — dependencias.
+google-genai>=1.0.0     # SDK unificado de Gemini: cerebro + function calling
 python-dotenv>=1.0.0    # carga GEMINI_API_KEY desde .env
 ddgs>=6.0.0             # búsqueda web (DuckDuckGo) gratis, sin API key
+
+# Fase 4 — Integraciones Google (Calendar + Gmail vía OAuth).
+google-api-python-client>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.2.0
+# (La búsqueda de élite Tavily usa `requests`, que ya viene con google-genai.)
