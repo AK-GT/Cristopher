@@ -18,8 +18,11 @@ ROOT = Path(__file__).resolve().parent.parent
 # Carga .env de la raíz si existe (no pisa variables ya definidas en el sistema).
 load_dotenv(ROOT / ".env")
 
-# Modelo del cerebro. Decidido en el build prompt: gemini-2.5-flash (free tier).
-MODEL = os.getenv("CRISTOPHER_MODEL", "gemini-2.5-flash")
+# Modelo del cerebro. El build prompt pedía gemini-2.5-flash, pero Google lo
+# retiró para cuentas nuevas (404). Usamos el alias `gemini-flash-latest`, que
+# siempre apunta al flash vigente del free tier y evita futuras deprecaciones.
+# Sobrescribible con la variable de entorno CRISTOPHER_MODEL.
+MODEL = os.getenv("CRISTOPHER_MODEL", "gemini-flash-latest")
 
 # Directorio de trabajo donde CRISTOPHER clona repos / crea archivos temporales.
 WORKSPACE = ROOT / "workspace"
