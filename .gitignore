@@ -1,0 +1,22 @@
+# Secretos — NUNCA se versiona
+.env
+
+# Entorno virtual
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Repos que CRISTOPHER clone en tiempo de ejecución
+workspace/
+_clones/
+
+# SO / editores
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
