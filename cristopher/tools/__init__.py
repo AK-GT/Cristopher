@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from cristopher.tools.browser_tools import navegar_capturar, navegar_leer
 from cristopher.tools.delegate import delegar_a_claude
 from cristopher.tools.elite_search import busqueda_elite
 from cristopher.tools.google_tools import buscar_correos, enviar_correo, proximo_evento
@@ -215,6 +216,40 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["to", "subject", "body"],
         },
         "fn": enviar_correo,
+    },
+    {
+        "name": "navegar_leer",
+        "description": (
+            "Abre una página web en un navegador real y devuelve su título y texto "
+            "legible. VÍA PRIMARIA para extraer información de una web (noticias, "
+            "documentación, precios, etc.)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Dirección completa (con http/https)."},
+            },
+            "required": ["url"],
+        },
+        "fn": navegar_leer,
+    },
+    {
+        "name": "navegar_capturar",
+        "description": (
+            "Hace una captura de pantalla de la página y usa visión para responder una "
+            "pregunta sobre ella. Úsala SOLO cuando 'navegar_leer' no da la info "
+            "(contenido en imágenes/gráficos/canvas o render dinámico que no sale como "
+            "texto)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Dirección completa (con http/https)."},
+                "pregunta": {"type": "string", "description": "Qué quieres saber de lo que se ve."},
+            },
+            "required": ["url"],
+        },
+        "fn": navegar_capturar,
     },
 ]
 

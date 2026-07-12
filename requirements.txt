@@ -8,3 +8,6 @@ google-api-python-client>=2.0.0
 google-auth-oauthlib>=1.0.0
 google-auth-httplib2>=0.2.0
 # (La búsqueda de élite Tavily usa `requests`, que ya viene con google-genai.)
+
+# Fase 5 — Navegador. Tras instalar: `playwright install chromium`.
+playwright>=1.40.0
