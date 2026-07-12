@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 
-from cristopher.agent import Cristopher
+from cristopher.agent import Cristopher, split_final
 from cristopher.config import ConfigError, MOSTRAR_PENSAMIENTO
 
 # --- Colores ANSI mínimos (se degradan a nada si la consola no los soporta) ---
@@ -82,7 +82,12 @@ def main() -> int:
             print(f"{AMBER}[ERROR] {exc}{RESET}")
             continue
 
-        print(f"\n{CYAN}{BOLD}CRISTOPHER ›{RESET} {answer}")
+        # Separa el razonamiento (segundo plano, atenuado) de la respuesta al usuario.
+        razonamiento, respuesta = split_final(answer)
+        if razonamiento and MOSTRAR_PENSAMIENTO:
+            indent = razonamiento.replace("\n", "\n  ")
+            print(f"{DIM}  ⋯ {indent}{RESET}")
+        print(f"\n{CYAN}{BOLD}CRISTOPHER ›{RESET} {respuesta}")
 
 
 if __name__ == "__main__":
