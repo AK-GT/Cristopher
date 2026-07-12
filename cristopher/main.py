@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 
 from cristopher.agent import Cristopher
-from cristopher.config import ConfigError
+from cristopher.config import ConfigError, MOSTRAR_PENSAMIENTO
 
 # --- Colores ANSI mínimos (se degradan a nada si la consola no los soporta) ---
 CYAN = "\033[36m"
@@ -39,6 +39,9 @@ def _print_step(kind: str, text: str) -> None:
     """Callback de trazas del bucle ReAct."""
     text = (text or "").rstrip()
     if not text:
+        return
+    # En modo voz (Fase 6) no se muestran/verbalizan las trazas: solo la respuesta final.
+    if not MOSTRAR_PENSAMIENTO:
         return
     if kind == "thought":
         print(f"{DIM}  · {text}{RESET}")

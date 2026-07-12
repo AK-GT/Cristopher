@@ -58,8 +58,9 @@ def build_system_prompt() -> str:
     return f"{IDENTITY}\n\n{tools_block}\n\n{HONESTY_RULE}"
 
 
-# Tope de vueltas del bucle para no colgarnos si el modelo insiste en herramientas.
-MAX_STEPS = 12
+# Tope de vueltas del bucle. Holgado para permitir exploración de navegador de varios
+# pasos (buscar → pinchar → desplazar → leer → capturar…) sin colgarse.
+MAX_STEPS = 20
 
 
 def _to_gemini_type(node: Any) -> Any:
@@ -83,6 +84,10 @@ def _build_tool_config() -> types.Tool:
     declarations = []
     for t in TOOLS:
         params = _to_gemini_type(copy.deepcopy(t["parameters"]))
+        # Gemini rechaza (400) una función con parámetros de tipo OBJECT pero sin
+        # propiedades: en herramientas sin argumentos hay que OMITIR parameters.
+        if not params.get("properties"):
+            params = None
         declarations.append(
             types.FunctionDeclaration(
                 name=t["name"],
@@ -142,13 +147,20 @@ class Cristopher:
 
     def _generate(self, max_retries: int = 4):
         """Llama a Gemini con reintentos ante errores transitorios (429/500/503) y
-        CADENA DE FALLBACK entre cerebros: si el principal agota su cuota, cae al de
+        CADENA DE FALLBACK entre cerebros: si un modelo agota reintentos, cae al de
         respaldo (Gemma 4) y sigue (§8 "degrada con elegancia"). Si todo falla, lanza
-        un mensaje claro en vez de un traceback opaco (§1)."""
+        un mensaje claro en vez de un traceback opaco (§1).
+
+        El 429 hace backoff+reintento ACOTADO en el modelo actual (respetando el
+        retryDelay que sugiera la API) antes de caer al fallback — así se recupera de
+        límites por minuto sin gastar demasiado tiempo cuando el límite es diario."""
         last_code = None
         for mi, model in enumerate(self._models):
             has_next = mi < len(self._models) - 1
-            for attempt in range(max_retries):
+            # Con fallback disponible, el 429 solo reintenta 1 vez aquí (probable límite
+            # diario); en el último modelo agota max_retries (probable límite por minuto).
+            attempts = 2 if has_next else max_retries
+            for attempt in range(attempts):
                 try:
                     return self._client.models.generate_content(
                         model=model,
@@ -160,26 +172,27 @@ class Cristopher:
                     last_code = code
                     if code not in self._RETRYABLE:
                         raise  # error duro (400, permisos…): cambiar de modelo no ayuda
-                    # Cuota agotada: no reintentes el mismo modelo, salta al de respaldo.
-                    if code == 429 and has_next:
+                    if attempt < attempts - 1:
+                        # Backoff: respeta el retryDelay sugerido (o exponencial), con tope.
+                        # Con fallback disponible el tope es bajo (probable límite diario:
+                        # no merece la pena esperar mucho antes de caer al respaldo).
+                        m = re.search(r"(\d+(?:\.\d+)?)\s*s", str(exc))
+                        cap = 5.0 if has_next else 20.0
+                        delay = min(float(m.group(1)) if m else 2 ** attempt, cap)
                         self._emit(
                             "observation",
-                            f"[fallback] {model}: cuota agotada (429) → {self._models[mi + 1]}",
+                            f"[reintento] {model}: {code}; espero {delay:.0f}s",
+                        )
+                        time.sleep(delay)
+                        continue
+                    # Agotados los reintentos de este modelo.
+                    if has_next:
+                        self._emit(
+                            "observation",
+                            f"[fallback] {model}: {code} → {self._models[mi + 1]}",
                         )
                         break
-                    if attempt == max_retries - 1:
-                        if has_next:
-                            self._emit(
-                                "observation",
-                                f"[fallback] {model}: {code} persistente → {self._models[mi + 1]}",
-                            )
-                            break
-                        raise self._clean_error(code) from exc
-                    # Transitorio: espera (respeta retryDelay si lo hay) y reintenta.
-                    m = re.search(r"(\d+(?:\.\d+)?)\s*s", str(exc))
-                    delay = min(float(m.group(1)) if m else 2 ** attempt, 30.0)
-                    self._emit("observation", f"[reintento] {model}: {code}; espero {delay:.0f}s")
-                    time.sleep(delay)
+                    raise self._clean_error(code) from exc
         raise self._clean_error(last_code)
 
     def _recall_context(self, user_message: str) -> str:
@@ -220,12 +233,15 @@ class Cristopher:
 
             # Texto que el modelo emita en este turno (razonamiento / respuesta).
             text_bits = [p.text for p in parts if getattr(p, "text", None)]
-            if text_bits:
-                self._emit("thought", "\n".join(text_bits))
 
-            # Sin llamadas a herramienta => es la respuesta final.
+            # Sin llamadas a herramienta => es la respuesta final: se devuelve, NO se
+            # emite como pensamiento (evita el duplicado bajo el turno y bajo la
+            # respuesta). El razonamiento intermedio (con herramientas) sí se muestra.
             if not function_calls:
                 return "\n".join(text_bits).strip() or "(sin respuesta)"
+
+            if text_bits:
+                self._emit("thought", "\n".join(text_bits))
 
             # Ejecuta cada herramienta pedida y adjunta su observación.
             response_parts = []

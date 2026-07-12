@@ -19,15 +19,19 @@ ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
 # Modelo del cerebro. El build prompt pedía gemini-2.5-flash, pero Google lo
-# retiró para cuentas nuevas (404). Usamos el alias `gemini-flash-latest`, que
-# siempre apunta al flash vigente del free tier y evita futuras deprecaciones.
-# Sobrescribible con la variable de entorno CRISTOPHER_MODEL.
-MODEL = os.getenv("CRISTOPHER_MODEL", "gemini-flash-latest")
+# retiró para cuentas nuevas (404). Fijamos gemini-3.5-flash (verificado: function
+# calling + multimodal). Sobrescribible con la variable de entorno CRISTOPHER_MODEL.
+MODEL = os.getenv("CRISTOPHER_MODEL", "gemini-3.5-flash")
 
 # Cerebro de respaldo: si el principal agota su cuota (429), CRISTOPHER cae a este y
 # sigue funcionando (§8 "degrada con elegancia"). Gemma 4 tiene un bucket de cuota
-# gratuito aparte y soporta function calling. Poner "" para desactivar el fallback.
+# gratuito aparte y soporta function calling + visión. Poner "" para desactivarlo.
 FALLBACK_MODEL = os.getenv("CRISTOPHER_FALLBACK_MODEL", "gemma-4-31b-it")
+
+# Modo de salida: "texto" (REPL) o "voz" (Fase 6). En voz, el pensamiento intermedio
+# NO se verbaliza: solo se habla la respuesta final. El flag deja esto preparado.
+MODO_SALIDA = os.getenv("CRISTOPHER_MODO_SALIDA", "texto").strip().lower()
+MOSTRAR_PENSAMIENTO = MODO_SALIDA != "voz"
 
 # Directorio de trabajo donde CRISTOPHER clona repos / crea archivos temporales.
 WORKSPACE = ROOT / "workspace"

@@ -16,35 +16,24 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from cristopher.tools.browser_tools import navegar_capturar, navegar_leer
+from cristopher.tools.browser_tools import (
+    buscar_en_google,
+    navegador_captura,
+    navegador_cerrar,
+    navegador_click,
+    navegador_ir,
+    navegador_leer,
+    navegador_scroll,
+    navegar_leer,
+)
 from cristopher.tools.delegate import delegar_a_claude
 from cristopher.tools.elite_search import busqueda_elite
 from cristopher.tools.google_tools import buscar_correos, enviar_correo, proximo_evento
 from cristopher.tools.memory_tools import recall, remember
 from cristopher.tools.read_file import read_file
 from cristopher.tools.shell import run_shell
-from cristopher.tools.web_search import web_search
 
 TOOLS: list[dict[str, Any]] = [
-    {
-        "name": "web_search",
-        "description": (
-            "Busca información en la web (DuckDuckGo). Úsala para datos actuales, "
-            "documentación o para localizar recursos. Devuelve título, URL y resumen."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Términos de búsqueda."},
-                "max_results": {
-                    "type": "integer",
-                    "description": "Número de resultados (1-10). Por defecto 5.",
-                },
-            },
-            "required": ["query"],
-        },
-        "fn": web_search,
-    },
     {
         "name": "run_shell",
         "description": (
@@ -153,9 +142,10 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "busqueda_elite",
         "description": (
-            "Búsqueda web de élite con síntesis y fuentes (Tavily; cae a DuckDuckGo si "
-            "no hay key). Úsala cuando necesites investigar un tema y dar un resumen "
-            "con enlaces a las fuentes. Mejor que web_search para preguntas de fondo."
+            "Buscador-RESPUESTA por defecto: investiga un tema y devuelve una síntesis "
+            "con fuentes (Tavily; cae a DuckDuckGo solo si falta la key o falla la red). "
+            "Úsala cuando el usuario quiere una RESPUESTA a una pregunta o información "
+            "sobre un tema. Para BUSCAR y EXPLORAR resultados en vivo, usa buscar_en_google."
         ),
         "parameters": {
             "type": "object",
@@ -234,22 +224,89 @@ TOOLS: list[dict[str, Any]] = [
         "fn": navegar_leer,
     },
     {
-        "name": "navegar_capturar",
+        "name": "buscar_en_google",
         "description": (
-            "Hace una captura de pantalla de la página y usa visión para responder una "
-            "pregunta sobre ella. Úsala SOLO cuando 'navegar_leer' no da la info "
-            "(contenido en imágenes/gráficos/canvas o render dinámico que no sale como "
-            "texto)."
+            "Abre una ventana de navegador VISIBLE, busca en Google y devuelve los "
+            "resultados numerados (título + URL). Úsala cuando convenga BUSCAR y "
+            "EXPLORAR en vivo para luego pinchar o desplazarte. Indaga hasta un "
+            "resultado sólido; no te quedes con el primero si no basta."
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "query": {"type": "string", "description": "Qué buscar en Google."},
+            },
+            "required": ["query"],
+        },
+        "fn": buscar_en_google,
+    },
+    {
+        "name": "navegador_ir",
+        "description": "Navega a una URL en la ventana visible de la sesión y devuelve su texto.",
+        "parameters": {
+            "type": "object",
+            "properties": {
                 "url": {"type": "string", "description": "Dirección completa (con http/https)."},
-                "pregunta": {"type": "string", "description": "Qué quieres saber de lo que se ve."},
             },
             "required": ["url"],
         },
-        "fn": navegar_capturar,
+        "fn": navegador_ir,
+    },
+    {
+        "name": "navegador_click",
+        "description": (
+            "Pincha un resultado/enlace en la ventana visible: por número (índice del "
+            "resultado de Google, p. ej. '2') o por texto del enlace. Devuelve la "
+            "página resultante."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "objetivo": {"type": "string", "description": "Nº de resultado o texto del enlace."},
+            },
+            "required": ["objetivo"],
+        },
+        "fn": navegador_click,
+    },
+    {
+        "name": "navegador_scroll",
+        "description": "Desplaza la página actual de la ventana visible ('abajo', 'arriba' o píxeles).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "cantidad": {"type": "string", "description": "'abajo', 'arriba' o nº de píxeles."},
+            },
+            "required": [],
+        },
+        "fn": navegador_scroll,
+    },
+    {
+        "name": "navegador_leer",
+        "description": "Devuelve el título y texto de la página ACTUAL de la ventana visible.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": navegador_leer,
+    },
+    {
+        "name": "navegador_captura",
+        "description": (
+            "Captura la página ACTUAL de la ventana visible y usa visión para responder "
+            "una pregunta sobre ella. Úsala para GUIARTE cuando el texto no basta "
+            "(elementos visuales, diseño, dónde pinchar)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pregunta": {"type": "string", "description": "Qué quieres saber de lo que se ve."},
+            },
+            "required": [],
+        },
+        "fn": navegador_captura,
+    },
+    {
+        "name": "navegador_cerrar",
+        "description": "Cierra la ventana visible del navegador.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": navegador_cerrar,
     },
 ]
 
