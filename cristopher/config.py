@@ -60,6 +60,14 @@ GOOGLE_SCOPES = [
 # Búsqueda de élite (opcional). Sin ella, la búsqueda cae a DuckDuckGo.
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
 
+# --- Fase 7: proactividad ----------------------------------------------------
+PROACTIVO_DB = DATA / "proactivo.db"          # recordatorios + dedup de avisos
+POLL_SEGUNDOS = int(os.getenv("CRISTOPHER_POLL", "60"))   # cada cuánto revisa el demonio
+LEAD_MINUTOS = int(os.getenv("CRISTOPHER_LEAD", "15"))    # antelación para avisar de eventos
+# Mini-modelo que clasifica la prioridad (1-3) de cada aviso. Fallback: FALLBACK_MODEL.
+CLASSIFIER_MODEL = os.getenv("CRISTOPHER_CLASSIFIER_MODEL", "gemini-flash-lite-latest")
+GMAIL_QUERY_PROACTIVO = os.getenv("CRISTOPHER_GMAIL_QUERY", "is:unread")
+
 # --- Fase 6: voz -------------------------------------------------------------
 VOICE_DIR = DATA / "voice"
 WHISPER_DIR = VOICE_DIR / "whisper"          # caché del modelo faster-whisper

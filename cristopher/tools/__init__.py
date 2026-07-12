@@ -31,6 +31,7 @@ from cristopher.tools.elite_search import busqueda_elite
 from cristopher.tools.google_tools import buscar_correos, enviar_correo, proximo_evento
 from cristopher.tools.memory_tools import recall, remember
 from cristopher.tools.read_file import read_file
+from cristopher.tools.recordatorio_tools import crear_recordatorio, listar_recordatorios
 from cristopher.tools.shell import run_shell
 from cristopher.tools.voz_tools import activar_modo_voz, desactivar_modo_voz
 
@@ -328,6 +329,32 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": desactivar_modo_voz,
+    },
+    {
+        "name": "crear_recordatorio",
+        "description": (
+            "Programa un recordatorio para una hora futura; el demonio proactivo avisará "
+            "entonces. Úsalo cuando el usuario pida que le recuerdes algo ('avísame a las "
+            "17:00 de X', 'en 30 minutos recuérdame Y')."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "texto": {"type": "string", "description": "Qué recordar."},
+                "cuando": {
+                    "type": "string",
+                    "description": "'HH:MM', 'en N minutos', 'en N horas' o fecha/hora ISO.",
+                },
+            },
+            "required": ["texto", "cuando"],
+        },
+        "fn": crear_recordatorio,
+    },
+    {
+        "name": "listar_recordatorios",
+        "description": "Lista los recordatorios programados (pendientes y hechos).",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": listar_recordatorios,
     },
 ]
 
