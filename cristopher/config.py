@@ -30,6 +30,11 @@ WORKSPACE = ROOT / "workspace"
 # Almacén local de memoria persistente (SQLite). No se versiona (.gitignore).
 DATA = ROOT / "data"
 
+# Carpeta donde cada sub-agente delegado trabaja aislado (bajo workspace/).
+SUBAGENTS = WORKSPACE / "subagents"
+# Timeout amplio: las tareas de código delegadas pueden tardar.
+SUBAGENT_TIMEOUT = 600
+
 # Modelo de embeddings para el recuerdo semántico (free tier, dim 3072).
 EMBED_MODEL = os.getenv("CRISTOPHER_EMBED_MODEL", "gemini-embedding-001")
 

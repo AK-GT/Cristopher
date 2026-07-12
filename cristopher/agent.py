@@ -9,10 +9,12 @@ nunca se ocultan (esencia §1: "fallos explícitos").
 from __future__ import annotations
 
 import copy
+import re
+import time
 from typing import Any, Callable
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 from cristopher.config import MODEL, get_api_key
 from cristopher.memory import get_memory
@@ -114,6 +116,41 @@ class Cristopher:
     def _emit(self, kind: str, text: str) -> None:
         self._on_step(kind, text)
 
+    # Errores transitorios que merecen reintento: cuota (429) y saturación (503).
+    _RETRYABLE = {429, 503}
+
+    def _generate(self, max_retries: int = 4):
+        """Llama a Gemini con reintentos ante errores transitorios (429 cuota, 503
+        saturación). Degrada con elegancia (§8): respeta el retryDelay sugerido y, si
+        se agota, lanza un mensaje claro en vez de un traceback opaco (§1)."""
+        for attempt in range(max_retries):
+            try:
+                return self._client.models.generate_content(
+                    model=MODEL,
+                    contents=self._contents,
+                    config=self._config,
+                )
+            except errors.APIError as exc:
+                code = getattr(exc, "code", None)
+                if code not in self._RETRYABLE or attempt == max_retries - 1:
+                    if code == 429:
+                        raise RuntimeError(
+                            "Cuota de Gemini agotada (429). El free tier tiene un "
+                            "límite diario; reintenta más tarde o cambia de modelo con "
+                            "la variable CRISTOPHER_MODEL."
+                        ) from exc
+                    if code == 503:
+                        raise RuntimeError(
+                            "El modelo de Gemini está saturado (503) y sigue sin "
+                            "responder tras varios reintentos. Prueba de nuevo en un rato."
+                        ) from exc
+                    raise
+                # Espera lo que sugiera la API (retryDelay/'retry in Xs'), con tope.
+                m = re.search(r"(\d+(?:\.\d+)?)\s*s", str(exc))
+                delay = min(float(m.group(1)) if m else 2 ** attempt, 30.0)
+                self._emit("observation", f"[reintento] {code}; espero {delay:.0f}s")
+                time.sleep(delay)
+
     def _recall_context(self, user_message: str) -> str:
         """Recupera hechos relevantes de la memoria y los formatea como bloque de
         contexto etiquetado (DATO), o cadena vacía si no hay nada."""
@@ -141,11 +178,7 @@ class Cristopher:
         )
 
         for _ in range(MAX_STEPS):
-            response = self._client.models.generate_content(
-                model=MODEL,
-                contents=self._contents,
-                config=self._config,
-            )
+            response = self._generate()
 
             candidate = response.candidates[0]
             content = candidate.content

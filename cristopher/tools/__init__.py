@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from cristopher.tools.delegate import delegar_a_claude
 from cristopher.tools.memory_tools import recall, remember
 from cristopher.tools.read_file import read_file
 from cristopher.tools.shell import run_shell
@@ -120,6 +121,31 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["query"],
         },
         "fn": recall,
+    },
+    {
+        "name": "delegar_a_claude",
+        "description": (
+            "Delega una tarea de código a un sub-agente Claude Code que trabaja de "
+            "forma autónoma dentro de una carpeta aislada (puede crear/editar archivos "
+            "y ejecutar comandos ahí). Úsala para tareas de código acotadas que puedes "
+            "encargar en paralelo. Después revisa e integra el resultado con "
+            "read_file/run_shell sobre la carpeta que devuelve."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tarea": {
+                    "type": "string",
+                    "description": "Instrucción acotada y clara para el sub-agente.",
+                },
+                "carpeta": {
+                    "type": "string",
+                    "description": "Nombre de la carpeta de trabajo aislada (opcional).",
+                },
+            },
+            "required": ["tarea"],
+        },
+        "fn": delegar_a_claude,
     },
 ]
 
