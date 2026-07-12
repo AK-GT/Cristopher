@@ -11,3 +11,12 @@ google-auth-httplib2>=0.2.0
 
 # Fase 5 — Navegador. Tras instalar: `playwright install chromium`.
 playwright>=1.40.0
+
+# Fase 6 — Voz. STT (faster-whisper), TTS (piper-tts), audio (sounddevice), micrófono
+# (pynput). Descargar la voz: python -m piper.download_voices es_ES-davefx-medium
+#   --download-dir data/voice/piper
+faster-whisper>=1.0.0
+piper-tts>=1.2.0
+sounddevice>=0.4.6
+numpy>=1.24.0
+pynput>=1.7.0

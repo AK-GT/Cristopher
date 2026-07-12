@@ -60,6 +60,13 @@ GOOGLE_SCOPES = [
 # Búsqueda de élite (opcional). Sin ella, la búsqueda cae a DuckDuckGo.
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
 
+# --- Fase 6: voz -------------------------------------------------------------
+VOICE_DIR = DATA / "voice"
+WHISPER_DIR = VOICE_DIR / "whisper"          # caché del modelo faster-whisper
+STT_MODEL = os.getenv("CRISTOPHER_STT_MODEL", "small")  # tamaño de faster-whisper
+STT_LANG = "es"
+PIPER_VOICE = VOICE_DIR / "piper" / "es_ES-davefx-medium.onnx"  # voz TTS
+
 # Modelo de embeddings para el recuerdo semántico (free tier, dim 3072).
 EMBED_MODEL = os.getenv("CRISTOPHER_EMBED_MODEL", "gemini-embedding-001")
 

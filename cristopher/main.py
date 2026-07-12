@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import sys
 
+from cristopher import estado, voz
 from cristopher.agent import Cristopher, split_final
-from cristopher.config import ConfigError, MOSTRAR_PENSAMIENTO
+from cristopher.config import ConfigError
 
 # --- Colores ANSI mínimos (se degradan a nada si la consola no los soporta) ---
 CYAN = "\033[36m"
@@ -41,7 +42,7 @@ def _print_step(kind: str, text: str) -> None:
     if not text:
         return
     # En modo voz (Fase 6) no se muestran/verbalizan las trazas: solo la respuesta final.
-    if not MOSTRAR_PENSAMIENTO:
+    if estado.esta_activo():
         return
     if kind == "thought":
         print(f"{DIM}  · {text}{RESET}")
@@ -84,10 +85,16 @@ def main() -> int:
 
         # Separa el razonamiento (segundo plano, atenuado) de la respuesta al usuario.
         razonamiento, respuesta = split_final(answer)
-        if razonamiento and MOSTRAR_PENSAMIENTO:
+        if razonamiento and not estado.esta_activo():
             indent = razonamiento.replace("\n", "\n  ")
             print(f"{DIM}  ⋯ {indent}{RESET}")
         print(f"\n{CYAN}{BOLD}CRISTOPHER ›{RESET} {respuesta}")
+        # Si el modo audio está activo (p. ej. tras 'háblame en voz'), habla la respuesta.
+        if estado.esta_activo():
+            try:
+                voz.hablar(respuesta)
+            except voz.VozError as exc:
+                print(f"{AMBER}[VOZ] {exc}{RESET}")
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ from cristopher.tools.google_tools import buscar_correos, enviar_correo, proximo
 from cristopher.tools.memory_tools import recall, remember
 from cristopher.tools.read_file import read_file
 from cristopher.tools.shell import run_shell
+from cristopher.tools.voz_tools import activar_modo_voz, desactivar_modo_voz
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -307,6 +308,26 @@ TOOLS: list[dict[str, Any]] = [
         "description": "Cierra la ventana visible del navegador.",
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": navegador_cerrar,
+    },
+    {
+        "name": "activar_modo_voz",
+        "description": (
+            "Activa el modo audio: las respuestas se dicen en voz alta y se muestra "
+            "solo la respuesta (no el pensamiento). Úsalo cuando el usuario pida "
+            "claramente hablar por voz/audio. Si NO está claro, pregúntale antes en "
+            "vez de activarlo."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": activar_modo_voz,
+    },
+    {
+        "name": "desactivar_modo_voz",
+        "description": (
+            "Desactiva el modo audio y vuelve a solo texto. Úsalo cuando el usuario "
+            "pida dejar de hablar en voz alta o volver al modo texto."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": desactivar_modo_voz,
     },
 ]
 
