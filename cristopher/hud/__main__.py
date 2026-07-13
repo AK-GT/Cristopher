@@ -10,6 +10,7 @@ Uso:  python -m cristopher.hud
 from __future__ import annotations
 
 import json
+import queue
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,7 +21,13 @@ from cristopher.agent import Cristopher, split_final
 from cristopher.config import HUD_PORT
 
 STATIC = Path(__file__).parent / "static"
-_SEND_LOCK = threading.Lock()
+
+# Cola de trabajos del agente. Un ÚNICO hilo worker los procesa en serie, así el
+# navegador (Playwright usa una API SÍNCRONA ligada al hilo que la creó) y el cliente
+# Gemini viven siempre en el MISMO hilo. Sin esto, ThreadingHTTPServer atendería cada
+# petición en un hilo distinto y la 2ª herramienta de navegador reventaría con
+# "cannot switch to a different thread". Las conexiones SSE siguen en sus propios hilos.
+_JOBS: "queue.Queue[str]" = queue.Queue()
 _CRIS: Cristopher | None = None
 
 _CT = {".html": "text/html", ".css": "text/css", ".js": "application/javascript",
@@ -40,30 +47,45 @@ def _get_cris() -> Cristopher:
     return _CRIS
 
 
-def _procesar(texto: str) -> str:
-    """Ejecuta un turno del agente publicando el estado al bus (serializado)."""
-    with _SEND_LOCK:
-        bus.set_tarea(texto)
-        bus.log("user", texto)
-        bus.set_estado("pensando")
+def _procesar(texto: str) -> None:
+    """Ejecuta un turno del agente publicando el estado al bus. Corre SIEMPRE en el
+    hilo worker (nunca en el hilo de una petición HTTP), por el requisito de hilo único
+    de Playwright. La respuesta llega al navegador por SSE (bus.log('answer', …))."""
+    bus.set_tarea(texto)
+    bus.log("user", texto)
+    bus.set_estado("pensando")
+    try:
+        answer = _get_cris().send(texto)
+    except Exception as exc:
+        bus.log("error", str(exc))
+        bus.set_estado("reposo")
+        bus.set_tarea("")
+        return
+    _, respuesta = split_final(answer)
+    if estado.esta_activo():
+        bus.set_estado("hablando")
         try:
-            answer = _get_cris().send(texto)
+            voz.hablar(respuesta)
         except Exception as exc:
+            bus.log("error", f"voz: {exc}")
+    bus.log("answer", respuesta)
+    bus.set_estado("reposo")
+    bus.set_tarea("")
+
+
+def _worker() -> None:
+    """Hilo único que procesa los turnos del agente en serie desde la cola. Posee el
+    agente (y por tanto el navegador y el cliente Gemini) en un solo hilo."""
+    while True:
+        texto = _JOBS.get()
+        try:
+            _procesar(texto)
+        except Exception as exc:  # el worker nunca debe morir por un turno puntual
             bus.log("error", str(exc))
             bus.set_estado("reposo")
             bus.set_tarea("")
-            return f"[error] {exc}"
-        _, respuesta = split_final(answer)
-        if estado.esta_activo():
-            bus.set_estado("hablando")
-            try:
-                voz.hablar(respuesta)
-            except Exception as exc:
-                bus.log("error", f"voz: {exc}")
-        bus.log("answer", respuesta)
-        bus.set_estado("reposo")
-        bus.set_tarea("")
-        return respuesta
+        finally:
+            _JOBS.task_done()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -133,10 +155,11 @@ class Handler(BaseHTTPRequestHandler):
             texto = (json.loads(body).get("texto") or "").strip()
         except Exception:
             texto = ""
-        if not texto:
-            return self._json({"respuesta": ""})
-        respuesta = _procesar(texto)
-        self._json({"respuesta": respuesta})
+        # Encola el turno para el hilo worker y responde de inmediato (no bloquea el
+        # hilo HTTP): la respuesta del agente llega al navegador por SSE.
+        if texto:
+            _JOBS.put(texto)
+        self._json({"queued": bool(texto)})
 
 
 def _muestreo_metricas():
@@ -163,6 +186,7 @@ def _demonio_proactivo():
 
 
 def main() -> int:
+    threading.Thread(target=_worker, daemon=True).start()
     threading.Thread(target=_muestreo_metricas, daemon=True).start()
     threading.Thread(target=_demonio_proactivo, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", HUD_PORT), Handler)
