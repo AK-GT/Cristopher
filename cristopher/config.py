@@ -18,15 +18,17 @@ ROOT = Path(__file__).resolve().parent.parent
 # Carga .env de la raíz si existe (no pisa variables ya definidas en el sistema).
 load_dotenv(ROOT / ".env")
 
-# Modelo del cerebro. El build prompt pedía gemini-2.5-flash, pero Google lo
-# retiró para cuentas nuevas (404). Fijamos gemini-3.5-flash (verificado: function
-# calling + multimodal). Sobrescribible con la variable de entorno CRISTOPHER_MODEL.
-MODEL = os.getenv("CRISTOPHER_MODEL", "gemini-3.5-flash")
+# Modelo del cerebro. Usamos el alias `-latest` para no quedar clavados a una versión
+# concreta que Google pueda retirar (404). Soporta function calling + multimodal.
+# Sobrescribible con la variable de entorno CRISTOPHER_MODEL.
+MODEL = os.getenv("CRISTOPHER_MODEL", "gemini-flash-latest")
 
 # Cerebro de respaldo: si el principal agota su cuota (429), CRISTOPHER cae a este y
-# sigue funcionando (§8 "degrada con elegancia"). Gemma 4 tiene un bucket de cuota
-# gratuito aparte y soporta function calling + visión. Poner "" para desactivarlo.
-FALLBACK_MODEL = os.getenv("CRISTOPHER_FALLBACK_MODEL", "gemma-4-31b-it")
+# sigue funcionando (§8 "degrada con elegancia"). Debe ser OTRO modelo Gemini que
+# soporte function calling + system_instruction + visión (la misma config del bucle se
+# reutiliza tal cual): un modelo sin FC — p. ej. Gemma — la rechazaría con 400. Poner
+# "" para desactivarlo.
+FALLBACK_MODEL = os.getenv("CRISTOPHER_FALLBACK_MODEL", "gemini-flash-lite-latest")
 
 # Modo de salida: "texto" (REPL) o "voz" (Fase 6). En voz, el pensamiento intermedio
 # NO se verbaliza: solo se habla la respuesta final. El flag deja esto preparado.

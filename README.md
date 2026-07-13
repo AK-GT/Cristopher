@@ -2,7 +2,7 @@
 
 Agente personal orquestado tipo Jarvis: percibe, razona, elige sus herramientas, delega en
 sub-agentes y lleva tareas multi-paso hasta el final por su cuenta. Stack gratuito. Cerebro
-en **Gemini** (`gemini-3.5-flash`, free tier; con cadena de respaldo al agotar cuota).
+en **Gemini** (`gemini-flash-latest`, free tier; con cadena de respaldo al agotar cuota).
 
 **Estado: en vivo (v1.0) — todas las fases completas.** Bucle ReAct + memoria persistente +
 sub-agentes + integraciones Google + navegador + voz + proactividad + HUD.
