@@ -87,6 +87,12 @@ def add_alerta(nivel: int, texto: str) -> None:
     _emit("alerta", item)
 
 
+def pedir_confirmacion(texto: str) -> None:
+    """Publica una solicitud de confirmación (p. ej. enviar un correo) para que el HUD
+    la muestre con botones Confirmar/Cancelar. No se guarda en el snapshot: es efímera."""
+    _emit("confirmacion", {"texto": texto})
+
+
 # --- Suscripción SSE ----------------------------------------------------------
 def snapshot() -> dict:
     with _LOCK:

@@ -65,6 +65,18 @@
     </footer>
   </div>
 
+  <!-- Confirmación de acciones irreversibles (p. ej. enviar correo) -->
+  <div class="confirm-overlay" id="confirm-overlay" hidden>
+    <div class="confirm-card panel">
+      <div class="panel-title">CONFIRMAR ACCIÓN</div>
+      <pre class="confirm-body" id="confirm-body"></pre>
+      <div class="confirm-actions">
+        <button type="button" class="btn-cancel" id="confirm-cancel">Cancelar</button>
+        <button type="button" class="btn-ok" id="confirm-ok">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
   <script src="three.min.js"></script>
   <script src="app.js"></script>
 </body>

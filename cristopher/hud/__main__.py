@@ -19,6 +19,7 @@ from pathlib import Path
 from cristopher import bus, estado, voz
 from cristopher.agent import Cristopher, split_final
 from cristopher.config import HUD_PORT
+from cristopher.tools.google_tools import set_confirmer
 
 STATIC = Path(__file__).parent / "static"
 
@@ -45,6 +46,31 @@ def _get_cris() -> Cristopher:
     if _CRIS is None:
         _CRIS = Cristopher(on_step=_on_step)
     return _CRIS
+
+
+# --- Confirmación de acciones irreversibles por CLIC en el navegador (§9) ---------
+# El worker (hilo único) queda a la espera de que el usuario pinche Confirmar/Cancelar.
+# Solo hay una confirmación viva a la vez (el worker está bloqueado durante ella).
+_confirm_event = threading.Event()
+_confirm_result = {"ok": False}
+_CONFIRM_TIMEOUT = 300  # s: si el usuario no responde, se cancela (opción conservadora)
+
+
+def _hud_confirm(prompt: str) -> bool:
+    """Confirmador del HUD: publica el borrador al navegador y BLOQUEA el worker hasta
+    que el usuario pincha Confirmar/Cancelar. Ante silencio (timeout), NO envía (§8)."""
+    _confirm_result["ok"] = False
+    _confirm_event.clear()
+    bus.set_estado("escuchando")
+    bus.pedir_confirmacion(prompt)
+    respondido = _confirm_event.wait(timeout=_CONFIRM_TIMEOUT)
+    bus.set_estado("pensando")
+    return bool(respondido and _confirm_result["ok"])
+
+
+def _responder_confirmacion(ok: bool) -> None:
+    _confirm_result["ok"] = ok
+    _confirm_event.set()
 
 
 def _procesar(texto: str) -> None:
@@ -145,10 +171,15 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             bus.desuscribir(q)
 
-    # --- POST: entrada del usuario ---
+    # --- POST: entrada del usuario y confirmaciones ---
     def do_POST(self):
-        if self.path != "/enviar":
-            return self.send_error(404)
+        if self.path == "/enviar":
+            return self._post_enviar()
+        if self.path == "/confirmar":
+            return self._post_confirmar()
+        return self.send_error(404)
+
+    def _post_enviar(self):
         n = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(n) if n else b"{}"
         try:
@@ -160,6 +191,16 @@ class Handler(BaseHTTPRequestHandler):
         if texto:
             _JOBS.put(texto)
         self._json({"queued": bool(texto)})
+
+    def _post_confirmar(self):
+        n = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(n) if n else b"{}"
+        try:
+            ok = bool(json.loads(body).get("ok"))
+        except Exception:
+            ok = False
+        _responder_confirmacion(ok)
+        self._json({"ok": ok})
 
 
 def _muestreo_metricas():
@@ -186,6 +227,9 @@ def _demonio_proactivo():
 
 
 def main() -> int:
+    # En el HUD, la confirmación de acciones irreversibles (§9) es por clic, no por
+    # stdin: el usuario escribe desde el navegador y no vería un input() del servidor.
+    set_confirmer(_hud_confirm)
     threading.Thread(target=_worker, daemon=True).start()
     threading.Thread(target=_muestreo_metricas, daemon=True).start()
     threading.Thread(target=_demonio_proactivo, daemon=True).start()

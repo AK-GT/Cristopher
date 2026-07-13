@@ -117,3 +117,20 @@ body[data-estado="escuchando"] .status .stled{background:var(--amber);box-shadow
 .input button:hover{background:rgba(34,211,238,.22)}
 
 ::-webkit-scrollbar{width:8px} ::-webkit-scrollbar-thumb{background:rgba(90,113,134,.3);border-radius:4px}
+
+/* Confirmación de acción irreversible */
+.confirm-overlay{position:fixed;inset:0;z-index:10;display:flex;align-items:center;
+  justify-content:center;background:rgba(4,8,14,.72);backdrop-filter:blur(3px)}
+.confirm-overlay[hidden]{display:none}
+.confirm-card{width:min(560px,92vw);border-color:var(--line2);
+  box-shadow:0 0 40px rgba(34,211,238,.12)}
+.confirm-card .panel-title{color:var(--amber2)}
+.confirm-body{font-family:var(--mono);font-size:12.5px;line-height:1.5;color:var(--text);
+  white-space:pre-wrap;word-break:break-word;margin:0 0 16px;max-height:46vh;overflow-y:auto}
+.confirm-actions{display:flex;justify-content:flex-end;gap:10px}
+.confirm-actions button{font-family:var(--mono);font-size:12px;letter-spacing:.08em;
+  padding:9px 18px;border-radius:2px;cursor:pointer;text-transform:uppercase}
+.btn-cancel{background:transparent;border:1px solid var(--line);color:var(--steel2)}
+.btn-cancel:hover{border-color:var(--steel2);color:#eaf6fb}
+.btn-ok{background:rgba(34,211,238,.14);border:1px solid var(--line2);color:var(--cyan2)}
+.btn-ok:hover{background:rgba(34,211,238,.26)}

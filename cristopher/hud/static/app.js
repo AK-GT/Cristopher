@@ -177,6 +177,7 @@
         case "tarea": setTarea(m.datos); break;
         case "subagentes": setRoster(m.datos); break;
         case "alerta": addAlerta(m.datos); break;
+        case "confirmacion": showConfirm(m.datos); break;
       }
     };
     es.onerror = () => { es.close(); setTimeout(conectar, 2000); };
@@ -194,6 +195,22 @@
       body: JSON.stringify({ texto }),
     }).catch(() => {});
   });
+
+  // ---------- Confirmación de acción irreversible ----------
+  const confirmOverlay = $("confirm-overlay");
+  function showConfirm(d) {
+    $("confirm-body").textContent = (d && d.texto) || "¿Confirmar la acción?";
+    confirmOverlay.hidden = false;
+  }
+  function resolveConfirm(ok) {
+    confirmOverlay.hidden = true;
+    fetch("/confirmar", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ok }),
+    }).catch(() => {});
+  }
+  $("confirm-ok").addEventListener("click", () => resolveConfirm(true));
+  $("confirm-cancel").addEventListener("click", () => resolveConfirm(false));
 
   // ---------- Reloj ----------
   function tick() { $("clock").textContent = new Date().toLocaleTimeString("es-ES"); }
