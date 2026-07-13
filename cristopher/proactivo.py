@@ -72,9 +72,11 @@ class Demonio:
         self,
         hablar_fn: Optional[Callable[[str], None]] = None,
         clasificar_fn: Optional[Callable[[str], int]] = None,
+        on_aviso: Optional[Callable[[int, str], None]] = None,
     ) -> None:
         self._hablar = hablar_fn
         self._clasificar = clasificar_fn or clasificar
+        self._on_aviso = on_aviso  # callback opcional (p. ej. el HUD) por cada aviso
         self._rec = get_recordatorios()
         self._correo_base: Optional[set] = None  # ids de correo ya presentes al arrancar
 
@@ -159,6 +161,11 @@ class Demonio:
     # --- Entrega ---------------------------------------------------------------
     def _entregar(self, nivel: int, mensaje: str) -> None:
         marca = datetime.now().strftime("%H:%M")
+        if self._on_aviso is not None:
+            try:
+                self._on_aviso(nivel, mensaje)
+            except Exception:
+                pass
         if nivel >= 3:
             print(f"{RED}{BOLD}[{marca}] ⚠ URGENTE ›{RESET} {BOLD}{mensaje}{RESET}")
             hablar = self._hablar

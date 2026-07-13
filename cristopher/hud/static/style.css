@@ -1,0 +1,119 @@
+:root{
+  --bg:#080B12; --bg2:#0E1420; --panel:rgba(20,30,46,.35);
+  --line:rgba(80,120,150,.18); --line2:rgba(34,211,238,.35);
+  --cyan:#22D3EE; --cyan2:#2FF3E0; --steel:#5b7186; --steel2:#8aa2b5;
+  --amber:#f5b942; --amber2:#ffcf6b; --text:#c8d6e2;
+  --mono:"JetBrains Mono","Cascadia Code",Consolas,ui-monospace,monospace;
+  --sans:"Space Grotesk",Inter,"Segoe UI",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  background:radial-gradient(1200px 800px at 50% 30%, #0c1420 0%, var(--bg) 70%);
+  color:var(--text); font-family:var(--sans); overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+/* Grid en perspectiva al fondo */
+.grid-bg{
+  position:fixed; inset:0; z-index:0; pointer-events:none; opacity:.35;
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size:44px 44px;
+  transform:perspective(600px) rotateX(62deg) scale(2.4) translateY(28%);
+  transform-origin:center bottom;
+  mask-image:linear-gradient(to top, #000 0%, transparent 62%);
+}
+
+.hud{
+  position:relative; z-index:1; height:100vh; display:grid; gap:14px; padding:14px;
+  grid-template-columns:250px 1fr 320px;
+  grid-template-rows:60px 1fr 220px;
+  grid-template-areas:"top top top" "left core right" "console console console";
+}
+.topbar{grid-area:top} .left{grid-area:left} .core{grid-area:core}
+.right{grid-area:right} .console{grid-area:console}
+
+/* Paneles con corchetes de esquina */
+.panel{position:relative; background:var(--panel); border:1px solid var(--line);
+  border-radius:2px; padding:14px 16px; backdrop-filter:blur(2px);}
+.panel::before,.panel::after{content:"";position:absolute;width:12px;height:12px;
+  border:1px solid var(--line2);}
+.panel::before{top:-1px;left:-1px;border-right:0;border-bottom:0}
+.panel::after{bottom:-1px;right:-1px;border-left:0;border-top:0}
+.panel-title{font-size:10px;letter-spacing:.28em;color:var(--steel);
+  text-transform:uppercase;margin-bottom:12px}
+
+/* Topbar */
+.topbar{display:flex;align-items:center;gap:20px;padding:0 18px}
+.brand{display:flex;align-items:center;gap:10px}
+.brand .dot{width:8px;height:8px;border-radius:50%;background:var(--cyan);
+  box-shadow:0 0 12px var(--cyan)}
+.brand .name{font-weight:600;letter-spacing:.32em;font-size:15px;color:#eaf6fb}
+.brand .sub{color:var(--steel);font-size:10.5px;letter-spacing:.12em}
+.clock{margin-left:auto;font-family:var(--mono);font-size:20px;color:var(--cyan2);
+  letter-spacing:.14em;text-shadow:0 0 14px rgba(47,243,224,.35)}
+.status{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;
+  letter-spacing:.1em;color:var(--steel2);text-transform:uppercase;min-width:120px;justify-content:flex-end}
+.status .stled{width:9px;height:9px;border-radius:50%;background:var(--steel);transition:.3s}
+body[data-estado="pensando"] .status .stled{background:var(--cyan);box-shadow:0 0 12px var(--cyan);animation:blink .7s infinite}
+body[data-estado="hablando"] .status .stled{background:var(--cyan2);box-shadow:0 0 14px var(--cyan2)}
+body[data-estado="escuchando"] .status .stled{background:var(--amber);box-shadow:0 0 12px var(--amber)}
+@keyframes blink{50%{opacity:.35}}
+
+/* Métricas */
+.metric{margin-bottom:14px}
+.metric-head{display:flex;justify-content:space-between;font-family:var(--mono);
+  font-size:11px;color:var(--steel2);margin-bottom:6px}
+.bar{height:6px;background:rgba(90,113,134,.18);border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;border-radius:3px;
+  background:linear-gradient(90deg,var(--cyan),var(--cyan2));
+  box-shadow:0 0 10px rgba(34,211,238,.5);transition:width .6s ease}
+.corestat{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;
+  color:var(--steel2);padding:5px 0;border-bottom:1px dashed var(--line)}
+.corestat b{color:var(--cyan2);font-weight:500}
+
+/* Núcleo */
+.core{position:relative;padding:0;overflow:hidden;display:flex}
+#core-canvas{width:100%;height:100%;display:block}
+.core-caption{position:absolute;bottom:16px;left:0;right:0;text-align:center;
+  font-family:var(--mono);font-size:11px;letter-spacing:.24em;color:var(--steel);
+  text-transform:uppercase}
+
+/* Derecha */
+.task{font-size:13px;color:var(--cyan2);min-height:20px;line-height:1.4}
+.roster .empty,.alerts .empty{color:var(--steel);font-size:11px;font-style:italic}
+.roster .item{font-family:var(--mono);font-size:11px;color:var(--steel2);
+  padding:6px 8px;border-left:2px solid var(--cyan);background:rgba(34,211,238,.05);margin-bottom:6px}
+.roster .item b{color:var(--cyan2)}
+.alerts .al{font-family:var(--mono);font-size:11px;padding:6px 8px;margin-bottom:6px;
+  border-left:2px solid var(--steel)}
+.alerts .al small{opacity:.6;margin-right:6px}
+.alerts .al.n3{border-color:var(--amber);color:var(--amber2);background:rgba(245,185,66,.08)}
+.alerts .al.n2{border-color:var(--cyan)}
+.alerts .al.n1{border-color:var(--steel)}
+
+/* Consola */
+.console{display:flex;flex-direction:column}
+.log{flex:1;overflow-y:auto;font-family:var(--mono);font-size:12px;line-height:1.55;
+  padding-right:8px}
+.log .l{white-space:pre-wrap;word-break:break-word}
+.log .t{color:var(--steel);opacity:.6;margin-right:8px}
+.log .user{color:#eaf6fb}
+.log .answer{color:var(--cyan2)}
+.log .thought{color:var(--steel);opacity:.72}
+.log .tool_call{color:var(--cyan)}
+.log .observation{color:var(--steel2);opacity:.8}
+.log .error{color:var(--amber2)}
+.input{display:flex;align-items:center;gap:10px;margin-top:10px;
+  border-top:1px solid var(--line);padding-top:10px}
+.input .prompt{color:var(--cyan);font-family:var(--mono)}
+.input input{flex:1;background:rgba(10,16,24,.6);border:1px solid var(--line);
+  color:var(--text);font-family:var(--mono);font-size:13px;padding:9px 12px;border-radius:2px;outline:none}
+.input input:focus{border-color:var(--line2)}
+.input button{background:rgba(34,211,238,.12);border:1px solid var(--line2);color:var(--cyan2);
+  font-family:var(--mono);font-size:12px;letter-spacing:.08em;padding:9px 16px;border-radius:2px;
+  cursor:pointer;text-transform:uppercase}
+.input button:hover{background:rgba(34,211,238,.22)}
+
+::-webkit-scrollbar{width:8px} ::-webkit-scrollbar-thumb{background:rgba(90,113,134,.3);border-radius:4px}

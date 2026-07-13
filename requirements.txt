@@ -20,3 +20,7 @@ piper-tts>=1.2.0
 sounddevice>=0.4.6
 numpy>=1.24.0
 pynput>=1.7.0
+
+# Fase 8 — HUD. Métricas de sistema. three.js va vendorizado en
+# cristopher/hud/static/three.min.js (offline, sin CDN).
+psutil>=5.9.0

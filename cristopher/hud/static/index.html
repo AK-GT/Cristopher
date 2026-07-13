@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CRISTOPHER · HUD</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="grid-bg"></div>
+
+  <div class="hud">
+    <!-- Barra superior: identidad · hora · estado -->
+    <header class="topbar panel">
+      <div class="brand">
+        <span class="dot"></span>
+        <span class="name">CRISTOPHER</span>
+        <span class="sub">Cognición · Razonamiento · Integración · Situacional</span>
+      </div>
+      <div class="clock" id="clock">--:--:--</div>
+      <div class="status" id="status"><span class="stled"></span><span id="status-text">reposo</span></div>
+    </header>
+
+    <!-- Izquierda: métricas de sistema -->
+    <aside class="left panel">
+      <div class="panel-title">SISTEMA</div>
+      <div class="metric">
+        <div class="metric-head"><span>CPU</span><span id="cpu-val">0%</span></div>
+        <div class="bar"><i id="cpu-bar"></i></div>
+      </div>
+      <div class="metric">
+        <div class="metric-head"><span>RAM</span><span id="ram-val">0%</span></div>
+        <div class="bar"><i id="ram-bar"></i></div>
+      </div>
+      <div class="panel-title" style="margin-top:22px">NÚCLEO</div>
+      <div class="corestat"><span>estado</span><b id="core-state">reposo</b></div>
+      <div class="corestat"><span>latido</span><b id="core-beat">·</b></div>
+    </aside>
+
+    <!-- Centro: núcleo de partículas -->
+    <main class="core">
+      <canvas id="core-canvas"></canvas>
+      <div class="core-caption" id="core-caption">presencia en reposo</div>
+    </main>
+
+    <!-- Derecha: tarea activa · sub-agentes · alertas -->
+    <aside class="right panel">
+      <div class="panel-title">TAREA ACTIVA</div>
+      <div class="task" id="task">—</div>
+      <div class="panel-title" style="margin-top:18px">SUB-AGENTES</div>
+      <div class="roster" id="roster"><div class="empty">sin delegaciones</div></div>
+      <div class="panel-title" style="margin-top:18px">ALERTAS</div>
+      <div class="alerts" id="alerts"><div class="empty">sin alertas</div></div>
+    </aside>
+
+    <!-- Abajo: consola en streaming + entrada -->
+    <footer class="console panel">
+      <div class="panel-title">CONSOLA</div>
+      <div class="log" id="log"></div>
+      <form class="input" id="form" autocomplete="off">
+        <span class="prompt">›</span>
+        <input id="entrada" type="text" placeholder="Habla con CRISTOPHER…" />
+        <button type="submit">enviar</button>
+      </form>
+    </footer>
+  </div>
+
+  <script src="three.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

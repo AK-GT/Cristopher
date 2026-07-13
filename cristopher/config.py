@@ -60,6 +60,9 @@ GOOGLE_SCOPES = [
 # Búsqueda de élite (opcional). Sin ella, la búsqueda cae a DuckDuckGo.
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
 
+# --- Fase 8: HUD -------------------------------------------------------------
+HUD_PORT = int(os.getenv("CRISTOPHER_HUD_PORT", "8765"))
+
 # --- Fase 7: proactividad ----------------------------------------------------
 PROACTIVO_DB = DATA / "proactivo.db"          # recordatorios + dedup de avisos
 POLL_SEGUNDOS = int(os.getenv("CRISTOPHER_POLL", "60"))   # cada cuánto revisa el demonio
