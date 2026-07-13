@@ -1,6 +1,8 @@
 """CRISTOPHER — agente personal orquestado tipo Jarvis.
 
-Fase 1: bucle agéntico (ReAct) sobre Gemini con 3 herramientas.
+En vivo: bucle agéntico (ReAct) sobre Gemini con memoria persistente, sub-agentes,
+integraciones Google (Calendar/Gmail), navegador, voz, proactividad y HUD. Todas las
+fases completas. Arranca con `python -m cristopher`.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

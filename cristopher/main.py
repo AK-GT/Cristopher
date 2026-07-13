@@ -27,7 +27,7 @@ BANNER = f"""{CYAN}{BOLD}
  ██      ██████  ██ ███████    ██    ██    ██ ██████  ███████ █████   ██████
  ██      ██   ██ ██      ██    ██    ██    ██ ██      ██   ██ ██      ██   ██
   ██████ ██   ██ ██ ███████    ██     ██████  ██      ██   ██ ███████ ██   ██
-{RESET}{DIM} Fase 1 — MVP del bucle · cerebro: Gemini · llega a la solución.{RESET}
+{RESET}{DIM} REPL de texto · cerebro: Gemini · llega a la solución.{RESET}
 """
 
 HELP = (
