@@ -4,14 +4,20 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CRISTOPHER · HUD</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="grid-bg"></div>
+  <div class="vignette"></div>
+  <div class="scanlines"></div>
 
   <div class="hud">
     <!-- Barra superior: identidad · hora · estado -->
     <header class="topbar panel">
+      <i class="bracket"></i>
       <div class="brand">
         <span class="dot"></span>
         <span class="name">CRISTOPHER</span>
@@ -23,6 +29,7 @@
 
     <!-- Izquierda: métricas de sistema -->
     <aside class="left panel">
+      <i class="bracket"></i>
       <div class="panel-title">SISTEMA</div>
       <div class="metric">
         <div class="metric-head"><span>CPU</span><span id="cpu-val">0%</span></div>
@@ -38,13 +45,15 @@
     </aside>
 
     <!-- Centro: núcleo de partículas -->
-    <main class="core">
+    <main class="core panel">
+      <i class="bracket"></i>
       <canvas id="core-canvas"></canvas>
       <div class="core-caption" id="core-caption">presencia en reposo</div>
     </main>
 
     <!-- Derecha: tarea activa · sub-agentes · alertas -->
     <aside class="right panel">
+      <i class="bracket"></i>
       <div class="panel-title">TAREA ACTIVA</div>
       <div class="task" id="task">—</div>
       <div class="panel-title" style="margin-top:18px">SUB-AGENTES</div>
@@ -55,6 +64,7 @@
 
     <!-- Abajo: consola en streaming + entrada -->
     <footer class="console panel">
+      <i class="bracket"></i>
       <div class="panel-title">CONSOLA</div>
       <div class="log" id="log"></div>
       <form class="input" id="form" autocomplete="off">
@@ -68,6 +78,7 @@
   <!-- Confirmación de acciones irreversibles (p. ej. enviar correo) -->
   <div class="confirm-overlay" id="confirm-overlay" hidden>
     <div class="confirm-card panel">
+      <i class="bracket"></i>
       <div class="panel-title">CONFIRMAR ACCIÓN</div>
       <pre class="confirm-body" id="confirm-body"></pre>
       <div class="confirm-actions">
