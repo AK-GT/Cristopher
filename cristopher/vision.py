@@ -1,8 +1,9 @@
-"""Visión de CRISTOPHER (Fase 5) — pregunta sobre una imagen con Gemini/Gemma.
+"""Visión de CRISTOPHER (Fase 5) — pregunta sobre una imagen con Gemini.
 
 Una llamada multimodal de un solo turno, con la MISMA cadena de modelos principal→
-respaldo que el bucle (429 → Gemma 4). Devuelve texto para que encaje en el bucle
-ReAct (solo texto). Degrada con elegancia: si ningún modelo responde, mensaje claro.
+respaldo que el bucle (429 → FALLBACK_MODEL, otro Gemini — nunca Gemma). Devuelve
+texto para que encaje en el bucle ReAct (solo texto). Degrada con elegancia: si
+ningún modelo responde, mensaje claro.
 """
 
 from __future__ import annotations
