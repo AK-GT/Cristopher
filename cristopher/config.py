@@ -80,6 +80,17 @@ STT_MODEL = os.getenv("CRISTOPHER_STT_MODEL", "small")  # tamaño de faster-whis
 STT_LANG = "es"
 PIPER_VOICE = VOICE_DIR / "piper" / "es_ES-davefx-medium.onnx"  # voz TTS
 
+# --- Arranque por 2 palmadas + música ----------------------------------------
+# Escucha ambiental ligera (cristopher/escucha.py): 2 palmadas despiertan el HUD y
+# suena la canción. Umbrales ajustables por entorno para calibrar según el micro.
+AUDIO_DIR        = DATA / "audio"
+CANCION_ARRANQUE = AUDIO_DIR / "back_in_black.mp3"   # la coloca el usuario (copyright)
+PALMADA_FACTOR   = float(os.getenv("CRISTOPHER_PALMADA_FACTOR", "7"))     # pico / suelo de ruido
+PALMADA_UMBRAL   = float(os.getenv("CRISTOPHER_PALMADA_UMBRAL", "0.15"))  # pico mínimo absoluto
+PALMADA_GAP_MIN  = float(os.getenv("CRISTOPHER_PALMADA_GAP_MIN", "0.12")) # s mínimos entre palmadas
+PALMADA_GAP_MAX  = float(os.getenv("CRISTOPHER_PALMADA_GAP_MAX", "0.6"))  # s máximos entre palmadas
+PALMADA_COOLDOWN = float(os.getenv("CRISTOPHER_PALMADA_COOLDOWN", "5"))   # s de guarda tras disparar
+
 # Modelo de embeddings para el recuerdo semántico (free tier, dim 3072).
 EMBED_MODEL = os.getenv("CRISTOPHER_EMBED_MODEL", "gemini-embedding-001")
 

@@ -9,6 +9,7 @@ nunca se ocultan (esencia §1: "fallos explícitos").
 from __future__ import annotations
 
 import copy
+import datetime
 import re
 import time
 from typing import Any, Callable
@@ -220,6 +221,11 @@ class Cristopher:
         self._models = [MODEL]
         if FALLBACK_MODEL and FALLBACK_MODEL != MODEL:
             self._models.append(FALLBACK_MODEL)
+        # Si el principal ya degradó hoy (429 = cuota DIARIA agotada, no por minuto),
+        # no tiene sentido volver a intentarlo turno tras turno: cada intento añade
+        # los ~5s de backoff de _generate antes de caer al respaldo. Se recuerda la
+        # fecha de la degradación y, mientras sea "hoy", se salta directo al respaldo.
+        self._degraded_date: datetime.date | None = None
         # Historia de la conversación (persiste entre turnos del REPL).
         self._contents: list[types.Content] = []
 
@@ -254,9 +260,20 @@ class Cristopher:
 
         El 429 hace backoff+reintento ACOTADO en el modelo actual (respetando el
         retryDelay que sugiera la API) antes de caer al fallback — así se recupera de
-        límites por minuto sin gastar demasiado tiempo cuando el límite es diario."""
+        límites por minuto sin gastar demasiado tiempo cuando el límite es diario.
+
+        Si el principal ya degradó hoy, se arranca directo en el respaldo (sin los
+        reintentos + backoff del principal) hasta que cambie el día."""
+        today = datetime.date.today()
+        start = 1 if (self._degraded_date == today and len(self._models) > 1) else 0
+        if start > 0:
+            self._emit(
+                "observation",
+                f"[fallback] ya degradado hoy ({self._models[0]} agotó cuota) → "
+                f"uso directo {self._models[start]}",
+            )
         last_code = None
-        for mi, model in enumerate(self._models):
+        for mi, model in enumerate(self._models[start:], start=start):
             has_next = mi < len(self._models) - 1
             # Con fallback disponible, el 429 solo reintenta 1 vez aquí (probable límite
             # diario); en el último modelo agota max_retries (probable límite por minuto).
@@ -288,6 +305,10 @@ class Cristopher:
                         continue
                     # Agotados los reintentos de este modelo.
                     if has_next:
+                        if mi == 0:
+                            # Marca la degradación de HOY: los próximos _generate
+                            # arrancarán directo en el respaldo (ver arriba).
+                            self._degraded_date = today
                         self._emit(
                             "observation",
                             f"[fallback] {model}: {code} → {self._models[mi + 1]}",

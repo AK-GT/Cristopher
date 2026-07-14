@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import queue
+import sys
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -117,6 +118,15 @@ def _worker() -> None:
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # silencia el log HTTP por defecto
         pass
+
+    def handle_error(self, request, client_address):
+        # El navegador aborta conexiones keep-alive/SSE al cerrar o recargar la
+        # pestaña; Windows lo reporta como WinError 10053. Es ruido normal, no un
+        # fallo real, así que no imprimimos el traceback para estos casos.
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
     # --- GET: estáticos, snapshot y SSE ---
     def do_GET(self):

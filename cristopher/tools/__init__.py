@@ -33,6 +33,7 @@ from cristopher.tools.memory_tools import recall, remember
 from cristopher.tools.read_file import read_file
 from cristopher.tools.recordatorio_tools import crear_recordatorio, listar_recordatorios
 from cristopher.tools.shell import run_shell
+from cristopher.tools.system_apps import abrir_app, cerrar_app
 from cristopher.tools.voz_tools import activar_modo_voz, desactivar_modo_voz
 
 TOOLS: list[dict[str, Any]] = [
@@ -58,6 +59,47 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["command"],
         },
         "fn": run_shell,
+    },
+    {
+        "name": "abrir_app",
+        "description": (
+            "Abre una aplicación o juego del escritorio por su nombre (p. ej. 'Spotify', "
+            "'la calculadora', 'Steam'). Localiza la app en el menú Inicio y la lanza; la "
+            "app queda abierta y viva. Si el nombre es ambiguo o no casa con claridad, "
+            "devuelve candidatos para que preguntes cuál. Úsala cuando el usuario quiera "
+            "abrir/lanzar/ejecutar un programa del ordenador."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nombre": {
+                    "type": "string",
+                    "description": "Nombre amistoso de la app, p. ej. 'Spotify' o 'calculadora'.",
+                },
+            },
+            "required": ["nombre"],
+        },
+        "fn": abrir_app,
+    },
+    {
+        "name": "cerrar_app",
+        "description": (
+            "Cierra una aplicación en marcha por su nombre. Acción CON EFECTOS: SIEMPRE "
+            "avisa al usuario de qué vas a cerrar y pide confirmación antes (puede "
+            "perderse trabajo no guardado); el usuario confirmará o cancelará. Úsala "
+            "cuando el usuario quiera cerrar/terminar un programa abierto."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nombre": {
+                    "type": "string",
+                    "description": "Nombre de la app a cerrar, p. ej. 'Spotify' o 'calculadora'.",
+                },
+            },
+            "required": ["nombre"],
+        },
+        "fn": cerrar_app,
     },
     {
         "name": "read_file",
