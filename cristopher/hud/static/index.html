@@ -62,6 +62,46 @@
       <div class="alerts" id="alerts"><div class="empty">sin alertas</div></div>
     </aside>
 
+    <!-- Barra NOW PLAYING: estado real del reproductor de música -->
+    <section class="nowplaying panel" id="nowplaying" data-sonando="0">
+      <i class="bracket"></i>
+      <div class="np-grid">
+        <!-- Estado + título/artista + fuente -->
+        <div class="np-meta">
+          <span class="np-state" id="np-state">■</span>
+          <div class="np-titles">
+            <div class="np-title" id="np-title">—</div>
+            <div class="np-line">
+              <span class="np-artist" id="np-artist"></span>
+              <span class="np-src" id="np-src" hidden></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Progreso -->
+        <div class="np-progress">
+          <span class="np-time" id="np-cur">0:00</span>
+          <div class="bar np-bar" id="np-bar"><i id="np-fill"></i></div>
+          <span class="np-time" id="np-dur">0:00</span>
+        </div>
+
+        <!-- Controles + volumen -->
+        <div class="np-controls">
+          <button type="button" id="np-prev" title="Anterior">⏮</button>
+          <button type="button" id="np-play" class="np-play" title="Play/Pausa">▶</button>
+          <button type="button" id="np-next" title="Siguiente">⏭</button>
+          <span class="np-vol-ico">🔊</span>
+          <input type="range" id="np-vol" class="np-vol" min="0" max="100" value="70" />
+        </div>
+
+        <!-- Visualizador (pulso vivo ligado al estado real) -->
+        <canvas class="np-vis" id="np-vis"></canvas>
+
+        <!-- Cola compacta -->
+        <div class="np-queue" id="np-queue"><span class="np-q-label">EN COLA</span><span id="np-q-list" class="np-q-list">—</span></div>
+      </div>
+    </section>
+
     <!-- Abajo: consola en streaming + entrada -->
     <footer class="console panel">
       <i class="bracket"></i>

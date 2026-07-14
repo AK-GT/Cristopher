@@ -11,7 +11,8 @@ nombres de función), pero las descripciones van en español.
 
 from __future__ import annotations
 
-from cristopher.musica import MusicaError, get_reproductor
+from cristopher.musica import MusicaError, get_biblioteca, get_reproductor
+from cristopher.musica.resolver import resolver
 
 
 def reproducir(consulta: str) -> str:
@@ -93,3 +94,106 @@ def quitar_de_cola(pos: int) -> str:
 def vaciar_cola() -> str:
     """Vacía la cola y detiene la reproducción."""
     return get_reproductor().vaciar()
+
+
+# --- Favoritos (Tanda B) ------------------------------------------------------
+def anadir_favorito() -> str:
+    """Guarda en favoritos la canción que suena ahora mismo."""
+    actual = get_reproductor().pista_actual()
+    if actual is None:
+        return "No hay nada sonando que guardar. Pon una canción primero."
+    fav_id, ya_estaba = get_biblioteca().add_favorito(actual)
+    titulo = actual.get("titulo") or actual.get("consulta") or "esta canción"
+    if ya_estaba:
+        return f"«{titulo}» ya estaba en favoritos (#{fav_id})."
+    return f"Guardada en favoritos: «{titulo}» (#{fav_id})."
+
+
+def quitar_favorito(id: int) -> str:
+    """Quita un favorito por su número de id."""
+    titulo = get_biblioteca().quitar_favorito(id)
+    if titulo is None:
+        return f"No hay ningún favorito con id {id}."
+    return f"Quitado de favoritos: «{titulo}»."
+
+
+def listar_favoritos() -> str:
+    """Muestra la lista de canciones favoritas guardadas."""
+    favs = get_biblioteca().listar_favoritos()
+    if not favs:
+        return "No tienes favoritos guardados todavía."
+    lineas = []
+    for f in favs:
+        art = f" — {f['artista']}" if f["artista"] else ""
+        src = f" [{f['fuente']}]" if f["fuente"] else ""
+        lineas.append(f"  #{f['id']}. {f['titulo']}{art}{src}")
+    return "Tus favoritos:\n" + "\n".join(lineas)
+
+
+def reproducir_favoritos() -> str:
+    """Reproduce todas tus canciones favoritas como una cola."""
+    tracks = get_biblioteca().favoritos_tracks()
+    if not tracks:
+        return "No tienes favoritos que reproducir."
+    try:
+        return get_reproductor().cargar_cola(tracks)
+    except MusicaError as exc:
+        return f"No pude arrancar los favoritos: {exc}"
+
+
+# --- Listas de reproducción (Tanda B) -----------------------------------------
+def crear_lista(nombre: str) -> str:
+    """Crea una lista de reproducción vacía con el nombre indicado."""
+    nombre = (nombre or "").strip()
+    if not nombre:
+        return "Dime un nombre para la lista."
+    _lid, ya_existia = get_biblioteca().crear_lista(nombre)
+    if ya_existia:
+        return f"La lista «{nombre}» ya existía."
+    return f"Lista «{nombre}» creada."
+
+
+def anadir_a_lista(nombre: str, consulta: str) -> str:
+    """Añade una canción a una lista de reproducción (crea la lista si no existe)."""
+    nombre = (nombre or "").strip()
+    if not nombre:
+        return "Dime a qué lista añadirla."
+    try:
+        track = resolver(consulta)  # resuelve metadatos (título/artista); error si falla
+    except MusicaError as exc:
+        return f"No pude añadir «{consulta}»: {exc}"
+    creada = get_biblioteca().anadir_a_lista(nombre, track)
+    titulo = track.get("titulo") or consulta
+    prefijo = f"Lista «{nombre}» creada. " if creada else ""
+    return f"{prefijo}Añadida a «{nombre}»: {titulo}."
+
+
+def quitar_de_lista(nombre: str, pos: int) -> str:
+    """Quita de una lista la canción en la posición indicada (1 = la primera)."""
+    titulo = get_biblioteca().quitar_de_lista(nombre, pos)
+    if titulo is None:
+        return f"No pude quitar la posición {pos} de «{nombre}» (¿existe la lista y esa posición?)."
+    return f"Quitada de «{nombre}»: «{titulo}»."
+
+
+def reproducir_lista(nombre: str) -> str:
+    """Reproduce una lista de reproducción por su nombre."""
+    tracks = get_biblioteca().canciones_de(nombre)
+    if tracks is None:
+        return f"No existe la lista «{nombre}». Mira tus listas o créala primero."
+    if not tracks:
+        return f"La lista «{nombre}» está vacía."
+    try:
+        return get_reproductor().cargar_cola(tracks)
+    except MusicaError as exc:
+        return f"No pude arrancar la lista «{nombre}»: {exc}"
+
+
+def listar_listas() -> str:
+    """Muestra tus listas de reproducción y cuántas canciones tiene cada una."""
+    listas = get_biblioteca().listar_listas()
+    if not listas:
+        return "No tienes listas de reproducción todavía."
+    lineas = [f"  · {l['nombre']} ({l['n']} canción{'es' if l['n'] != 1 else ''})"
+              for l in listas]
+    return "Tus listas:\n" + "\n".join(lineas)

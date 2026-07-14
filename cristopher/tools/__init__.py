@@ -32,12 +32,21 @@ from cristopher.tools.google_tools import buscar_correos, enviar_correo, proximo
 from cristopher.tools.memory_tools import recall, remember
 from cristopher.tools.musica_tools import (
     anadir_a_cola,
+    anadir_a_lista,
+    anadir_favorito,
     anterior,
+    crear_lista,
+    listar_favoritos,
+    listar_listas,
     pausar,
     que_suena,
     quitar_de_cola,
+    quitar_de_lista,
+    quitar_favorito,
     reanudar,
     reproducir,
+    reproducir_favoritos,
+    reproducir_lista,
     siguiente,
     vaciar_cola,
     ver_cola,
@@ -527,6 +536,116 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": vaciar_cola,
+    },
+    # --- Música: favoritos (Tanda B) ------------------------------------------
+    {
+        "name": "anadir_favorito",
+        "description": (
+            "Guarda en FAVORITOS la canción que suena ahora mismo. Úsala cuando el "
+            "usuario quiera marcar o guardar lo que está escuchando ('guarda esta', "
+            "'me gusta', 'a favoritos')."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": anadir_favorito,
+    },
+    {
+        "name": "quitar_favorito",
+        "description": (
+            "Quita un favorito por su número de id (el que aparece al listar favoritos). "
+            "Acción directa sobre datos locales; sé claro con lo que quitaste."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer", "description": "Id del favorito a quitar."},
+            },
+            "required": ["id"],
+        },
+        "fn": quitar_favorito,
+    },
+    {
+        "name": "listar_favoritos",
+        "description": "Muestra las canciones favoritas guardadas (con su id).",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": listar_favoritos,
+    },
+    {
+        "name": "reproducir_favoritos",
+        "description": (
+            "Reproduce todas las canciones favoritas como una cola. Úsala cuando el "
+            "usuario quiera oír sus favoritos."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": reproducir_favoritos,
+    },
+    # --- Música: listas de reproducción (Tanda B) -----------------------------
+    {
+        "name": "crear_lista",
+        "description": "Crea una lista de reproducción vacía con el nombre indicado.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nombre": {"type": "string", "description": "Nombre de la lista."},
+            },
+            "required": ["nombre"],
+        },
+        "fn": crear_lista,
+    },
+    {
+        "name": "anadir_a_lista",
+        "description": (
+            "Añade una canción a una lista de reproducción (crea la lista si no existe). "
+            "Úsala cuando el usuario quiera meter algo en una lista suya."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nombre": {"type": "string", "description": "Nombre de la lista."},
+                "consulta": {
+                    "type": "string",
+                    "description": "Qué añadir: título, artista, nombre de archivo o URL.",
+                },
+            },
+            "required": ["nombre", "consulta"],
+        },
+        "fn": anadir_a_lista,
+    },
+    {
+        "name": "quitar_de_lista",
+        "description": (
+            "Quita de una lista la canción en la posición indicada (1 = la primera). "
+            "Acción directa sobre datos locales; sé claro con lo que quitaste."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nombre": {"type": "string", "description": "Nombre de la lista."},
+                "pos": {"type": "integer", "description": "Posición en la lista (empieza en 1)."},
+            },
+            "required": ["nombre", "pos"],
+        },
+        "fn": quitar_de_lista,
+    },
+    {
+        "name": "reproducir_lista",
+        "description": (
+            "Reproduce una lista de reproducción por su nombre. Úsala cuando el usuario "
+            "pida poner una lista suya ('pon mi lista de estudiar')."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nombre": {"type": "string", "description": "Nombre de la lista a reproducir."},
+            },
+            "required": ["nombre"],
+        },
+        "fn": reproducir_lista,
+    },
+    {
+        "name": "listar_listas",
+        "description": "Muestra tus listas de reproducción y cuántas canciones tiene cada una.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": listar_listas,
     },
 ]
 

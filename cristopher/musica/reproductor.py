@@ -77,6 +77,9 @@ class Reproductor:
         self._pausado: bool = False
         self._parado: bool = True      # True = no hay reproducción activa
         self._volumen: int = max(0, min(100, MUSICA_VOLUMEN))
+        # Hook opcional que se invoca al arrancar una pista (lo cablea get_reproductor a
+        # la biblioteca para el historial). Guardado: nunca debe romper la reproducción.
+        self._on_track_start = None
         # Auto-avance: el callback de fin de pista señaliza; el hilo daemon reacciona.
         self._fin = threading.Event()
         self._avance = threading.Thread(target=self._bucle_avance, daemon=True)
@@ -129,6 +132,12 @@ class Reproductor:
         self._player.audio_set_volume(self._volumen)
         self._pausado = False
         self._parado = False
+        # Historial (best-effort): sqlite local rápido; nunca rompe la reproducción.
+        if self._on_track_start is not None:
+            try:
+                self._on_track_start(track)
+            except Exception:
+                pass
 
     def _detener_locked(self) -> None:
         if self._player is not None:
@@ -315,6 +324,41 @@ class Reproductor:
                 "cola": [_descr(t) for t in self._cola],
             }
 
+    # --- API adicional para Tanda B (favoritos/listas/HUD) ---------------------
+    def pista_actual(self) -> Optional[Track]:
+        """Devuelve el Track que suena ahora (para guardarlo en favoritos), o None."""
+        with self._lock:
+            if 0 <= self._indice < len(self._cola):
+                return dict(self._cola[self._indice])
+        return None
+
+    def cargar_cola(self, tracks: list[Track]) -> str:
+        """Reemplaza la cola por una lista de pistas y arranca. Resuelve la 1ª en el acto
+        (feedback/error inmediato); el resto perezosamente al sonar. Para reproducir una
+        lista o los favoritos."""
+        if not tracks:
+            return "No hay nada que reproducir."
+        primero = self._asegurar_resuelto(tracks[0])  # MusicaError si falla
+        self._ensure_vlc()
+        with self._lock:
+            self._cola = [primero] + [dict(t) for t in tracks[1:]]
+            self._indice = 0
+            self._sonar_locked(primero)
+        n = len(tracks)
+        return f"Reproduciendo {n} pista{'s' if n != 1 else ''}. Sonando: {_descr(primero)}"
+
+    def buscar(self, fraccion: float) -> str:
+        """Salta a una posición de la pista actual (0.0–1.0). Para el clic en la barra."""
+        try:
+            f = max(0.0, min(1.0, float(fraccion)))
+        except (TypeError, ValueError):
+            return "Posición inválida."
+        with self._lock:
+            if self._player is None or self._parado:
+                return "No hay nada sonando."
+            self._player.set_position(f)
+        return f"Saltado al {int(f * 100)}%."
+
 
 # --- Singleton perezoso -------------------------------------------------------
 _REPRODUCTOR: Optional[Reproductor] = None
@@ -322,10 +366,18 @@ _LOCK = threading.Lock()
 
 
 def get_reproductor() -> Reproductor:
-    """Devuelve la instancia compartida del reproductor (creándola la primera vez)."""
+    """Devuelve la instancia compartida del reproductor (creándola la primera vez).
+    Cablea el hook de historial a la biblioteca (import perezoso para no acoplar el motor
+    a la persistencia hasta que hace falta)."""
     global _REPRODUCTOR
     if _REPRODUCTOR is None:
         with _LOCK:
             if _REPRODUCTOR is None:
-                _REPRODUCTOR = Reproductor()
+                r = Reproductor()
+                try:
+                    from cristopher.musica.biblioteca import get_biblioteca
+                    r._on_track_start = lambda track: get_biblioteca().registrar_historial(track)
+                except Exception:
+                    pass  # sin historial si la biblioteca no está disponible
+                _REPRODUCTOR = r
     return _REPRODUCTOR

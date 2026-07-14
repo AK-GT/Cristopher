@@ -434,6 +434,107 @@
   $("confirm-ok").addEventListener("click", () => resolveConfirm(true));
   $("confirm-cancel").addEventListener("click", () => resolveConfirm(false));
 
+  // ---------- NOW PLAYING (música) ----------
+  const np = {
+    root: $("nowplaying"), state: $("np-state"), title: $("np-title"),
+    artist: $("np-artist"), src: $("np-src"), cur: $("np-cur"), dur: $("np-dur"),
+    fill: $("np-fill"), bar: $("np-bar"), prev: $("np-prev"), play: $("np-play"),
+    next: $("np-next"), vol: $("np-vol"), qlist: $("np-q-list"), vis: $("np-vis"),
+  };
+  const npAudio = { sonando: false, pausado: false };  // alimenta el visualizador
+  let volEditandoHasta = 0;  // mientras el usuario arrastra el volumen, no lo pisamos
+
+  function fmt(seg) {
+    seg = Math.max(0, Math.floor(seg || 0));
+    const m = Math.floor(seg / 60), s = seg % 60;
+    return m + ":" + String(s).padStart(2, "0");
+  }
+
+  function pintarMusica(e) {
+    const sonando = !!e.sonando;
+    npAudio.sonando = sonando;
+    npAudio.pausado = !!e.pausado;
+    np.root.dataset.sonando = sonando ? "1" : "0";
+    np.state.textContent = !sonando ? "■" : (e.pausado ? "⏸" : "▶");
+    np.play.textContent = (sonando && !e.pausado) ? "⏸" : "▶";
+    np.title.textContent = sonando ? (e.titulo || "—") : "—";
+    np.artist.textContent = sonando ? (e.artista || "") : "";
+    if (sonando && e.fuente) { np.src.textContent = e.fuente; np.src.hidden = false; }
+    else { np.src.hidden = true; }
+    const dur = e.dur_seg || 0, pos = e.pos_seg || 0;
+    np.cur.textContent = fmt(pos); np.dur.textContent = fmt(dur);
+    np.fill.style.width = (dur > 0 ? Math.min(100, (pos / dur) * 100) : 0) + "%";
+    if (Date.now() > volEditandoHasta && typeof e.volumen === "number") np.vol.value = e.volumen;
+    // Cola: próximas pistas tras la actual.
+    const cola = e.cola || [], i = (typeof e.indice === "number" ? e.indice : -1);
+    const prox = i >= 0 ? cola.slice(i + 1) : cola;
+    np.qlist.textContent = prox.length ? prox.join("  ·  ") : (sonando ? "fin de la cola" : "—");
+  }
+
+  function musicaTick() {
+    fetch("/musica").then((r) => r.json()).then(pintarMusica).catch(() => {});
+  }
+
+  function control(accion, valor) {
+    fetch("/musica/control", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accion, valor }),
+    }).then(() => setTimeout(musicaTick, 120)).catch(() => {});
+  }
+
+  np.prev.addEventListener("click", () => control("anterior"));
+  np.next.addEventListener("click", () => control("siguiente"));
+  np.play.addEventListener("click", () => {
+    control(npAudio.sonando && !npAudio.pausado ? "pausar" : "reanudar");
+  });
+  np.vol.addEventListener("input", () => {
+    volEditandoHasta = Date.now() + 1500;
+    control("volumen", parseInt(np.vol.value, 10));
+  });
+  np.bar.addEventListener("click", (ev) => {
+    const rect = np.bar.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+    control("seek", frac);
+  });
+
+  // Visualizador: pulso vivo de barras cian ligado al ESTADO real (no audio real).
+  // Suena → respira con energía; pausa → tenue; reposo → casi plano. Puede latir en
+  // armonía con el núcleo (misma cadencia suave).
+  (function visualizador() {
+    const c = np.vis, ctx = c.getContext("2d");
+    const N = 22;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    function size() {
+      c.width = c.clientWidth * dpr; c.height = c.clientHeight * dpr;
+    }
+    size(); window.addEventListener("resize", size);
+    const cyan = getComputedStyle(document.documentElement).getPropertyValue("--cyan-glow").trim() || "#2FF3E0";
+    let amp = 0;  // energía suavizada
+    function frame() {
+      requestAnimationFrame(frame);
+      if (REDUCE) { ctx.clearRect(0, 0, c.width, c.height); return; }
+      const objetivo = npAudio.sonando ? (npAudio.pausado ? 0.12 : 1.0) : 0.0;
+      amp += (objetivo - amp) * 0.06;  // transición suave entre estados
+      const t = performance.now() / 1000;
+      const w = c.width, h = c.height, bw = w / N;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = cyan;
+      for (let i = 0; i < N; i++) {
+        // Onda compuesta por barra (fases distintas) → parece "vivo", no uniforme.
+        const wobble = 0.5 + 0.5 * Math.sin(t * 3.1 + i * 0.7) * Math.sin(t * 1.3 + i * 0.35);
+        const base = 0.08 + 0.92 * wobble;
+        const hh = Math.max(h * 0.06, base * amp * h * 0.92);
+        ctx.globalAlpha = 0.35 + 0.55 * amp;
+        ctx.fillRect(i * bw + bw * 0.22, (h - hh) / 2, bw * 0.56, hh);
+      }
+      ctx.globalAlpha = 1;
+    }
+    frame();
+  })();
+
+  musicaTick();
+  setInterval(musicaTick, 1000);
+
   // ---------- Reloj ----------
   function tick() { $("clock").textContent = new Date().toLocaleTimeString("es-ES"); }
   setInterval(tick, 1000); tick();

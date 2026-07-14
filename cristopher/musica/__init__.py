@@ -6,7 +6,14 @@ web, con cola, siguiente/anterior y auto-avance. Sin apps externas ni servicios 
 
 from __future__ import annotations
 
+from cristopher.musica.biblioteca import Biblioteca, get_biblioteca
 from cristopher.musica.reproductor import Reproductor, get_reproductor
 from cristopher.musica.resolver import MusicaError
 
-__all__ = ["get_reproductor", "Reproductor", "MusicaError"]
+__all__ = [
+    "get_reproductor",
+    "Reproductor",
+    "MusicaError",
+    "get_biblioteca",
+    "Biblioteca",
+]

@@ -115,6 +115,41 @@ def _worker() -> None:
             _JOBS.task_done()
 
 
+# --- Módulo de música (Tanda B): estado y control desde el HUD --------------------
+# El reproductor es thread-safe e independiente del worker/Playwright, así que estas
+# rutas lo llaman DIRECTAMENTE desde el hilo HTTP (no se encolan en _JOBS). Import
+# perezoso para no acoplar el arranque del HUD a VLC.
+def _musica_estado() -> dict:
+    try:
+        from cristopher.musica import get_reproductor
+        return get_reproductor().estado()
+    except Exception as exc:
+        return {"sonando": False, "error": str(exc)}
+
+
+def _musica_control(accion: str, valor) -> dict:
+    try:
+        from cristopher.musica import get_reproductor
+        r = get_reproductor()
+        if accion == "pausar":
+            msg = r.pausar()
+        elif accion == "reanudar":
+            msg = r.reanudar()
+        elif accion == "siguiente":
+            msg = r.siguiente()
+        elif accion == "anterior":
+            msg = r.anterior()
+        elif accion == "volumen":
+            msg = r.set_volumen(valor)
+        elif accion == "seek":
+            msg = r.buscar(valor)
+        else:
+            return {"ok": False, "error": f"acción desconocida: {accion}"}
+        return {"ok": True, "msg": msg}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # silencia el log HTTP por defecto
         pass
@@ -136,6 +171,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(bus.snapshot())
         if self.path == "/eventos":
             return self._sse()
+        if self.path == "/musica":
+            return self._json(_musica_estado())
         # archivo estático por nombre
         nombre = self.path.lstrip("/").split("?")[0]
         if (STATIC / nombre).is_file():
@@ -187,6 +224,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_enviar()
         if self.path == "/confirmar":
             return self._post_confirmar()
+        if self.path == "/musica/control":
+            return self._post_musica()
         return self.send_error(404)
 
     def _post_enviar(self):
@@ -211,6 +250,17 @@ class Handler(BaseHTTPRequestHandler):
             ok = False
         _responder_confirmacion(ok)
         self._json({"ok": ok})
+
+    def _post_musica(self):
+        n = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(n) if n else b"{}"
+        try:
+            data = json.loads(body)
+            accion = str(data.get("accion") or "")
+            valor = data.get("valor")
+        except Exception:
+            accion, valor = "", None
+        self._json(_musica_control(accion, valor))
 
 
 def _muestreo_metricas():
