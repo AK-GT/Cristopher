@@ -94,6 +94,19 @@ PALMADA_COOLDOWN = float(os.getenv("CRISTOPHER_PALMADA_COOLDOWN", "5"))   # s de
 # Modelo de embeddings para el recuerdo semántico (free tier, dim 3072).
 EMBED_MODEL = os.getenv("CRISTOPHER_EMBED_MODEL", "gemini-embedding-001")
 
+# --- Módulo de música (Tanda A) ----------------------------------------------
+# Motor: VLC (python-vlc) + yt-dlp para "cualquier canción" de la web. Requiere VLC
+# 64-bit instalado en el sistema (para libvlc). La biblioteca local vive en data/musica
+# (gitignored como el resto de data/); el resolver la crea al arrancar.
+MUSICA_DIR    = DATA / "musica"                                   # biblioteca local
+MUSICA_VOLUMEN = int(os.getenv("CRISTOPHER_MUSICA_VOLUMEN", "70"))  # volumen inicial 0-100
+# Formato de audio que yt-dlp entrega a VLC (stream directo, sin descargar).
+YTDLP_FORMAT  = os.getenv("CRISTOPHER_YTDLP_FORMAT", "bestaudio/best")
+# Carpeta de VLC PORTABLE (fallback si VLC no está instalado en el sistema). El
+# reproductor busca libvlc.dll aquí y apunta python-vlc a ella; si el sistema ya tiene
+# VLC, esto se ignora. Sobrescribible con CRISTOPHER_VLC_DIR. Por defecto data/vlc.
+VLC_DIR       = Path(os.getenv("CRISTOPHER_VLC_DIR", str(DATA / "vlc")))
+
 
 class ConfigError(RuntimeError):
     """Fallo de configuración que impide arrancar (p. ej. falta la API key)."""

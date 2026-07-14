@@ -30,6 +30,19 @@ from cristopher.tools.delegate import delegar_a_claude
 from cristopher.tools.elite_search import busqueda_elite
 from cristopher.tools.google_tools import buscar_correos, enviar_correo, proximo_evento
 from cristopher.tools.memory_tools import recall, remember
+from cristopher.tools.musica_tools import (
+    anadir_a_cola,
+    anterior,
+    pausar,
+    que_suena,
+    quitar_de_cola,
+    reanudar,
+    reproducir,
+    siguiente,
+    vaciar_cola,
+    ver_cola,
+    volumen,
+)
 from cristopher.tools.read_file import read_file
 from cristopher.tools.recordatorio_tools import crear_recordatorio, listar_recordatorios
 from cristopher.tools.shell import run_shell
@@ -397,6 +410,123 @@ TOOLS: list[dict[str, Any]] = [
         "description": "Lista los recordatorios programados (pendientes y hechos).",
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": listar_recordatorios,
+    },
+    # --- Música (Tanda A: reproducción + cola) --------------------------------
+    {
+        "name": "reproducir",
+        "description": (
+            "Reproduce MÚSICA bajo demanda: pon una canción, un artista, un archivo "
+            "local o una URL. Suena YA, reemplazando lo que sonara. Resuelve en la "
+            "biblioteca local o en la web (yt-dlp→VLC). Úsala cuando el usuario quiera "
+            "escuchar algo ('pon...', 'quiero oír...', 'reproduce...')."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "consulta": {
+                    "type": "string",
+                    "description": "Qué reproducir: título, artista, nombre de archivo o URL.",
+                },
+            },
+            "required": ["consulta"],
+        },
+        "fn": reproducir,
+    },
+    {
+        "name": "pausar",
+        "description": "Pausa la música que está sonando.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": pausar,
+    },
+    {
+        "name": "reanudar",
+        "description": "Reanuda la música que estaba en pausa.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": reanudar,
+    },
+    {
+        "name": "siguiente",
+        "description": "Salta a la siguiente pista de la cola de música.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": siguiente,
+    },
+    {
+        "name": "anterior",
+        "description": "Vuelve a la pista anterior de la cola de música.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": anterior,
+    },
+    {
+        "name": "volumen",
+        "description": (
+            "Ajusta el volumen de la música (0 a 100). Úsala cuando el usuario pida "
+            "subir, bajar o fijar el volumen."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nivel": {"type": "integer", "description": "Nivel de volumen, de 0 a 100."},
+            },
+            "required": ["nivel"],
+        },
+        "fn": volumen,
+    },
+    {
+        "name": "que_suena",
+        "description": (
+            "Dice qué canción está sonando ahora mismo y qué viene después en la cola. "
+            "Úsala cuando el usuario pregunte qué está puesto."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": que_suena,
+    },
+    {
+        "name": "ver_cola",
+        "description": "Muestra la cola de reproducción completa, marcando la pista actual.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": ver_cola,
+    },
+    {
+        "name": "anadir_a_cola",
+        "description": (
+            "Añade una canción al final de la cola de música (si no había nada sonando, "
+            "empieza a sonar). Úsala cuando el usuario quiera encolar algo para después."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "consulta": {
+                    "type": "string",
+                    "description": "Qué añadir: título, artista, nombre de archivo o URL.",
+                },
+            },
+            "required": ["consulta"],
+        },
+        "fn": anadir_a_cola,
+    },
+    {
+        "name": "quitar_de_cola",
+        "description": (
+            "Quita de la cola la pista en la posición indicada (1 = la primera). Acción "
+            "directa sobre datos locales del usuario; sé claro con lo que quitaste."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pos": {"type": "integer", "description": "Posición en la cola (empieza en 1)."},
+            },
+            "required": ["pos"],
+        },
+        "fn": quitar_de_cola,
+    },
+    {
+        "name": "vaciar_cola",
+        "description": (
+            "Vacía la cola de música entera y detiene la reproducción. Acción directa "
+            "sobre datos locales; di claramente qué has hecho."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": vaciar_cola,
     },
 ]
 
