@@ -78,7 +78,7 @@ VOICE_DIR = DATA / "voice"
 WHISPER_DIR = VOICE_DIR / "whisper"          # caché del modelo faster-whisper
 STT_MODEL = os.getenv("CRISTOPHER_STT_MODEL", "small")  # tamaño de faster-whisper
 STT_LANG = "es"
-PIPER_VOICE = VOICE_DIR / "piper" / "es_ES-davefx-medium.onnx"  # voz TTS
+VOZ_DEFECTO = "es_ES-davefx-medium"  # nombre de la voz Piper por defecto
 
 # --- Arranque por 2 palmadas + música ----------------------------------------
 # Escucha ambiental ligera (cristopher/escucha.py): 2 palmadas despiertan el HUD y

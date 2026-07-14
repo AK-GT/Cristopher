@@ -61,7 +61,14 @@ from cristopher.tools.read_file import read_file
 from cristopher.tools.recordatorio_tools import crear_recordatorio, listar_recordatorios
 from cristopher.tools.shell import run_shell
 from cristopher.tools.system_apps import abrir_app, cerrar_app
-from cristopher.tools.voz_tools import activar_modo_voz, desactivar_modo_voz
+from cristopher.tools.voz_tools import (
+    activar_modo_voz,
+    desactivar_modo_voz,
+    voz_actual,
+    voz_catalogo,
+    voz_elegir,
+    voz_listar_voces,
+)
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -450,6 +457,49 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": desactivar_modo_voz,
+    },
+    {
+        "name": "voz_listar_voces",
+        "description": (
+            "Lista las voces Piper YA instaladas (listas para usar sin descargar "
+            "nada). Úsala cuando el usuario pregunte qué voces tienes o pida cambiar "
+            "de voz sin dar un nombre concreto."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": voz_listar_voces,
+    },
+    {
+        "name": "voz_catalogo",
+        "description": (
+            "Lista TODAS las voces del catálogo conocido (instaladas o no), marcando "
+            "cuáles ya están instaladas. Úsala cuando el usuario pregunte qué otras "
+            "voces existen o podría descargar, más allá de las que ya tiene."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": voz_catalogo,
+    },
+    {
+        "name": "voz_elegir",
+        "description": (
+            "Cambia la voz activa a `nombre` (nombre exacto del catálogo, ver "
+            "voz_catalogo/voz_listar_voces). Si esa voz no está instalada, la "
+            "descarga primero (puede tardar unos segundos por la red). Úsala cuando "
+            "el usuario pida claramente cambiar de voz."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nombre": {"type": "string", "description": "Nombre exacto de la voz del catálogo."},
+            },
+            "required": ["nombre"],
+        },
+        "fn": voz_elegir,
+    },
+    {
+        "name": "voz_actual",
+        "description": "Dice cuál es la voz activa ahora mismo. Úsala cuando el usuario pregunte qué voz tienes puesta.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": voz_actual,
     },
     {
         "name": "crear_recordatorio",

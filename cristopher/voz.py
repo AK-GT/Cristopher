@@ -10,17 +10,37 @@ Carga perezosa de modelos. Errores explícitos si falta micro/altavoz o un model
 from __future__ import annotations
 
 import io
+import json
+import subprocess
+import sys
+import threading
 import wave
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 import numpy as np
 
-from cristopher.config import PIPER_VOICE, STT_LANG, STT_MODEL, WHISPER_DIR
+from cristopher.config import DATA, STT_LANG, STT_MODEL, VOICE_DIR, VOZ_DEFECTO, WHISPER_DIR
 
 SR = 16000  # tasa de muestreo para el micrófono / STT
 
 _whisper = None
-_piper = None
+_piper_cache: dict[str, Any] = {}  # nombre de voz -> PiperVoice cargada
+
+# Catálogo de voces Piper en español, verificado contra rhasspy/piper-voices (solo
+# voces de un único hablante; se excluye es_ES-sharvard por ser multi-hablante).
+VOCES_CATALOGO: list[dict[str, str]] = [
+    {"nombre": "es_ES-davefx-medium", "region": "España", "calidad": "medium"},
+    {"nombre": "es_ES-carlfm-x_low", "region": "España", "calidad": "x_low"},
+    {"nombre": "es_ES-mls_9972-low", "region": "España", "calidad": "low"},
+    {"nombre": "es_ES-mls_10246-low", "region": "España", "calidad": "low"},
+    {"nombre": "es_MX-claude-high", "region": "México", "calidad": "high"},
+    {"nombre": "es_MX-ald-medium", "region": "México", "calidad": "medium"},
+    {"nombre": "es_AR-daniela-high", "region": "Argentina", "calidad": "high"},
+]
+
+_VOZ_PATH = DATA / "voz.json"
+_VOZ_LOCK = threading.Lock()
 
 
 class VozError(RuntimeError):
@@ -53,20 +73,85 @@ def transcribir(audio: np.ndarray, sr: int = SR) -> str:
 
 
 # --- TTS ----------------------------------------------------------------------
-def _get_piper():
-    global _piper
-    if _piper is None:
-        if not PIPER_VOICE.exists():
+def _nombres_catalogo() -> set[str]:
+    return {v["nombre"] for v in VOCES_CATALOGO}
+
+
+def _ruta_voz(nombre: str) -> Path:
+    return VOICE_DIR / "piper" / f"{nombre}.onnx"
+
+
+def _instalada(nombre: str) -> bool:
+    """Una voz cuenta como instalada solo si están el modelo .onnx Y su config
+    .onnx.json (Piper necesita ambos; una descarga interrumpida a medias puede dejar
+    solo el .onnx)."""
+    ruta = _ruta_voz(nombre)
+    return ruta.exists() and ruta.with_suffix(".onnx.json").exists()
+
+
+def voces_instaladas() -> list[dict[str, str]]:
+    """Voces del catálogo completamente instaladas (modelo + config), en orden de
+    catálogo."""
+    return [v for v in VOCES_CATALOGO if _instalada(v["nombre"])]
+
+
+def _leer_voz_actual() -> str:
+    if not _VOZ_PATH.exists():
+        return VOZ_DEFECTO
+    try:
+        data = json.loads(_VOZ_PATH.read_text(encoding="utf-8"))
+        nombre = data.get("voz") if isinstance(data, dict) else None
+        return nombre if isinstance(nombre, str) and nombre in _nombres_catalogo() else VOZ_DEFECTO
+    except (json.JSONDecodeError, OSError):
+        return VOZ_DEFECTO
+
+
+def voz_actual_nombre() -> str:
+    """Nombre de la voz Piper activa ahora mismo (persistida en data/voz.json)."""
+    with _VOZ_LOCK:
+        return _leer_voz_actual()
+
+
+def _guardar_voz_actual(nombre: str) -> None:
+    with _VOZ_LOCK:
+        DATA.mkdir(parents=True, exist_ok=True)
+        _VOZ_PATH.write_text(json.dumps({"voz": nombre}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def descargar_voz(nombre: str) -> None:
+    """Descarga una voz del catálogo si aún no está instalada. VozError si falla."""
+    if nombre not in _nombres_catalogo():
+        raise VozError(f"'{nombre}' no está en el catálogo de voces conocidas.")
+    if _instalada(nombre):
+        return
+    destino = VOICE_DIR / "piper"
+    destino.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "piper.download_voices", nombre, "--download-dir", str(destino)],
+            check=True, capture_output=True, text=True, timeout=300,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise VozError(f"No pude descargar la voz '{nombre}': {exc.stderr.strip()}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise VozError(f"La descarga de la voz '{nombre}' tardó demasiado y se canceló.") from exc
+
+
+def _get_piper(nombre: Optional[str] = None):
+    nombre = nombre or voz_actual_nombre()
+    if nombre not in _piper_cache:
+        ruta = _ruta_voz(nombre)
+        if not ruta.exists():
             raise VozError(
-                f"Falta la voz Piper en {PIPER_VOICE}. Descárgala con: python -m "
-                "piper.download_voices es_ES-davefx-medium --download-dir data/voice/piper"
+                f"Falta la voz Piper '{nombre}' en {ruta}. Descárgala con: python -m "
+                f"piper.download_voices {nombre} --download-dir data/voice/piper"
             )
         try:
             from piper import PiperVoice
         except ImportError as exc:
             raise VozError("Falta piper-tts: pip install piper-tts") from exc
-        _piper = PiperVoice.load(str(PIPER_VOICE))
-    return _piper
+        _piper_cache[nombre] = PiperVoice.load(str(ruta))
+    return _piper_cache[nombre]
 
 
 def sintetizar(texto: str) -> tuple[np.ndarray, int]:
