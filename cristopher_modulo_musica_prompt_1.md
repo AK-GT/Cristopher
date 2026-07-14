@@ -111,12 +111,16 @@ La mini-fase está verde cuando **todo** esto funciona:
 
 ---
 
-## 9. Orden de construcción (por tandas — verde antes de avanzar)
+## 9. Orden de construcción (dos tandas — verde antes de avanzar)
 
-1. **Reproductor persistente** + `reproducir(consulta)` (web y local). *Prueba:* suena de punta a punta.
-2. **Cola** + `siguiente`/`anterior` + auto-avance. *Prueba:* navegación y encadenado.
-3. **SQLite:** favoritos + listas + historial. *Prueba:* persisten tras reiniciar.
-4. **Panel HUD** con estado real + visualizador. *Prueba:* refleja lo que suena y se actualiza.
-5. Anota el **ducking** para la Fase 9.
+Agrupadas para no picar de más, pero manteniendo un punto de prueba tras lo más frágil (el motor + dependencias externas en Windows).
+
+**Tanda A — que suene.** Reproductor persistente (hilo de fondo, no bloqueante) + `reproducir(consulta)` web y local + cola con `siguiente`/`anterior` y auto-avance.
+*Prueba:* una canción suena de punta a punta desde la web y desde archivo local; la cola encadena y navega sola. Es el corazón: si esto va, el módulo va.
+
+**Tanda B — que recuerde y se vea.** SQLite (favoritos, listas, historial) + panel **NOW PLAYING** en el HUD con estado real y visualizador.
+*Prueba:* favoritos y listas persisten tras reiniciar; el panel refleja lo que suena y se actualiza (título, progreso, pausa, volumen, cola).
+
+Anota el **ducking** para la Fase 9.
 
 Recuerda la esencia: **llega a la solución aunque no sea perfecta.** MVP que suene primero; el pulido, después.
