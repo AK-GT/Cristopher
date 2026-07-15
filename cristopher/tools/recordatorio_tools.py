@@ -63,6 +63,20 @@ def crear_recordatorio(texto: str, cuando: str) -> str:
     return f"Recordatorio #{rid} creado para {cuando_dt.strftime('%Y-%m-%d %H:%M')}: {texto}"
 
 
+def borrar_recordatorio(rid: int) -> str:
+    """Borra un recordatorio programado por su número.
+
+    Si no sabes el número, llama antes a listar_recordatorios para verlo.
+
+    Args:
+        rid: número del recordatorio (el #N que aparece al listar).
+    """
+    texto = get_recordatorios().borrar(rid)
+    if texto is None:
+        return f"No encontré ningún recordatorio #{rid}."
+    return f"Recordatorio #{rid} borrado: {texto}"
+
+
 def listar_recordatorios() -> str:
     """Lista los recordatorios programados (pendientes y hechos)."""
     rows = get_recordatorios().listar()

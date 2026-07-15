@@ -33,3 +33,17 @@ def recall(query: str) -> str:
     if not hits:
         return "No recuerdo nada relevante sobre eso."
     return "\n".join(f"- {h}" for h in hits)
+
+
+def olvidar_hecho(fragmento: str) -> str:
+    """Borra de la memoria persistente los hechos que contengan un fragmento de texto.
+
+    Úsala cuando el usuario pida olvidar o corregir algo que se guardó antes.
+
+    Args:
+        fragmento: texto que debe contener el hecho a borrar.
+    """
+    borrados = get_memory().olvidar(fragmento)
+    if not borrados:
+        return f"No encontré ningún hecho que mencione: {fragmento}"
+    return "Olvidado:\n" + "\n".join(f"- {b}" for b in borrados)

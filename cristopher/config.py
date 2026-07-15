@@ -52,10 +52,13 @@ GOOGLE_DIR = DATA / "google"
 GOOGLE_CREDENTIALS = GOOGLE_DIR / "credentials.json"  # lo descarga el usuario
 GOOGLE_TOKEN = GOOGLE_DIR / "token.json"              # se genera en el consentimiento
 
-# Scopes: lectura de Calendar y Gmail + envío de correo (gateado por confirmación).
+# Scopes: Calendar en lectura/escritura de eventos (gateado por confirmación) +
+# Gmail en lectura + envío de correo (gateado por confirmación) + gmail.modify
+# (necesario para marcar_leido: cambiar etiquetas no lo cubre readonly ni send).
 GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.send",
 ]
 
@@ -72,6 +75,12 @@ LEAD_MINUTOS = int(os.getenv("CRISTOPHER_LEAD", "15"))    # antelación para avi
 # Mini-modelo que clasifica la prioridad (1-3) de cada aviso. Fallback: FALLBACK_MODEL.
 CLASSIFIER_MODEL = os.getenv("CRISTOPHER_CLASSIFIER_MODEL", "gemini-flash-lite-latest")
 GMAIL_QUERY_PROACTIVO = os.getenv("CRISTOPHER_GMAIL_QUERY", "is:unread")
+
+# Correo de destino para avisos urgentes (nivel 3) que deben llegar aunque no estés
+# delante del PC ni escuchando la voz. Reutiliza las credenciales Gmail ya autorizadas
+# (Fase 4). Sin esta variable, el demonio sigue avisando solo por terminal+voz como
+# hasta ahora (degrada con elegancia, igual que TAVILY_API_KEY).
+NOTIFICAR_EMAIL_TO = os.getenv("CRISTOPHER_NOTIFICAR_EMAIL", "").strip()
 
 # --- Fase 6: voz -------------------------------------------------------------
 VOICE_DIR = DATA / "voice"

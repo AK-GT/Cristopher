@@ -71,6 +71,17 @@ class Recordatorios:
         with self._lock, self._conn:
             self._conn.execute("UPDATE recordatorios SET hecho=1 WHERE id=?", (rid,))
 
+    def borrar(self, rid: int) -> Optional[str]:
+        """Elimina el recordatorio por id. Devuelve su texto si existía, o None."""
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT texto FROM recordatorios WHERE id=?", (rid,)
+            ).fetchone()
+            if not row:
+                return None
+            self._conn.execute("DELETE FROM recordatorios WHERE id=?", (rid,))
+            return row[0]
+
     # --- Dedup de avisos -------------------------------------------------------
     def ya_visto(self, clave: str) -> bool:
         with self._lock:

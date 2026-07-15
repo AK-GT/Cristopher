@@ -177,6 +177,11 @@ class Demonio:
                 hablar(mensaje)  # nivel 3: más insistente (repite el aviso hablado)
             except Exception as exc:
                 print(f"{AMBER}[VOZ] {exc}{RESET}")
+            try:
+                from cristopher.notificar_remoto import notificar
+                notificar(mensaje)
+            except Exception as exc:
+                print(f"{AMBER}[REMOTO] {exc}{RESET}")
         elif nivel == 2:
             print(f"{CYAN}[{marca}] ›{RESET} {mensaje}")
         else:

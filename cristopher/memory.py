@@ -133,6 +133,25 @@ class Memory:
             ).fetchall()
         return [r[0] for r in rows]
 
+    def olvidar(self, fragmento: str) -> list[str]:
+        """Borra los hechos cuyo texto contenga `fragmento` (sin distinguir mayúsculas,
+        incluyendo tildes/ñ: LIKE de SQLite solo pliega mayúsculas ASCII, así que el
+        filtro se hace en Python con casefold()).
+        Devuelve los textos borrados, para poder confirmarlos al usuario."""
+        fragmento = (fragmento or "").strip()
+        if not fragmento:
+            return []
+        frag_cf = fragmento.casefold()
+        with self._lock, self._conn:
+            rows = self._conn.execute("SELECT id, text FROM facts").fetchall()
+            match = [(rid, text) for rid, text in rows if frag_cf in text.casefold()]
+            if not match:
+                return []
+            self._conn.executemany(
+                "DELETE FROM facts WHERE id = ?", [(rid,) for rid, _ in match]
+            )
+        return [text for _, text in match]
+
     def count(self) -> int:
         with self._lock:
             return self._conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]

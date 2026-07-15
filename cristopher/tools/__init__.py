@@ -47,8 +47,15 @@ from cristopher.tools.control_pc_tools import (
 )
 from cristopher.tools.delegate import delegar_a_claude
 from cristopher.tools.elite_search import busqueda_elite
-from cristopher.tools.google_tools import buscar_correos, enviar_correo, proximo_evento
-from cristopher.tools.memory_tools import recall, remember
+from cristopher.tools.google_tools import (
+    buscar_correos,
+    crear_evento,
+    enviar_correo,
+    marcar_leido,
+    proximo_evento,
+    responder_correo,
+)
+from cristopher.tools.memory_tools import olvidar_hecho, recall, remember
 from cristopher.tools.notas_tools import apuntar, borrar_nota, buscar_nota, listar_notas
 from cristopher.tools.musica_tools import (
     anadir_a_cola,
@@ -83,7 +90,11 @@ from cristopher.tools.pantalla_tools import (
     leer_portapapeles,
 )
 from cristopher.tools.read_file import read_file
-from cristopher.tools.recordatorio_tools import crear_recordatorio, listar_recordatorios
+from cristopher.tools.recordatorio_tools import (
+    borrar_recordatorio,
+    crear_recordatorio,
+    listar_recordatorios,
+)
 from cristopher.tools.shell import run_shell
 from cristopher.tools.system_apps import abrir_app, cerrar_app
 from cristopher.tools.voz_tools import (
@@ -218,6 +229,25 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["query"],
         },
         "fn": recall,
+    },
+    {
+        "name": "olvidar_hecho",
+        "description": (
+            "Borra de la memoria persistente los hechos que contengan un fragmento de "
+            "texto. Úsala cuando el usuario pida olvidar o corregir algo que se guardó "
+            "antes."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fragmento": {
+                    "type": "string",
+                    "description": "Texto que debe contener el hecho a borrar.",
+                },
+            },
+            "required": ["fragmento"],
+        },
+        "fn": olvidar_hecho,
     },
     {
         "name": "personalidad_agregar",
@@ -393,11 +423,39 @@ TOOLS: list[dict[str, Any]] = [
         "fn": proximo_evento,
     },
     {
+        "name": "crear_evento",
+        "description": (
+            "Crea un evento en el Google Calendar principal. SIEMPRE pide confirmación "
+            "del usuario antes de crear (acción con efectos); el usuario confirmará o "
+            "cancelará. 'inicio' y 'fin' deben ir en formato ISO 8601 con fecha y hora "
+            "ya resueltas (p. ej. '2026-07-17T10:00:00'), nunca lenguaje natural."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "titulo": {"type": "string", "description": "Título del evento."},
+                "inicio": {
+                    "type": "string",
+                    "description": "Fecha/hora de inicio en ISO 8601, p. ej. '2026-07-17T10:00:00'.",
+                },
+                "fin": {
+                    "type": "string",
+                    "description": "Fecha/hora de fin en ISO 8601, p. ej. '2026-07-17T11:00:00'.",
+                },
+                "descripcion": {"type": "string", "description": "Descripción opcional."},
+                "ubicacion": {"type": "string", "description": "Lugar opcional."},
+            },
+            "required": ["titulo", "inicio", "fin"],
+        },
+        "fn": crear_evento,
+    },
+    {
         "name": "buscar_correos",
         "description": (
             "Lee correos de Gmail: recientes o los que casan una consulta estilo Gmail "
-            "(p. ej. 'is:unread from:x@y.com'). Devuelve remitente, asunto, fecha y "
-            "resumen. Solo lectura."
+            "(p. ej. 'is:unread from:x@y.com'). Devuelve, por cada correo, su id (como "
+            "'[id:XXXX]', úsalo con responder_correo/marcar_leido), remitente, asunto, "
+            "fecha y resumen. Solo lectura."
         ),
         "parameters": {
             "type": "object",
@@ -426,6 +484,46 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["to", "subject", "body"],
         },
         "fn": enviar_correo,
+    },
+    {
+        "name": "responder_correo",
+        "description": (
+            "Responde a un correo existente DENTRO del mismo hilo (usa el id de "
+            "buscar_correos). Saca destinatario y asunto ('Re: ...') automáticamente "
+            "del mensaje original. SIEMPRE pide confirmación del usuario antes de "
+            "enviar (acción irreversible)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "string",
+                    "description": "Id del mensaje original (de buscar_correos, sin '[id:' ni ']').",
+                },
+                "body": {"type": "string", "description": "Cuerpo de la respuesta."},
+            },
+            "required": ["message_id", "body"],
+        },
+        "fn": responder_correo,
+    },
+    {
+        "name": "marcar_leido",
+        "description": (
+            "Marca un correo como leído (quita la etiqueta 'no leído'). NO pide "
+            "confirmación: es reversible y de bajo riesgo, a diferencia de enviar/"
+            "responder correos."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "string",
+                    "description": "Id del mensaje (de buscar_correos, sin '[id:' ni ']').",
+                },
+            },
+            "required": ["message_id"],
+        },
+        "fn": marcar_leido,
     },
     {
         "name": "navegar_leer",
@@ -616,6 +714,22 @@ TOOLS: list[dict[str, Any]] = [
         "description": "Lista los recordatorios programados (pendientes y hechos).",
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": listar_recordatorios,
+    },
+    {
+        "name": "borrar_recordatorio",
+        "description": (
+            "Borra un recordatorio programado por su número. Si el usuario lo pide por "
+            "texto ('borra el recordatorio de X') y no sabes el número, llama antes a "
+            "listar_recordatorios para encontrarlo."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "rid": {"type": "integer", "description": "Número del recordatorio (el #N del listado)."},
+            },
+            "required": ["rid"],
+        },
+        "fn": borrar_recordatorio,
     },
     # --- Música (Tanda A: reproducción + cola) --------------------------------
     {
