@@ -26,6 +26,19 @@ from cristopher.tools.browser_tools import (
     navegador_scroll,
     navegar_leer,
 )
+from cristopher.tools.archivo_tools import (
+    buscar_archivo,
+    organizar_carpeta,
+    resumir_documento,
+)
+from cristopher.tools.control_pc_tools import (
+    apagar,
+    bloquear_pc,
+    gestionar_ventana,
+    reiniciar,
+    suspender,
+    volumen_sistema,
+)
 from cristopher.tools.delegate import delegar_a_claude
 from cristopher.tools.elite_search import busqueda_elite
 from cristopher.tools.google_tools import buscar_correos, enviar_correo, proximo_evento
@@ -137,9 +150,11 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "read_file",
         "description": (
-            "Lee un archivo de texto del disco y devuelve su contenido. Rutas "
-            "relativas se resuelven dentro del directorio de trabajo (workspace/). "
-            "Úsala para inspeccionar README, código fuente o archivos de config."
+            "Lee un archivo del disco y devuelve su contenido: texto y código tal cual, "
+            ".docx como texto, y PDF o imágenes leídos por Gemini. Rutas relativas se "
+            "resuelven dentro del directorio de trabajo (workspace/). Úsala para "
+            "inspeccionar un documento, README, código o config. Para un RESUMEN de un "
+            "documento largo, usa resumir_documento."
         ),
         "parameters": {
             "type": "object",
@@ -814,6 +829,147 @@ TOOLS: list[dict[str, Any]] = [
             "required": [],
         },
         "fn": capturar_ventana_activa,
+    },
+    # --- Cerebro sobre archivos (Módulo B — utilidades, Tanda B) ---------------
+    {
+        "name": "buscar_archivo",
+        "description": (
+            "Busca archivos por nombre en las carpetas del usuario (Escritorio, "
+            "Documentos, Descargas, Imágenes, Música, Vídeos) o en una carpeta concreta. "
+            "Úsala cuando el usuario quiera localizar un archivo ('busca el PDF del "
+            "contrato', '¿dónde está mi CV?'). Devuelve rutas, fecha y tamaño."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "consulta": {
+                    "type": "string",
+                    "description": "Texto o extensión a buscar en el nombre (p. ej. 'contrato' o '.pdf').",
+                },
+                "raiz": {
+                    "type": "string",
+                    "description": "Carpeta donde buscar (opcional; por defecto las del usuario).",
+                },
+            },
+            "required": ["consulta"],
+        },
+        "fn": buscar_archivo,
+    },
+    {
+        "name": "resumir_documento",
+        "description": (
+            "Lee un documento y devuelve un resumen. Soporta PDF e imágenes (Gemini los "
+            "lee directo) y .txt/.docx/código. Úsala cuando el usuario pida resumir o "
+            "sintetizar un archivo ('resúmeme este PDF', '¿de qué va este documento?')."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ruta": {"type": "string", "description": "Ruta del documento a resumir."},
+            },
+            "required": ["ruta"],
+        },
+        "fn": resumir_documento,
+    },
+    {
+        "name": "organizar_carpeta",
+        "description": (
+            "Reorganiza los archivos de una carpeta moviéndolos a subcarpetas por tipo o "
+            "por fecha. Acción CON EFECTOS: SIEMPRE muestra el plan y pide confirmación "
+            "antes de mover; no borra nada. Úsala cuando el usuario quiera ordenar una "
+            "carpeta ('ordena mi carpeta de descargas')."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ruta": {"type": "string", "description": "Carpeta a organizar."},
+                "criterio": {
+                    "type": "string",
+                    "description": "'tipo' (por categoría) o 'fecha' (por año-mes). Por defecto 'tipo'.",
+                },
+            },
+            "required": ["ruta"],
+        },
+        "fn": organizar_carpeta,
+    },
+    # --- Control del PC (Módulo A — utilidades, Tanda B) -----------------------
+    {
+        "name": "volumen_sistema",
+        "description": (
+            "Ajusta el volumen MAESTRO del sistema (distinto del volumen de la música). "
+            "Úsala cuando el usuario quiera subir/bajar/fijar/silenciar el sonido del "
+            "ordenador ('sube el volumen', 'pon el sonido al 30', 'silencia el PC')."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "accion": {
+                    "type": "string",
+                    "description": "'subir', 'bajar', 'fijar', 'silenciar' o 'activar'.",
+                },
+                "nivel": {
+                    "type": "integer",
+                    "description": "Nivel 0-100 (solo para 'fijar').",
+                },
+            },
+            "required": ["accion"],
+        },
+        "fn": volumen_sistema,
+    },
+    {
+        "name": "bloquear_pc",
+        "description": (
+            "Bloquea la sesión de Windows (pedirá contraseña al volver). Úsala cuando el "
+            "usuario quiera bloquear el ordenador. Reversible: no pide confirmación."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": bloquear_pc,
+    },
+    {
+        "name": "apagar",
+        "description": (
+            "Apaga el ordenador. Acción IRREVERSIBLE: SIEMPRE pide confirmación al "
+            "usuario antes (el usuario confirmará o cancelará). Úsala cuando pida apagar."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": apagar,
+    },
+    {
+        "name": "reiniciar",
+        "description": (
+            "Reinicia el ordenador. Acción IRREVERSIBLE: SIEMPRE pide confirmación antes. "
+            "Úsala cuando el usuario pida reiniciar."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": reiniciar,
+    },
+    {
+        "name": "suspender",
+        "description": (
+            "Suspende (duerme) el ordenador. Acción impactante: SIEMPRE pide confirmación "
+            "antes. Úsala cuando el usuario pida suspender/dormir el equipo."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": suspender,
+    },
+    {
+        "name": "gestionar_ventana",
+        "description": (
+            "Gestiona la ventana en primer plano: minimizar, maximizar, restaurar o "
+            "cambiar a otra. Úsala cuando el usuario pida manejar la ventana activa "
+            "('minimiza esto', 'maximiza la ventana', 'cambia de ventana')."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "accion": {
+                    "type": "string",
+                    "description": "'minimizar', 'maximizar', 'restaurar' o 'cambiar'.",
+                },
+            },
+            "required": ["accion"],
+        },
+        "fn": gestionar_ventana,
     },
 ]
 

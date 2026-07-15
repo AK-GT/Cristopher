@@ -38,3 +38,8 @@ yt-dlp>=2024.1.1        # resuelve y extrae el audio de "cualquier canción" de 
 # Módulos de utilidad — Tanda A (notas + pantalla/portapapeles).
 pyperclip>=1.8          # leer el portapapeles (en Windows usa ctypes, sin pywin32)
 mss>=9.0                # captura de pantalla rápida; entrega PNG directo (sin Pillow)
+
+# Módulos de utilidad — Tanda B (control del PC: volumen del sistema).
+# El resto del módulo (bloquear, apagar/reiniciar/suspender, ventanas) es ctypes/subprocess.
+pycaw>=20230407         # volumen maestro del sistema (Core Audio)
+comtypes>=1.2.0         # dependencia de pycaw (COM en Windows)
