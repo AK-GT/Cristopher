@@ -83,13 +83,20 @@ VOZ_DEFECTO = "es_ES-davefx-medium"  # nombre de la voz Piper por defecto
 # --- Arranque por 2 palmadas + música ----------------------------------------
 # Escucha ambiental ligera (cristopher/escucha.py): 2 palmadas despiertan el HUD y
 # suena la canción. Umbrales ajustables por entorno para calibrar según el micro.
-AUDIO_DIR        = DATA / "audio"
-CANCION_ARRANQUE = AUDIO_DIR / "back_in_black.mp3"   # la coloca el usuario (copyright)
 PALMADA_FACTOR   = float(os.getenv("CRISTOPHER_PALMADA_FACTOR", "7"))     # pico / suelo de ruido
 PALMADA_UMBRAL   = float(os.getenv("CRISTOPHER_PALMADA_UMBRAL", "0.15"))  # pico mínimo absoluto
 PALMADA_GAP_MIN  = float(os.getenv("CRISTOPHER_PALMADA_GAP_MIN", "0.12")) # s mínimos entre palmadas
 PALMADA_GAP_MAX  = float(os.getenv("CRISTOPHER_PALMADA_GAP_MAX", "0.6"))  # s máximos entre palmadas
 PALMADA_COOLDOWN = float(os.getenv("CRISTOPHER_PALMADA_COOLDOWN", "5"))   # s de guarda tras disparar
+# Modo normal corre sin consola (pythonw vía autostart): nada de print(), todo a este log.
+ESCUCHA_LOG = DATA / "escucha.log"
+# Si este archivo existe, escucha.py no abre el micro (o corta si ya estaba escuchando).
+# Interruptor manual: crear/borrar el archivo activa/desactiva sin tocar el autostart.
+ESCUCHA_FLAG_DESACTIVAR = DATA / "escucha.desactivada"
+# Canción de arranque: se abre en una pestaña de YouTube (se descartó VLC en local, no
+# sonaba en esta máquina). URL exacta si la fijas; si no, se busca por la query.
+CANCION_YOUTUBE_URL   = os.getenv("CRISTOPHER_CANCION_YOUTUBE_URL", "").strip()
+CANCION_YOUTUBE_QUERY = os.getenv("CRISTOPHER_CANCION_YOUTUBE_QUERY", "AC/DC Back In Black")
 
 # Modelo de embeddings para el recuerdo semántico (free tier, dim 3072).
 EMBED_MODEL = os.getenv("CRISTOPHER_EMBED_MODEL", "gemini-embedding-001")
