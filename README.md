@@ -13,6 +13,7 @@ sub-agentes + integraciones Google + navegador + voz + proactividad + HUD.
 - Una **API key gratuita de Gemini**: https://aistudio.google.com/apikey
 - (Opcional) `data/google/credentials.json` (OAuth) para Calendar/Gmail, y `TAVILY_API_KEY`
   para la búsqueda de élite (sin ella cae a DuckDuckGo).
+- (Opcional) **Node.js LTS** para la tool de WhatsApp (ver más abajo).
 
 ## Puesta en marcha
 
@@ -31,6 +32,25 @@ copy .env.example .env               # luego edita .env y pega tu GEMINI_API_KEY
 # 4. Arrancar el sistema vivo (HUD command-center)
 python -m cristopher
 ```
+
+### WhatsApp (opcional)
+
+Tool para leer/enviar mensajes del WhatsApp **personal** del usuario bajo petición
+conversacional (nunca un bot autónomo). Usa Baileys, una librería **no oficial** que
+reimplementa WhatsApp Web — su uso conlleva riesgo de que Meta limite o banee el número;
+riesgo ya asumido, decisión tomada. Setup de una sola vez:
+
+```powershell
+# Requiere Node.js LTS instalado: https://nodejs.org
+cd whatsapp
+npm install
+node setup_qr.js        # escanea el QR desde WhatsApp > Dispositivos vinculados
+```
+
+La sesión queda persistida en `data/whatsapp/session/` (gitignored) y sobrevive a
+reinicios: `python -m cristopher` la reutiliza sola, arrancando el servicio Node en
+segundo plano la primera vez que hace falta (tool call o ciclo del demonio proactivo)
+sin volver a pedir QR.
 
 ## Cómo arrancarlo (tres superficies)
 
@@ -54,6 +74,8 @@ que es también lo que declara honestamente si le preguntas:
 - **Sub-agentes** — `delegar_a_claude` para tareas de código en carpeta aislada.
 - **Voz** — activar/desactivar modo audio por intención.
 - **Recordatorios** — programar avisos que dispara el demonio proactivo.
+- **WhatsApp (opcional)** — leer/enviar mensajes del WhatsApp personal bajo petición
+  explícita (Baileys, no oficial; ver sección de setup arriba).
 
 ## Puesta en vivo (criterio de aceptación de la fase final)
 
@@ -74,10 +96,12 @@ cristopher/
   main.py              # REPL de consola (texto)
   voz_repl.py          # REPL por voz (push-to-talk)
   memory.py            # memoria persistente (SQLite + vector store)
-  proactivo.py         # demonio proactivo (eventos, correo, recordatorios)
+  proactivo.py         # demonio proactivo (eventos, correo, recordatorios, WhatsApp)
+  whatsapp_client.py   # cliente/gestor del servicio Node de WhatsApp (Baileys)
   bus.py / estado.py   # bus de estado del HUD / modo voz en caliente
   hud/                 # HUD web (command-center + núcleo neuronal, SSE)
   tools/               # registro de herramientas (fuente única de verdad)
+whatsapp/              # servicio Node.js (Baileys) — runtime separado, ver README
 ```
 
 ## Seguridad

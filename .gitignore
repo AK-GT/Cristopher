@@ -18,6 +18,9 @@ _clones/
 # Memoria persistente local (SQLite) — no se versiona
 data/
 
+# Servicio Node de WhatsApp (Baileys)
+whatsapp/node_modules/
+
 # SO / editores
 Thumbs.db
 .DS_Store

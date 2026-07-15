@@ -199,8 +199,9 @@ def saludo_arranque() -> str:
 
 
 # Tope de vueltas del bucle. Holgado para permitir exploración de navegador de varios
-# pasos (buscar → pinchar → desplazar → leer → capturar…) sin colgarse.
-MAX_STEPS = 20
+# pasos (buscar → pinchar → desplazar → leer → capturar…) o de un proyecto entero
+# (listar → leer varios archivos → sintetizar) sin colgarse.
+MAX_STEPS = 40
 
 
 def _to_gemini_type(node: Any) -> Any:

@@ -45,7 +45,7 @@ from cristopher.tools.control_pc_tools import (
     suspender,
     volumen_sistema,
 )
-from cristopher.tools.delegate import delegar_a_claude
+from cristopher.tools.delegate import analizar_proyecto, delegar_a_claude
 from cristopher.tools.elite_search import busqueda_elite
 from cristopher.tools.google_tools import buscar_correos, enviar_correo, proximo_evento
 from cristopher.tools.memory_tools import recall, remember
@@ -94,6 +94,7 @@ from cristopher.tools.voz_tools import (
     voz_elegir,
     voz_listar_voces,
 )
+from cristopher.tools.whatsapp_tools import whatsapp_check_new, whatsapp_read, whatsapp_send
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -358,6 +359,39 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["tarea"],
         },
         "fn": delegar_a_claude,
+    },
+    {
+        "name": "analizar_proyecto",
+        "description": (
+            "Analiza un proyecto de código REAL del usuario en disco (una carpeta "
+            "con su código, en cualquier ruta, no hace falta que esté en workspace/): "
+            "lanza un sub-agente Claude Code que explora el proyecto entero y "
+            "responde con un análisis de programador de élite (arquitectura, "
+            "calidad, bugs, riesgos, deuda técnica, qué mejoraría). El sub-agente "
+            "puede leer, editar y ejecutar libremente DENTRO de esa carpeta real sin "
+            "pedir confirmación por acción — así que SIEMPRE dile antes al usuario "
+            "qué carpeta vas a analizar y pide su OK si no ha sido explícito, sobre "
+            "todo si la pregunta puede llevar a que el sub-agente toque archivos. "
+            "Úsala cuando el usuario quiera que revises/opines de un proyecto entero "
+            "suyo ('revisa mi proyecto X', 'qué opinas de este código', 'analiza esta "
+            "carpeta'). Para una tarea de código acotada en una carpeta de trabajo "
+            "aislada y desechable, usa delegar_a_claude en su lugar."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ruta": {
+                    "type": "string",
+                    "description": "Carpeta del proyecto a analizar (ruta absoluta).",
+                },
+                "pregunta": {
+                    "type": "string",
+                    "description": "Qué quiere saber el usuario en particular (opcional; vacío = análisis general).",
+                },
+            },
+            "required": ["ruta"],
+        },
+        "fn": analizar_proyecto,
     },
     {
         "name": "busqueda_elite",
@@ -1089,6 +1123,62 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["accion"],
         },
         "fn": gestionar_ventana,
+    },
+    # --- WhatsApp (personal, vía Baileys) --------------------------------------
+    {
+        "name": "whatsapp_check_new",
+        "description": (
+            "Comprueba si han llegado mensajes nuevos de WhatsApp (personal) y de "
+            "quién. Úsala para saber si te han escrito, o antes de leer un chat "
+            "concreto con whatsapp_read."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": whatsapp_check_new,
+    },
+    {
+        "name": "whatsapp_read",
+        "description": (
+            "Lee los últimos mensajes de un chat de WhatsApp por su chat_id (el que "
+            "devuelve whatsapp_check_new). Úsala cuando el usuario quiera saber qué "
+            "le escribieron o que le leas un chat."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "chat_id": {
+                    "type": "string",
+                    "description": "Id del chat de WhatsApp (de whatsapp_check_new).",
+                },
+                "n": {
+                    "type": "integer",
+                    "description": "Cuántos mensajes recientes leer (por defecto 10).",
+                },
+            },
+            "required": ["chat_id"],
+        },
+        "fn": whatsapp_read,
+    },
+    {
+        "name": "whatsapp_send",
+        "description": (
+            "Envía un mensaje de WhatsApp a un chat concreto. Úsala SOLO cuando el "
+            "usuario pida explícitamente, en este mismo turno, enviar/responder algo "
+            "por WhatsApp a alguien. Aquí el control lo da el propio uso "
+            "conversacional: no hay panel de confirmación por botón para esta "
+            "herramienta, así que nunca la llames sin una instrucción directa."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "chat_id": {
+                    "type": "string",
+                    "description": "Id del chat destino (de whatsapp_check_new).",
+                },
+                "texto": {"type": "string", "description": "Texto exacto a enviar."},
+            },
+            "required": ["chat_id", "texto"],
+        },
+        "fn": whatsapp_send,
     },
 ]
 
