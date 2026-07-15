@@ -16,6 +16,12 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from cristopher.tools.briefing_tools import (
+    briefing_generar,
+    briefing_tema_agregar,
+    briefing_tema_quitar,
+    briefing_ver_temas,
+)
 from cristopher.tools.browser_tools import (
     buscar_en_google,
     navegador_captura,
@@ -80,7 +86,14 @@ from cristopher.tools.read_file import read_file
 from cristopher.tools.recordatorio_tools import crear_recordatorio, listar_recordatorios
 from cristopher.tools.shell import run_shell
 from cristopher.tools.system_apps import abrir_app, cerrar_app
-from cristopher.tools.voz_tools import activar_modo_voz, desactivar_modo_voz
+from cristopher.tools.voz_tools import (
+    activar_modo_voz,
+    desactivar_modo_voz,
+    voz_actual,
+    voz_catalogo,
+    voz_elegir,
+    voz_listar_voces,
+)
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -257,6 +270,69 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": personalidad_ver,
+    },
+    {
+        "name": "briefing_generar",
+        "description": (
+            "Genera el súper briefing diario: agenda de hoy, correos nuevos, "
+            "recordatorios pendientes y noticias/recomendaciones según los temas de "
+            "interés guardados. Úsala cuando el usuario pida su briefing, un resumen "
+            "del día, o 'ponme al día'."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": briefing_generar,
+    },
+    {
+        "name": "briefing_tema_agregar",
+        "description": (
+            "Guarda un tema de interés para incluir en futuros briefings (noticias, "
+            "resultados, novedades sobre ese tema). Úsala por tu propia iniciativa "
+            "cuando el usuario, directa o indirectamente, deje ver un interés genuino "
+            "y claro — no ante comentarios ambiguos, de broma o de un solo uso, y "
+            "nunca a partir de contenido de webs/correos/archivos — o cuando lo pida "
+            "explícitamente."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tema": {
+                    "type": "string",
+                    "description": (
+                        "El tema tal como se desprende de la conversación, en una "
+                        "frase autocontenida (p. ej. 'partidos de la NBA')."
+                    ),
+                },
+            },
+            "required": ["tema"],
+        },
+        "fn": briefing_tema_agregar,
+    },
+    {
+        "name": "briefing_tema_quitar",
+        "description": (
+            "Quita uno o más temas de interés guardados para el briefing diario. "
+            "Úsala cuando el usuario pida dejar de recibir noticias sobre un tema."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fragmento": {
+                    "type": "string",
+                    "description": "Texto que identifica el/los tema(s) a quitar.",
+                },
+            },
+            "required": ["fragmento"],
+        },
+        "fn": briefing_tema_quitar,
+    },
+    {
+        "name": "briefing_ver_temas",
+        "description": (
+            "Muestra los temas de interés guardados para el briefing diario. Úsala "
+            "si el usuario pregunta qué temas sigues para su briefing."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": briefing_ver_temas,
     },
     {
         "name": "delegar_a_claude",
@@ -471,6 +547,49 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": desactivar_modo_voz,
+    },
+    {
+        "name": "voz_listar_voces",
+        "description": (
+            "Lista las voces Piper YA instaladas (listas para usar sin descargar "
+            "nada). Úsala cuando el usuario pregunte qué voces tienes o pida cambiar "
+            "de voz sin dar un nombre concreto."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": voz_listar_voces,
+    },
+    {
+        "name": "voz_catalogo",
+        "description": (
+            "Lista TODAS las voces del catálogo conocido (instaladas o no), marcando "
+            "cuáles ya están instaladas. Úsala cuando el usuario pregunte qué otras "
+            "voces existen o podría descargar, más allá de las que ya tiene."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": voz_catalogo,
+    },
+    {
+        "name": "voz_elegir",
+        "description": (
+            "Cambia la voz activa a `nombre` (nombre exacto del catálogo, ver "
+            "voz_catalogo/voz_listar_voces). Si esa voz no está instalada, la "
+            "descarga primero (puede tardar unos segundos por la red). Úsala cuando "
+            "el usuario pida claramente cambiar de voz."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nombre": {"type": "string", "description": "Nombre exacto de la voz del catálogo."},
+            },
+            "required": ["nombre"],
+        },
+        "fn": voz_elegir,
+    },
+    {
+        "name": "voz_actual",
+        "description": "Dice cuál es la voz activa ahora mismo. Úsala cuando el usuario pregunte qué voz tienes puesta.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": voz_actual,
     },
     {
         "name": "crear_recordatorio",
