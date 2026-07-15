@@ -150,6 +150,19 @@ def _musica_control(accion: str, valor) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
+# --- Notas (utilidades, Tanda A): panel discreto en el HUD ------------------------
+# El almacén de notas es thread-safe (su propio lock), así que se consulta DIRECTAMENTE
+# desde el hilo HTTP (no toca el worker/Playwright). Import perezoso para no acoplar el
+# arranque del HUD. El frontend sondea /notas cada pocos segundos.
+def _notas_recientes(n: int = 8) -> dict:
+    try:
+        from cristopher.notas import get_notas
+        rows = get_notas().listar()[:n]
+        return {"notas": [{"id": r[0], "texto": r[1], "creado": r[2]} for r in rows]}
+    except Exception as exc:
+        return {"notas": [], "error": str(exc)}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # silencia el log HTTP por defecto
         pass
@@ -173,6 +186,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._sse()
         if self.path == "/musica":
             return self._json(_musica_estado())
+        if self.path == "/notas":
+            return self._json(_notas_recientes())
         # archivo estático por nombre
         nombre = self.path.lstrip("/").split("?")[0]
         if (STATIC / nombre).is_file():

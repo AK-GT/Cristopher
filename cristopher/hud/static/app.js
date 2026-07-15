@@ -535,6 +535,21 @@
   musicaTick();
   setInterval(musicaTick, 1000);
 
+  // ---------- NOTAS (panel discreto, por polling como música) ----------
+  function pintarNotas(d) {
+    const el = $("notas");
+    const list = (d && d.notas) || [];
+    if (!list.length) { el.innerHTML = '<div class="empty">sin notas</div>'; return; }
+    el.innerHTML = list.map((n) =>
+      `<div class="item"><small>#${esc(n.id)} · ${esc((n.creado || "").replace("T", " ").slice(0, 16))}</small>${esc(n.texto)}</div>`
+    ).join("");
+  }
+  function notasTick() {
+    fetch("/notas").then((r) => r.json()).then(pintarNotas).catch(() => {});
+  }
+  notasTick();
+  setInterval(notasTick, 4000);
+
   // ---------- Reloj ----------
   function tick() { $("clock").textContent = new Date().toLocaleTimeString("es-ES"); }
   setInterval(tick, 1000); tick();
