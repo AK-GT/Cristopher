@@ -26,7 +26,8 @@ def _models() -> list[str]:
 def preguntar_sobre_imagen(png_bytes: bytes, pregunta: str) -> str:
     """Devuelve la respuesta del modelo a `pregunta` sobre la imagen PNG dada.
 
-    Prueba el modelo principal y, si agota cuota (429), cae al de respaldo (§8)."""
+    Prueba el modelo principal y, si falla con 429 (sin cuota) o 503/500 (saturado),
+    cae al de respaldo (§8)."""
     global _client
     if _client is None:
         _client = genai.Client(api_key=get_api_key())
@@ -41,8 +42,12 @@ def preguntar_sobre_imagen(png_bytes: bytes, pregunta: str) -> str:
             return (resp.text or "").strip() or "(la visión no devolvió texto)"
         except errors.APIError as exc:
             last_exc = exc
-            if getattr(exc, "code", None) == 429:
-                continue  # sin cuota en este modelo: prueba el siguiente
+            # 429 (sin cuota), 503/500 (modelo saturado): prueba el siguiente modelo,
+            # misma política que el bucle principal (agent._generate). Antes solo se caía
+            # al respaldo ante 429, así que un 503 del principal rompía la visión aunque
+            # el respaldo estuviera disponible.
+            if getattr(exc, "code", None) in (429, 500, 503):
+                continue
             raise
     raise RuntimeError(
         f"La visión no está disponible ahora mismo (cuota agotada). Detalle: {last_exc}"
