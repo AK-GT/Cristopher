@@ -42,3 +42,8 @@ mss>=9.0                # captura de pantalla rápida; entrega PNG directo (sin 
 # El resto del módulo (bloquear, apagar/reiniciar/suspender, ventanas) es ctypes/subprocess.
 pycaw>=20230407         # volumen maestro del sistema (Core Audio)
 comtypes>=1.2.0         # dependencia de pycaw (COM en Windows)
+
+# Integración de WhatsApp (Baileys) — nada nuevo en pip: `requests` ya llega
+# transitivamente vía google-genai (igual que para Tavily). El servicio en sí es
+# Node.js: requiere Node.js instalado en el sistema + `npm install` en whatsapp/
+# (dependencias declaradas en whatsapp/package.json).

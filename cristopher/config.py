@@ -46,6 +46,10 @@ SUBAGENTS = WORKSPACE / "subagents"
 # Timeout amplio: las tareas de código delegadas pueden tardar.
 SUBAGENT_TIMEOUT = 600
 
+# Timeout del modo "análisis de proyecto" (delegate.py::analizar_proyecto): explorar
+# un proyecto real de punta a punta tarda más que una tarea acotada.
+PROJECT_ANALYSIS_TIMEOUT = 900
+
 # --- Fase 4: integraciones Google + búsqueda de élite ------------------------
 # Credenciales OAuth y token persistente (bajo data/, gitignored; §9).
 GOOGLE_DIR = DATA / "google"
@@ -122,6 +126,20 @@ YTDLP_FORMAT  = os.getenv("CRISTOPHER_YTDLP_FORMAT", "bestaudio/best")
 # reproductor busca libvlc.dll aquí y apunta python-vlc a ella; si el sistema ya tiene
 # VLC, esto se ignora. Sobrescribible con CRISTOPHER_VLC_DIR. Por defecto data/vlc.
 VLC_DIR       = Path(os.getenv("CRISTOPHER_VLC_DIR", str(DATA / "vlc")))
+
+# --- Integración de WhatsApp (Baileys, Node.js) -------------------------------
+# Baileys es una librería NO OFICIAL que reimplementa el protocolo de WhatsApp Web;
+# usarla conlleva riesgo de que Meta limite o banee el número. Decisión ya tomada por
+# el usuario, solo se anota. Requiere Node.js instalado (segundo runtime del proyecto,
+# fuera del venv de Python) y `npm install` dentro de whatsapp/.
+WHATSAPP_DIR = ROOT / "whatsapp"                  # servicio Node, hermano de cristopher/
+WHATSAPP_DATA = DATA / "whatsapp"                 # sesión + histórico local (gitignored)
+WHATSAPP_SESSION_DIR = WHATSAPP_DATA / "session"  # credenciales Baileys (useMultiFileAuthState)
+WHATSAPP_STORE_DIR = WHATSAPP_DATA / "store"      # histórico de mensajes en JSON por chat
+WHATSAPP_LOG = WHATSAPP_DATA / "server.log"       # stdout/stderr del proceso Node
+WHATSAPP_PORT = int(os.getenv("CRISTOPHER_WHATSAPP_PORT", "8766"))
+WHATSAPP_START_TIMEOUT = 20   # s: esperando a que /health responda tras lanzar el proceso Node
+WHATSAPP_HTTP_TIMEOUT = 15    # s: timeout por request a la API del servicio Node
 
 
 class ConfigError(RuntimeError):

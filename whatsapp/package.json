@@ -1,0 +1,16 @@
+{
+  "name": "cristopher-whatsapp",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Puente Node.js/Baileys para la tool de WhatsApp de CRISTOPHER. Baileys es una libreria NO OFICIAL (reimplementa WhatsApp Web); su uso conlleva riesgo de que Meta limite o banee el numero.",
+  "type": "commonjs",
+  "scripts": {
+    "setup": "node setup_qr.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.0",
+    "pino": "^9.0.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

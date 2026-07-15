@@ -158,6 +158,31 @@ class Demonio:
             avisos.append((f"rec:{rid}", f"Recordatorio: {texto}"))
         return avisos
 
+    def _avisos_whatsapp(self) -> list[tuple[str, str]]:
+        try:
+            from cristopher import whatsapp_client
+
+            data = whatsapp_client.check_new()
+        except Exception:
+            return []
+        avisos = []
+        if data.get("estado") in ("logged_out", "qr_required"):
+            # Como mucho un aviso al día mientras siga desconectado (la clave se
+            # "auto-limpia" sola en cuanto cambia la fecha, sin necesidad de "unseen").
+            hoy = datetime.now().date().isoformat()
+            avisos.append((
+                f"wa:logged_out:{hoy}",
+                "WhatsApp desconectado: hace falta volver a escanear el QR "
+                "(ejecuta 'node whatsapp/setup_qr.js').",
+            ))
+        for c in data.get("chats", []):
+            avisos.append((
+                f"wa:{c['chat_id']}:{c['ultimo_id']}",
+                f"Te han llegado {c['n_nuevos']} mensaje(s) de WhatsApp de "
+                f"{c['nombre']}: «{c['ultimo_texto']}»",
+            ))
+        return avisos
+
     # --- Entrega ---------------------------------------------------------------
     def _entregar(self, nivel: int, mensaje: str) -> None:
         marca = datetime.now().strftime("%H:%M")
@@ -195,6 +220,7 @@ class Demonio:
             self._avisos_calendario()
             + self._avisos_correo()
             + self._avisos_recordatorios()
+            + self._avisos_whatsapp()
         )
         for clave, mensaje in avisos:
             if self._rec.ya_visto(clave):
