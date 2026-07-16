@@ -63,6 +63,12 @@ from cristopher.tools.tareas_tools import (
     tarea_crear,
     tarea_listar,
 )
+from cristopher.tools.diario_tools import (
+    activar_modo_diario,
+    desactivar_modo_diario,
+    diario_agregar,
+    diario_ver_hoy,
+)
 from cristopher.tools.musica_tools import (
     anadir_a_cola,
     anadir_a_lista,
@@ -1112,6 +1118,71 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["id"],
         },
         "fn": tarea_borrar,
+    },
+    # --- Diario (modo diario) ---------------------------------------------------
+    {
+        "name": "activar_modo_diario",
+        "description": (
+            "Activa el modo diario: a partir de ahora te comportas como un oyente "
+            "activo y humano en una conversación de reflexión diaria — preguntas, "
+            "indagas, das tu opinión, no solo transcribes. Úsalo cuando detectes que "
+            "el usuario quiere hacer su diario de hoy ('quiero hacer mi diario', "
+            "'hablemos de mi día', 'te cuento cómo me fue'). Si no está claro, "
+            "pregúntale antes en lugar de activarlo."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": activar_modo_diario,
+    },
+    {
+        "name": "desactivar_modo_diario",
+        "description": (
+            "Desactiva el modo diario y vuelve al comportamiento normal. Úsalo "
+            "cuando el usuario dé la conversación de diario por terminada ('ya "
+            "terminé por hoy', 'eso es todo', 'gracias por escuchar')."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": desactivar_modo_diario,
+    },
+    {
+        "name": "diario_agregar",
+        "description": (
+            "Guarda algo que el usuario contó en su diario de hoy, bajo una "
+            "categoría: evento_social (algo social que vivió), dilema (algo que le "
+            "cuesta decidir o le preocupa), hecho_destacado (algo que pasó y quiere "
+            "que quede anotado), tarea_futura (algo pendiente que mencionó de "
+            "pasada — IMPORTANTE: antes de llamar con esta categoría, pregúntale si "
+            "además quiere añadirlo a su lista real de tareas; solo si dice que sí, "
+            "llama también a tarea_crear, nunca sin confirmación), o libre "
+            "(cualquier otra cosa que no encaje arriba)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "categoria": {
+                    "type": "string",
+                    "description": (
+                        "Una de: evento_social, dilema, hecho_destacado, "
+                        "tarea_futura, libre."
+                    ),
+                },
+                "texto": {
+                    "type": "string",
+                    "description": "Qué contó el usuario, en una o dos frases.",
+                },
+            },
+            "required": ["categoria", "texto"],
+        },
+        "fn": diario_agregar,
+    },
+    {
+        "name": "diario_ver_hoy",
+        "description": (
+            "Muestra lo que el usuario ha contado hoy en su diario, agrupado por "
+            "categoría. Úsala si pregunta qué ha apuntado hoy o quieres repasar "
+            "antes de cerrar la conversación."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": diario_ver_hoy,
     },
     # --- Pantalla y portapapeles (Módulo C — utilidades, Tanda A) --------------
     {

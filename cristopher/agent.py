@@ -17,7 +17,7 @@ from typing import Any, Callable
 from google import genai
 from google.genai import errors, types
 
-from cristopher import personalidad
+from cristopher import estado_diario, personalidad
 from cristopher.config import FALLBACK_MODEL, MODEL, get_api_key
 from cristopher.memory import get_memory
 from cristopher.tools import TOOLS, call_tool
@@ -167,19 +167,51 @@ HONESTY_RULE = (
 )
 
 
+def _diario_block() -> str:
+    """Bloque de instrucciones del modo diario, solo cuando está activo (ver
+    estado_diario.py). Compórtate como un oyente humano y proactivo, no como un mero
+    transcriptor."""
+    if not estado_diario.esta_activo():
+        return ""
+    return (
+        "# MODO DIARIO — activo ahora mismo\n"
+        "Estás en una conversación de diario/reflexión diaria con el usuario. "
+        "Compórtate como un oyente activo, humano y proactivo: haz preguntas de "
+        "seguimiento, indaga un poco más, da tu opinión o un consejo cuando encaje "
+        "— nunca te limites a transcribir lo que dice.\n"
+        "Categoriza lo que vaya surgiendo con diario_agregar, en la categoría que "
+        "corresponda:\n"
+        "- evento_social: algo social que vivió (quedó con alguien, una fiesta, una "
+        "llamada...).\n"
+        "- dilema: algo que le cuesta decidir o le preocupa.\n"
+        "- hecho_destacado: algo que pasó y quiere que quede anotado (bueno o malo).\n"
+        "- tarea_futura: algo pendiente que mencionó de pasada. Pregúntale si "
+        "además quiere añadirlo a su lista real de tareas; solo si dice que sí, "
+        "llama también a tarea_crear.\n"
+        "- libre: cualquier otra cosa que quiera contar y no encaje arriba.\n"
+        "Usa diario_ver_hoy si quiere repasar lo que ya contó hoy. Cuando dé la "
+        "conversación de diario por terminada, llama a desactivar_modo_diario."
+    )
+
+
 def build_system_prompt() -> str:
     """Compone el system prompt: identidad + capacidades AUTO-GENERADAS desde el
     registro TOOLS + personalidad (base fija + directivas adaptables que CRISTOPHER
-    mismo guarda en personalidad.py). Se llama de nuevo en cada turno (Cristopher.send)
-    para que una autoedición de personalidad a mitad de conversación rija de inmediato,
-    sin reiniciar el proceso."""
+    mismo guarda en personalidad.py) + bloque de modo diario si está activo. Se llama
+    de nuevo en cada turno (Cristopher.send) para que una autoedición de personalidad
+    o un cambio de modo a mitad de conversación rija de inmediato, sin reiniciar el
+    proceso."""
     lines = [f"- {t['name']}: {t['description']}" for t in TOOLS]
     tools_block = "# 6. HERRAMIENTAS QUE TENGO\n" + "\n".join(lines)
     personality_block = PERSONALITY_BASE
     directivas = personalidad.formatear_para_prompt()
     if directivas:
         personality_block = f"{personality_block}\n\n{directivas}"
-    return f"{IDENTITY}\n\n{tools_block}\n\n{HONESTY_RULE}\n\n{personality_block}"
+    parts = [IDENTITY, tools_block, HONESTY_RULE, personality_block]
+    diario_block = _diario_block()
+    if diario_block:
+        parts.append(diario_block)
+    return "\n\n".join(parts)
 
 
 def saludo_arranque() -> str:

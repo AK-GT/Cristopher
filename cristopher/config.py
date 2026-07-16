@@ -76,6 +76,8 @@ HUD_PORT = int(os.getenv("CRISTOPHER_HUD_PORT", "8765"))
 PROACTIVO_DB = DATA / "proactivo.db"          # recordatorios + dedup de avisos
 POLL_SEGUNDOS = int(os.getenv("CRISTOPHER_POLL", "60"))   # cada cuánto revisa el demonio
 LEAD_MINUTOS = int(os.getenv("CRISTOPHER_LEAD", "15"))    # antelación para avisar de eventos
+# Hora local (0-23) a partir de la que avisa si el usuario no ha hecho su diario de hoy.
+DIARIO_HORA_AVISO = int(os.getenv("CRISTOPHER_DIARIO_HORA", "20"))
 # Mini-modelo que clasifica la prioridad (1-3) de cada aviso. Fallback: FALLBACK_MODEL.
 CLASSIFIER_MODEL = os.getenv("CRISTOPHER_CLASSIFIER_MODEL", "gemini-flash-lite-latest")
 GMAIL_QUERY_PROACTIVO = os.getenv("CRISTOPHER_GMAIL_QUERY", "is:unread")

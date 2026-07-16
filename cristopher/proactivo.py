@@ -15,6 +15,7 @@ from typing import Callable, Optional
 
 from cristopher.config import (
     CLASSIFIER_MODEL,
+    DIARIO_HORA_AVISO,
     FALLBACK_MODEL,
     GMAIL_QUERY_PROACTIVO,
     LEAD_MINUTOS,
@@ -183,6 +184,23 @@ class Demonio:
             ))
         return avisos
 
+    def _avisos_diario(self) -> list[tuple[str, str]]:
+        try:
+            from cristopher.diario import get_diario
+
+            ahora = datetime.now()
+            if ahora.hour < DIARIO_HORA_AVISO:
+                return []
+            hoy = ahora.date().isoformat()
+            if get_diario().hay_entradas_hoy(hoy):
+                return []
+        except Exception:
+            return []
+        return [(
+            f"diario:{hoy}",
+            "Aún no has hecho tu diario de hoy — cuando quieras te escucho, sin prisa.",
+        )]
+
     # --- Entrega ---------------------------------------------------------------
     def _entregar(self, nivel: int, mensaje: str) -> None:
         marca = datetime.now().strftime("%H:%M")
@@ -221,6 +239,7 @@ class Demonio:
             + self._avisos_correo()
             + self._avisos_recordatorios()
             + self._avisos_whatsapp()
+            + self._avisos_diario()
         )
         for clave, mensaje in avisos:
             if self._rec.ya_visto(clave):
