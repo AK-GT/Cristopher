@@ -10,7 +10,9 @@ Uso:  python -m cristopher.hud
 from __future__ import annotations
 
 import json
+import os
 import queue
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -301,6 +303,19 @@ def _demonio_proactivo():
         pass  # degrada con elegancia si no hay Google/permiso
 
 
+def _chrome_path() -> str | None:
+    """Ruta a chrome.exe si está instalado en una ubicación estándar; si no, None."""
+    candidatos = [
+        Path(os.environ.get("ProgramFiles", "")) / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("ProgramFiles(x86)", "")) / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("LocalAppData", "")) / "Google/Chrome/Application/chrome.exe",
+    ]
+    for c in candidatos:
+        if c.exists():
+            return str(c)
+    return None
+
+
 def main() -> int:
     # En el HUD, la confirmación de acciones irreversibles (§9) es por clic, no por
     # stdin: el usuario escribe desde el navegador y no vería un input() del servidor.
@@ -312,7 +327,15 @@ def main() -> int:
     url = f"http://localhost:{HUD_PORT}"
     print(f"CRISTOPHER HUD en {url}  (Ctrl+C para salir)")
     try:
-        webbrowser.open(url)
+        # Ventana propia en el lado izquierdo: la canción de arranque (escucha.py)
+        # abre la suya a la derecha (--window-position=960,0); con webbrowser.open()
+        # normal, Windows las metía como pestañas de la misma ventana y se tapaban.
+        chrome = _chrome_path()
+        if chrome:
+            subprocess.Popen([chrome, "--new-window", "--window-position=0,0",
+                               "--window-size=960,1040", url])
+        else:
+            webbrowser.open(url)
     except Exception:
         pass
     try:

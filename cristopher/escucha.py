@@ -1,7 +1,7 @@
 """Escucha ambiental de CRISTOPHER — despierta el sistema con 2 palmadas.
 
-Proceso ligero e independiente: NO carga Gemini, Playwright ni el HUD; solo escucha
-el micrófono y, al detectar dos palmadas seguidas, reproduce la canción de arranque y
+Proceso ligero e independiente: NO carga Gemini ni Playwright; solo escucha el
+micrófono y, al detectar dos palmadas seguidas, reproduce la canción de arranque y
 lanza el sistema vivo (`python -m cristopher`) como subproceso.
 
 La detección es puramente por energía del audio (sin modelos de voz): casi gratis y sin
@@ -11,10 +11,11 @@ En modo normal no imprime nada (el autostart lo lanza con pythonw, sin consola);
 todo el log va a data/escucha.log. Para desactivar la escucha sin desinstalar el
 autostart, crea el archivo data/escucha.desactivada (borrarlo la reactiva).
 
-La "canción de arranque" se abre en una pestaña nueva de YouTube (CANCION_YOUTUBE_URL
-o, si no hay una fijada, una búsqueda por CANCION_YOUTUBE_QUERY en config.py) — se
-descartó reproducirla con VLC en local porque en esta máquina no sonaba (instancias
-de VLC compitiendo por el dispositivo de audio, o el propio dispositivo).
+La "canción de arranque" suena con el motor de música propio de CRISTOPHER (VLC local,
+`cristopher.musica`, Tanda A) desde el archivo en data/musica/ — se descartó abrirla en
+una pestaña de YouTube: además de competir por la misma ventana de Chrome que el HUD
+("se tapan"), los graves de la canción sonando por los altavoces realimentaban el
+propio micrófono y disparaban nuevas "palmadas" falsas en bucle.
 
 Uso:
   python -m cristopher.escucha               # escuchar (2 palmadas para despertar; sin consola)
@@ -32,16 +33,14 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
 from pathlib import Path
-from urllib.parse import quote_plus
 
 import numpy as np
 
 from cristopher.config import (
-    CANCION_YOUTUBE_QUERY,
-    CANCION_YOUTUBE_URL,
     DATA,
     ESCUCHA_FLAG_DESACTIVAR,
     ESCUCHA_LOG,
@@ -58,6 +57,11 @@ SR = 16000                 # tasa de muestreo del micrófono
 BLOQUE = int(SR * 0.03)    # ~30 ms por bloque de análisis
 CHEQUEO_FLAG_SEGUNDOS = 1.0  # cada cuánto relee el archivo bandera dentro del bucle
 _ATAJO = "CRISTOPHER Escucha.lnk"   # nombre del acceso directo en la carpeta Inicio
+# Nombre (sin extensión) del archivo en data/musica/ que resuelve la canción de arranque
+# (ver resolver.buscar_local: hace match por substring contra el nombre de archivo).
+CANCION_ARCHIVO = "back_in_black"
+CANCION_DURACION_MAX = 20   # s: corte automático de la canción de arranque
+CANCION_ATAJO_CORTAR = "<ctrl>+m"   # atajo global para cortarla a mano
 
 log = logging.getLogger("cristopher.escucha")
 
@@ -89,27 +93,55 @@ def _importar_sounddevice():
     return sd
 
 
-# --- Reproducción de la canción (pestaña de YouTube) --------------------------
-def abrir_cancion_youtube() -> None:
-    """Abre la canción de arranque en una pestaña nueva de YouTube.
-
-    Se descartó reproducir el mp3 local con VLC: en esta máquina no sonaba (varias
-    instancias de VLC compitiendo por el dispositivo de audio, o el propio dispositivo
-    de salida). CANCION_YOUTUBE_URL (config.py / .env) fija un vídeo exacto y se le
-    añade autoplay=1; si está vacía, se abre una búsqueda por CANCION_YOUTUBE_QUERY
-    (una búsqueda no puede autorreproducir un vídeo concreto) — nunca se adivina un ID
-    de vídeo.
-    """
-    if CANCION_YOUTUBE_URL:
-        separador = "&" if "?" in CANCION_YOUTUBE_URL else "?"
-        url = f"{CANCION_YOUTUBE_URL}{separador}autoplay=1"
-    else:
-        url = f"https://www.youtube.com/results?search_query={quote_plus(CANCION_YOUTUBE_QUERY)}"
+# --- Reproducción de la canción (motor de música local, VLC) ------------------
+def _detener_cancion(motivo: str) -> None:
+    """Corta la canción de arranque si sigue sonando (temporizador de 20s o Ctrl+M).
+    No hace nada si ya se detuvo sola o si nunca llegó a sonar."""
     try:
-        webbrowser.open_new_tab(url)
-        log.info("Abierta pestaña de YouTube: %s", url)
+        from cristopher.musica import get_reproductor
+        r = get_reproductor()
+        if r.estado()["sonando"]:
+            r.vaciar()
+            log.info("Canción cortada (%s).", motivo)
+    except Exception as exc:
+        log.warning("No pude cortar la canción: %s", exc)
+
+
+def _iniciar_atajo_cortar() -> None:
+    """Registra el atajo global Ctrl+M para cortar la canción a mano, además del corte
+    automático a los CANCION_DURACION_MAX segundos. Se registra una sola vez por
+    proceso; si falta pynput, degrada con elegancia (solo queda el corte por tiempo)."""
+    try:
+        from pynput import keyboard
+    except ImportError:
+        log.warning("Falta pynput: sin atajo %s para cortar la canción (sigue el corte a los %ss).",
+                    CANCION_ATAJO_CORTAR, CANCION_DURACION_MAX)
+        return
+    try:
+        hk = keyboard.GlobalHotKeys({CANCION_ATAJO_CORTAR: lambda: _detener_cancion(f"atajo {CANCION_ATAJO_CORTAR}")})
+        hk.daemon = True
+        hk.start()
+    except Exception as exc:
+        log.warning("No pude registrar el atajo %s: %s", CANCION_ATAJO_CORTAR, exc)
+
+
+def sonar_cancion() -> None:
+    """Suena la canción de arranque con el motor de música propio de CRISTOPHER
+    (`cristopher.musica`, VLC local sobre el archivo en data/musica/), y la corta sola
+    a los CANCION_DURACION_MAX segundos (o antes, a mano, con Ctrl+M).
+
+    Sin ventana ni pestaña de navegador que gestionar: nada que tapar al HUD, y el
+    audio no vuelve a entrar por el micro con la fuerza de unos altavoces reproduciendo
+    desde el propio Chrome (la causa del bucle de falsas "palmadas" que retriggeraba
+    con la versión anterior por YouTube).
+    """
+    try:
+        from cristopher.musica import get_reproductor
+        get_reproductor().reproducir(CANCION_ARCHIVO)
+        log.info("Sonando canción de arranque (%s).", CANCION_ARCHIVO)
+        threading.Timer(CANCION_DURACION_MAX, _detener_cancion, args=(f"{CANCION_DURACION_MAX}s",)).start()
     except Exception as exc:  # nunca romper el arranque por la música
-        log.warning("No pude abrir YouTube: %s", exc)
+        log.warning("No pude sonar la canción de arranque: %s", exc)
 
 
 # --- Arranque del HUD --------------------------------------------------------
@@ -149,7 +181,7 @@ def _disparar() -> None:
     la pestaña del navegador, el servidor sigue corriendo) reabre esa pestaña; si no
     hay ningún proceso, lanza uno nuevo. Nunca duplica el proceso del HUD."""
     log.info("¡2 palmadas!")
-    abrir_cancion_youtube()
+    sonar_cancion()
     if _hud_vivo():
         log.info("El HUD ya está corriendo; reabro la pestaña del navegador.")
         try:
@@ -175,6 +207,7 @@ def escuchar(visible: bool = False) -> None:
         return
 
     sd = _importar_sounddevice()
+    _iniciar_atajo_cortar()
 
     log.info("Escuchando… (2 palmadas para despertar; archivo bandera para desactivar)")
     if visible:
