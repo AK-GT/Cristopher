@@ -96,8 +96,8 @@ VOZ_DEFECTO = "es_ES-davefx-medium"  # nombre de la voz Piper por defecto
 # --- Arranque por 2 palmadas + música ----------------------------------------
 # Escucha ambiental ligera (cristopher/escucha.py): 2 palmadas despiertan el HUD y
 # suena la canción. Umbrales ajustables por entorno para calibrar según el micro.
-PALMADA_FACTOR   = float(os.getenv("CRISTOPHER_PALMADA_FACTOR", "7"))     # pico / suelo de ruido
-PALMADA_UMBRAL   = float(os.getenv("CRISTOPHER_PALMADA_UMBRAL", "0.15"))  # pico mínimo absoluto
+PALMADA_FACTOR   = float(os.getenv("CRISTOPHER_PALMADA_FACTOR", "40"))    # pico / suelo de ruido (subido para evitar falsos positivos)
+PALMADA_UMBRAL   = float(os.getenv("CRISTOPHER_PALMADA_UMBRAL", "1"))     # pico mínimo absoluto (subido para evitar falsos positivos)
 PALMADA_GAP_MIN  = float(os.getenv("CRISTOPHER_PALMADA_GAP_MIN", "0.12")) # s mínimos entre palmadas
 PALMADA_GAP_MAX  = float(os.getenv("CRISTOPHER_PALMADA_GAP_MAX", "0.6"))  # s máximos entre palmadas
 PALMADA_COOLDOWN = float(os.getenv("CRISTOPHER_PALMADA_COOLDOWN", "5"))   # s de guarda tras disparar
