@@ -5,7 +5,7 @@
   // ---------- Núcleo neuronal (three.js · estilo JARVIS) ----------
   // Bloque de ajuste rápido: subir/bajar cada elemento tras verlo ("luego limitamos").
   const CONFIG = {
-    R: 2.0,
+    R: 1.75,           // esfera algo más pequeña: deja hueco para que los anillos no salgan de cuadro
     detail: 3,          // subdivisión de la icosfera (facetas + densidad de la red de venas)
     points: 4200,       // nube turbulenta
     freq: 1.55,         // frecuencia base del ruido
@@ -16,9 +16,16 @@
     colorCore:  0x2ea8ff,
     colorRing:  0x2f8fff,
     tendrils: 6,        // mechones de energía que se salen del borde
-    show: { shell: true, lines: true, points: true, tendrils: true, core: true },
+    rings: 6,           // anillos no coplanares (Fase 3)
+    nodes: 48,          // nodos de la red neuronal
+    nodeLinks: 3,       // vecinos más cercanos por nodo
+    orbitLayers: 3,     // capas de partículas orbitando
+    orbitPoints: 50,    // partículas por capa
+    show: { shell: true, lines: true, points: true, tendrils: true, core: true,
+            neural: true, coreHalo: true, orbit: true, veinPulse: true },
   };
   const R = CONFIG.R;
+  const GOLDEN = Math.PI * (3 - Math.sqrt(5));  // ángulo áureo, reutilizado por varios bloques
 
   const canvas = document.getElementById("core-canvas");
   const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
@@ -151,32 +158,56 @@
       for (let i = 0; i < pa.count; i += 3) tris.push([i, i + 1, i + 2]);
     }
     const pkey = (i) => Math.round(pa.getX(i) * 1e4) + "," + Math.round(pa.getY(i) * 1e4) + "," + Math.round(pa.getZ(i) * 1e4);
-    const seen = new Set(), ep = [];
+    const seen = new Set(), ep = [], epT = [], epPhase = [];
     for (const [a, b, c] of tris) {
       for (const [u, v] of [[a, b], [b, c], [c, a]]) {
         const ka = pkey(u), kb = pkey(v);
         const ek = ka < kb ? ka + "|" + kb : kb + "|" + ka;
         if (seen.has(ek)) continue; seen.add(ek);
         ep.push(pa.getX(u), pa.getY(u), pa.getZ(u), pa.getX(v), pa.getY(v), pa.getZ(v));
+        const ph = Math.random();
+        epT.push(0, 1); epPhase.push(ph, ph);
       }
     }
     const lg = new THREE.BufferGeometry();
     lg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(ep), 3));
+    const VEIN_PULSE = CONFIG.show.veinPulse;
+    if (VEIN_PULSE) {
+      lg.setAttribute("aT", new THREE.BufferAttribute(new Float32Array(epT), 1));
+      lg.setAttribute("aPhase", new THREE.BufferAttribute(new Float32Array(epPhase), 1));
+    }
+    // Pulso viajero (sinapsis) opcional: mismo truco que las conexiones neuronales del
+    // bloque 6 — un varying interpolado 0→1 entre los 2 vértices de cada segmento, con
+    // fase por arista, da una franja de brillo que recorre la vena sin subdividirla.
     const lineMat = new THREE.ShaderMaterial({
       uniforms: Object.assign(shared(), { uOpacity: { value: 0.55 } }),
       vertexShader: LIB + `
-        varying float vB;
+        ${VEIN_PULSE ? "attribute float aT, aPhase;" : ""}
+        varying float vB${VEIN_PULSE ? ", vT, vPhase" : ""};
         void main(){
           vec3 dir=normalize(position);
           float n; vec3 pos=displace(dir, ${(R * 1.005).toFixed(3)}, n);
           vB=0.35+0.65*(n*0.5+0.5);
+          ${VEIN_PULSE ? "vT=aT; vPhase=aPhase;" : ""}
           gl_Position=projectionMatrix*modelViewMatrix*vec4(pos,1.0);
         }`,
       fragmentShader: `
         precision mediump float;
         uniform vec3 uCol; uniform float uOpacity,uBright;
-        varying float vB;
-        void main(){ gl_FragColor=vec4(uCol*1.35*(0.5+0.9*uBright)*vB, uOpacity*vB); }`,
+        ${VEIN_PULSE ? "uniform highp float uFlow, uTime;" : ""}
+        varying float vB${VEIN_PULSE ? ", vT, vPhase" : ""};
+        void main(){
+          ${VEIN_PULSE ? `
+          float speed=0.35+1.6*uFlow;
+          float travel=0.22;                                 // fracción del ciclo que dura el viaje
+          float cyc=fract(uTime*speed+vPhase);                // 0..1 por arista, con descanso al final
+          float on=step(cyc,travel);                          // 0 durante el descanso (sin impulso)
+          float pos=clamp(cyc/travel,0.0,1.0);                // posición del impulso a lo largo de la arista
+          float pulse=on*smoothstep(0.10,0.0,abs(vT-pos));     // franja estrecha que viaja de 0 a 1
+          float b=vB*(0.30+0.85*pulse);` : `
+          float b=vB;`}
+          gl_FragColor=vec4(uCol*1.35*(0.5+0.9*uBright)*b, uOpacity*b);
+        }`,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     });
     coreGroup.add(new THREE.LineSegments(lg, lineMat));
@@ -185,9 +216,8 @@
   // ---- 3. Nube de puntos turbulenta (mechones hacia afuera, no uniforme) ----
   if (CONFIG.show.points) {
     const NP = CONFIG.points, pp = new Float32Array(NP * 3);
-    const golden = Math.PI * (3 - Math.sqrt(5));
     for (let i = 0; i < NP; i++) {
-      const y = 1 - (i / (NP - 1)) * 2, r = Math.sqrt(1 - y * y), th = golden * i;
+      const y = 1 - (i / (NP - 1)) * 2, r = Math.sqrt(1 - y * y), th = GOLDEN * i;
       pp[i * 3] = Math.cos(th) * r * R; pp[i * 3 + 1] = y * R; pp[i * 3 + 2] = Math.sin(th) * r * R;
     }
     const pg = new THREE.BufferGeometry();
@@ -220,7 +250,7 @@
   }
 
   // ---- 4. Núcleo caliente (sprite aditivo blanco→azul eléctrico) ----
-  let coreSprite = null;
+  let coreSprite = null, coreHalo = null;
   if (CONFIG.show.core) {
     const cc = document.createElement("canvas"); cc.width = cc.height = 128;
     const g = cc.getContext("2d");
@@ -230,12 +260,21 @@
     grad.addColorStop(0.5, "rgba(46,168,255,0.35)");
     grad.addColorStop(1, "rgba(46,168,255,0)");
     g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
+    const tex = new THREE.CanvasTexture(cc);
     const sm = new THREE.SpriteMaterial({
-      map: new THREE.CanvasTexture(cc), blending: THREE.AdditiveBlending,
-      transparent: true, depthWrite: false,
+      map: tex, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
     });
     coreSprite = new THREE.Sprite(sm); coreSprite.scale.set(3.4, 3.4, 1);
     scene.add(coreSprite);
+
+    // Refuerzo: halo más grande y tenue detrás del núcleo (reutiliza la misma textura).
+    if (CONFIG.show.coreHalo) {
+      const hm = new THREE.SpriteMaterial({
+        map: tex, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, opacity: 0.12,
+      });
+      coreHalo = new THREE.Sprite(hm); coreHalo.scale.set(5.5, 5.5, 1);
+      scene.add(coreHalo);
+    }
   }
 
   // ---- 5. Mechones / tendones de energía que se salen del borde ----
@@ -261,19 +300,232 @@
     scene.add(tendrilGroup);
   }
 
-  // ---- Anillos HUD (marco fino, azul eléctrico) ----
-  const ringGroup = new THREE.Group(), rings = [];
-  [[2.75, 0.16], [3.1, 0.09], [3.4, 0.05]].forEach(([rad, op]) => {
-    const seg = 180, pts = [];
-    for (let i = 0; i <= seg; i++) {
-      const a = (i / seg) * Math.PI * 2;
-      pts.push(new THREE.Vector3(Math.cos(a) * rad, Math.sin(a) * rad, 0));
+  // ---- 6. Nodos + conexiones (red neuronal: sinapsis que pulsan) ----
+  if (CONFIG.show.neural) {
+    const NN = CONFIG.nodes, K = CONFIG.nodeLinks, NODE_R = R * 1.02;
+    const dirs = [];
+    for (let i = 0; i < NN; i++) {
+      const y = 1 - (i / (NN - 1)) * 2, r = Math.sqrt(Math.max(0, 1 - y * y)), th = GOLDEN * i;
+      dirs.push(new THREE.Vector3(Math.cos(th) * r, y, Math.sin(th) * r));
     }
-    const rg = new THREE.BufferGeometry().setFromPoints(pts);
-    const rm = new THREE.LineBasicMaterial({ color: CONFIG.colorRing, transparent: true, opacity: op });
-    const ln = new THREE.Line(rg, rm); rings.push(ln); ringGroup.add(ln);
-  });
+    // Vecinos más cercanos por producto punto (más alto = más cerca angularmente);
+    // O(n²) sobre unas pocas docenas de nodos, cálculo único al construir la geometría.
+    const edgeSeen = new Set(), edges = [];
+    for (let i = 0; i < NN; i++) {
+      const dots = [];
+      for (let j = 0; j < NN; j++) { if (j !== i) dots.push([dirs[i].dot(dirs[j]), j]); }
+      dots.sort((a, b) => b[0] - a[0]);
+      for (let k = 0; k < K && k < dots.length; k++) {
+        const j = dots[k][1], key = i < j ? i + "," + j : j + "," + i;
+        if (edgeSeen.has(key)) continue; edgeSeen.add(key);
+        edges.push([i, j]);
+      }
+    }
+    const edgePos = [], edgeT = [], edgePhase = [];
+    for (const [i, j] of edges) {
+      const ph = Math.random();
+      edgePos.push(dirs[i].x * NODE_R, dirs[i].y * NODE_R, dirs[i].z * NODE_R);
+      edgePos.push(dirs[j].x * NODE_R, dirs[j].y * NODE_R, dirs[j].z * NODE_R);
+      edgeT.push(0, 1); edgePhase.push(ph, ph);
+    }
+    const ng = new THREE.BufferGeometry();
+    ng.setAttribute("position", new THREE.BufferAttribute(new Float32Array(edgePos), 3));
+    ng.setAttribute("aT", new THREE.BufferAttribute(new Float32Array(edgeT), 1));
+    ng.setAttribute("aPhase", new THREE.BufferAttribute(new Float32Array(edgePhase), 1));
+    const neuralMat = new THREE.ShaderMaterial({
+      uniforms: Object.assign(shared(), { uOpacity: { value: 0.6 } }),
+      vertexShader: LIB + `
+        attribute float aT, aPhase;
+        varying float vT, vPhase, vN;
+        void main(){
+          vec3 dir=normalize(position);
+          float n; vec3 pos=displace(dir, ${NODE_R.toFixed(3)}, n);
+          vT=aT; vPhase=aPhase; vN=n;
+          gl_Position=projectionMatrix*modelViewMatrix*vec4(pos,1.0);
+        }`,
+      fragmentShader: `
+        precision mediump float;
+        uniform vec3 uCol; uniform float uOpacity,uBright;
+        uniform highp float uFlow, uTime;
+        varying float vT, vPhase, vN;
+        void main(){
+          float speed=0.4+2.2*uFlow;
+          float travel=0.20;                                 // fracción del ciclo que dura el viaje
+          float cyc=fract(uTime*speed+vPhase);                // 0..1 por arista, con descanso al final
+          float on=step(cyc,travel);                          // 0 durante el descanso (sin impulso)
+          float pos=clamp(cyc/travel,0.0,1.0);                // posición del impulso a lo largo de la arista
+          float pulse=on*smoothstep(0.09,0.0,abs(vT-pos));     // franja estrecha que viaja de nodo a nodo
+          float base=0.10+0.10*(vN*0.5+0.5);
+          float b=base+0.9*pulse;
+          gl_FragColor=vec4(uCol*1.2*(0.5+0.8*uBright)*b, uOpacity*b);
+        }`,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    coreGroup.add(new THREE.LineSegments(ng, neuralMat));
+
+    // Nodos: puntos brillantes en cada vértice de la red (mismo patrón que el bloque 3).
+    const nodePos = new Float32Array(NN * 3), nodePhase = new Float32Array(NN);
+    for (let i = 0; i < NN; i++) {
+      nodePos[i * 3] = dirs[i].x * NODE_R; nodePos[i * 3 + 1] = dirs[i].y * NODE_R; nodePos[i * 3 + 2] = dirs[i].z * NODE_R;
+      nodePhase[i] = Math.random() * 6.28;
+    }
+    const npg = new THREE.BufferGeometry();
+    npg.setAttribute("position", new THREE.BufferAttribute(nodePos, 3));
+    npg.setAttribute("aPhase", new THREE.BufferAttribute(nodePhase, 1));
+    const nodeMat = new THREE.ShaderMaterial({
+      uniforms: Object.assign(shared(), { uOpacity: { value: 0.85 }, uSize: { value: 0.16 } }),
+      vertexShader: LIB + `
+        attribute float aPhase;
+        uniform float uSize;
+        varying float vB, vPhase;
+        void main(){
+          vec3 dir=normalize(position);
+          float n; vec3 pos=displace(dir, ${NODE_R.toFixed(3)}, n);
+          vB=0.5+0.5*n; vPhase=aPhase;
+          vec4 mv=modelViewMatrix*vec4(pos,1.0);
+          gl_PointSize=uSize*(300.0/-mv.z);
+          gl_Position=projectionMatrix*mv;
+        }`,
+      fragmentShader: `
+        precision mediump float;
+        uniform vec3 uCol; uniform float uOpacity,uBright;
+        uniform highp float uTime;
+        varying float vB, vPhase;
+        void main(){
+          float d=length(gl_PointCoord-0.5);
+          float a=pow(smoothstep(0.5,0.0,d),1.5);
+          float twinkle=0.6+0.4*sin(uTime*1.3+vPhase);
+          vec3 c=mix(uCol*1.3, vec3(0.85,0.94,1.0), 0.4);
+          gl_FragColor=vec4(c*vB*uBright*twinkle, a*uOpacity);
+        }`,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    coreGroup.add(new THREE.Points(npg, nodeMat));
+  }
+
+  // ---- Anillos HUD no coplanares (tubos con volumen real + textura) ----
+  // LineBasicMaterial.linewidth está limitado a 1px en Chrome/Windows (ANGLE) — para
+  // que tengan grosor de verdad se construyen como tubos (TubeGeometry, three.js
+  // núcleo, sin dependencias nuevas) con una textura generada por canvas (mismo
+  // patrón que el gradiente del núcleo caliente) y un shader con fresnel, como la
+  // cáscara del bloque 1, para que se vean redondos/volumétricos sin luces reales.
+  function buildRingTexture() {
+    const c = document.createElement("canvas");
+    c.width = 256; c.height = 32;
+    const g = c.getContext("2d");
+    const grad = g.createLinearGradient(0, 0, 0, 32);
+    grad.addColorStop(0.0, "rgba(150,200,255,0)");
+    grad.addColorStop(0.5, "rgba(230,244,255,1)");
+    grad.addColorStop(1.0, "rgba(150,200,255,0)");
+    g.fillStyle = grad; g.fillRect(0, 0, 256, 32);
+    g.globalCompositeOperation = "destination-out";  // recorta huecos → aspecto de circuito
+    g.fillStyle = "rgba(0,0,0,0.85)";
+    for (let x = 0; x < 256; x += 22) g.fillRect(x, 0, 9, 32);
+    g.globalCompositeOperation = "source-over";
+    return new THREE.CanvasTexture(c);
+  }
+  const ringTexBase = buildRingTexture();
+
+  function ringTubeMaterial(opBase, repeats) {
+    const tex = ringTexBase.clone();
+    tex.needsUpdate = true;
+    tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.repeat.set(repeats, 1);
+    return new THREE.ShaderMaterial({
+      uniforms: Object.assign(shared(), { uOpacity: { value: opBase }, uTex: { value: tex } }),
+      vertexShader: `
+        varying vec3 vNormalW; varying vec3 vViewW; varying vec2 vUv;
+        void main(){
+          vUv = uv;
+          vec4 wp = modelMatrix * vec4(position, 1.0);
+          vNormalW = normalize(mat3(modelMatrix) * normal);
+          vViewW = cameraPosition - wp.xyz;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        precision mediump float;
+        uniform vec3 uCol; uniform float uOpacity, uBright;
+        uniform sampler2D uTex;
+        varying vec3 vNormalW; varying vec3 vViewW; varying vec2 vUv;
+        void main(){
+          vec3 N = normalize(vNormalW), V = normalize(vViewW);
+          float fres = pow(1.0 - abs(dot(N, V)), 1.8);       // realza el borde → look redondo
+          vec4 tex = texture2D(uTex, vUv);
+          vec3 col = mix(uCol, vec3(0.85,0.93,1.0), fres * 0.5);
+          float b = (0.35 + fres * 0.9) * (0.5 + 0.7 * uBright);
+          gl_FragColor = vec4(col * b * tex.rgb, tex.a * uOpacity * (0.4 + fres * 0.8));
+        }`,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    });
+  }
+
+  const ringGroup = new THREE.Group(), rings = [], ringSpins = [], ringPrecess = [];
+  const RING_PRECESS_AXIS = new THREE.Vector3(0, 1, 0);  // eje de precesión, reutilizado cada frame
+  const RN = CONFIG.rings, ringSeg = 128;
+  for (let i = 0; i < RN; i++) {
+    // Radios variados, no una progresión lineal: algunos anillos claramente más
+    // grandes, otros más pequeños (hash pseudoaleatorio determinista por índice, no
+    // Math.random(), para que el tamaño de cada anillo no cambie entre recargas).
+    // Contenidos en 1.9..2.45 para seguir dentro del encuadre de la cámara (a
+    // distancia 6.2 y fov 45°, la mitad de la vista a z=0 ronda ~2.57 unidades).
+    const jitter = Math.abs(Math.sin(i * 12.9898 + 3.7) * 43758.5453) % 1;
+    const rad = 1.9 + jitter * 0.55;
+    const t = jitter;                                   // 0=anillo pequeño, 1=anillo grande
+    const op = 0.58 - t * 0.30;                          // los pequeños (más cercanos), más brillantes
+    const tubeR = 0.055 - t * 0.02;                       // y algo más gruesos
+    const curvePts = [];
+    for (let s = 0; s < ringSeg; s++) {
+      const a = (s / ringSeg) * Math.PI * 2;
+      curvePts.push(new THREE.Vector3(Math.cos(a) * rad, Math.sin(a) * rad, 0));
+    }
+    const curve = new THREE.CatmullRomCurve3(curvePts, true);
+    const geo = new THREE.TubeGeometry(curve, ringSeg, tubeR, 8, true);
+    const mat = ringTubeMaterial(op, Math.max(2, Math.round(rad * 5)));
+    const mesh = new THREE.Mesh(geo, mat);
+    // Orientación no coplanar: normal del plano repartida en espiral áurea sobre la
+    // esfera (mismo GOLDEN que el resto del archivo), aplicada como quaternion fijo.
+    // El giro por frame toca .rotation.z (spin local sobre esa misma normal) Y ADEMÁS
+    // precesiona alrededor de RING_PRECESS_AXIS (rotateOnWorldAxis), así el anillo no
+    // solo gira sobre sí mismo: su plano se mueve/tumba alrededor del núcleo.
+    const y = 1 - ((i + 0.5) / RN) * 2, r = Math.sqrt(Math.max(0, 1 - y * y)), th = GOLDEN * i;
+    const normal = new THREE.Vector3(Math.cos(th) * r, y, Math.sin(th) * r);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+    rings.push(mesh); ringGroup.add(mesh);
+    ringSpins.push((i % 2 === 0 ? 1 : -1) * (0.0004 + 0.0002 * i));       // giro propio
+    ringPrecess.push((i % 2 === 0 ? -1 : 1) * (0.00018 + 0.00012 * i));  // movimiento alrededor del núcleo
+  }
   scene.add(ringGroup);
+
+  // ---- Partículas orbitando (satélites decorativos en planos adicionales) ----
+  const orbitGroup = new THREE.Group(), orbitLayers = [];
+  if (CONFIG.show.orbit) {
+    for (let i = 0; i < CONFIG.orbitLayers; i++) {
+      const rad = 3.9 + i * 0.5, NP = CONFIG.orbitPoints;
+      const pos = new Float32Array(NP * 3);
+      for (let k = 0; k < NP; k++) {
+        const th = GOLDEN * k;
+        const rr = rad * (0.94 + Math.random() * 0.12);
+        pos[k * 3] = Math.cos(th) * rr;
+        pos[k * 3 + 1] = Math.sin(th) * rr;
+        pos[k * 3 + 2] = (Math.random() - 0.5) * 0.3;  // banda fina en el eje normal local
+      }
+      const og = new THREE.BufferGeometry();
+      og.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      const om = new THREE.PointsMaterial({
+        color: CONFIG.colorRing, size: 0.05, transparent: true, opacity: 0.35,
+        blending: THREE.AdditiveBlending, sizeAttenuation: true, depthWrite: false,
+      });
+      const pts = new THREE.Points(og, om);
+      // Orientación propia (offset respecto a los anillos) para que no se vean alineadas.
+      const y = 1 - ((i + 0.5) / CONFIG.orbitLayers) * 2, ry = Math.sqrt(Math.max(0, 1 - y * y));
+      const th2 = GOLDEN * i + 1.7;
+      const normal = new THREE.Vector3(Math.cos(th2) * ry, y, Math.sin(th2) * ry);
+      pts.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+      orbitLayers.push({ pts, spin: (i % 2 === 0 ? -1 : 1) * (0.0003 + 0.00015 * i) });
+      orbitGroup.add(pts);
+    }
+    scene.add(orbitGroup);
+  }
 
   // ---- Estados (mismo contrato; ahora alimentan los uniforms compartidos) ----
   // Cada estado tiene su color, frecuencia y "vibración" propios (misma base).
@@ -285,7 +537,12 @@
   };
   let cur = Object.assign({}, TARGETS.reposo);
   let target = TARGETS.reposo;
-  function setCoreState(s) { target = TARGETS[s] || TARGETS.reposo; }
+  let prevStateName = "reposo", flash = 0;
+  function setCoreState(s) {
+    if (s === "pensando" && prevStateName !== "pensando") flash = 1.0;  // destello al entrar
+    prevStateName = s;
+    target = TARGETS[s] || TARGETS.reposo;
+  }
 
   const targetCol = new THREE.Color(), coreCol = new THREE.Color(), WHITE = new THREE.Color(0xffffff);
   const clock = new THREE.Clock();
@@ -306,13 +563,21 @@
     targetCol.set(target.col);
     U.uCol.value.lerp(targetCol, 0.04);
 
+    flash *= 0.9;  // decae solo (destello de un solo disparo al entrar en "pensando")
     coreGroup.rotation.y += cur.spin; coreGroup.rotation.x = Math.sin(t * 0.15) * 0.10;
     if (coreSprite) {
       coreCol.copy(U.uCol.value).lerp(WHITE, 0.55);   // núcleo = tono del estado, aclarado
       coreSprite.material.color.lerp(coreCol, 0.05);
-      coreSprite.material.opacity = 0.20 + 0.30 * cur.bright;
-      const s = 2.4 + 0.4 * Math.sin(t * 1.2) + cur.bright * 0.4;
+      coreSprite.material.opacity = 0.20 + 0.30 * cur.bright + flash * 0.5 * damp;
+      const s = 2.4 + 0.4 * Math.sin(t * 1.2) + cur.bright * 0.4 + flash * 0.6 * damp;
       coreSprite.scale.set(s, s, 1);
+    }
+    if (coreHalo) {
+      coreCol.copy(U.uCol.value).lerp(WHITE, 0.4);
+      coreHalo.material.color.lerp(coreCol, 0.04);
+      coreHalo.material.opacity = 0.10 + 0.10 * cur.bright + flash * 0.25 * damp;
+      const s = 5.0 + 0.5 * Math.sin(t * 0.7) + cur.bright * 0.6;
+      coreHalo.scale.set(s, s, 1);
     }
     if (CONFIG.show.tendrils) {
       tendrilGroup.rotation.y -= cur.spin * 0.6; tendrilGroup.rotation.z += 0.0004;
@@ -322,8 +587,20 @@
       }
     }
     ringGroup.rotation.x = 0.9;
-    rings[0].rotation.z += 0.0011; rings[1].rotation.z -= 0.0007; rings[2].rotation.z += 0.0004;
-    for (const ln of rings) ln.material.color.lerp(U.uCol.value, 0.03);
+    // El color/brillo de los anillos llega solo vía uCol/uBright compartidos (son
+    // ShaderMaterial ahora, no LineBasicMaterial) — no hace falta lerp manual aquí.
+    for (let i = 0; i < rings.length; i++) {
+      rings[i].rotation.z += ringSpins[i] * damp;                              // giro propio
+      rings[i].rotateOnWorldAxis(RING_PRECESS_AXIS, ringPrecess[i] * damp);    // se mueve alrededor del núcleo
+    }
+
+    if (CONFIG.show.orbit) {
+      for (const layer of orbitLayers) {
+        layer.pts.rotation.z += layer.spin * damp;
+        layer.pts.material.color.lerp(U.uCol.value, 0.03);
+        layer.pts.material.opacity = 0.15 + 0.25 * cur.bright;
+      }
+    }
     renderer.render(scene, camera);
   }
 
@@ -334,6 +611,7 @@
     camera.aspect = w / h; camera.updateProjectionMatrix();
   }
   window.addEventListener("resize", resize);
+  window.__hudCoreResize = resize;  // hook para widgets.js (drag/resize del widget del orbe)
   setTimeout(resize, 0); resize(); animate();
 
   // ---------- DOM / estado ----------
