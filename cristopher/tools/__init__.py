@@ -57,6 +57,12 @@ from cristopher.tools.google_tools import (
 )
 from cristopher.tools.memory_tools import olvidar_hecho, recall, remember
 from cristopher.tools.notas_tools import apuntar, borrar_nota, buscar_nota, listar_notas
+from cristopher.tools.tareas_tools import (
+    tarea_actualizar_estado,
+    tarea_borrar,
+    tarea_crear,
+    tarea_listar,
+)
 from cristopher.tools.musica_tools import (
     anadir_a_cola,
     anadir_a_lista,
@@ -1045,6 +1051,67 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["id"],
         },
         "fn": borrar_nota,
+    },
+    # --- Tareas pendientes (pendiente/en_proceso/hecho) ------------------------
+    {
+        "name": "tarea_crear",
+        "description": (
+            "Apunta una tarea pendiente del usuario ('tengo que hacer X', 'pon en la "
+            "lista Y'). Empieza siempre en estado 'pendiente'."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "texto": {"type": "string", "description": "Qué hay que hacer."},
+            },
+            "required": ["texto"],
+        },
+        "fn": tarea_crear,
+    },
+    {
+        "name": "tarea_listar",
+        "description": "Muestra las tareas activas (pendientes y en proceso) con su id y estado.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": tarea_listar,
+    },
+    {
+        "name": "tarea_actualizar_estado",
+        "description": (
+            "Cambia el estado de una tarea por su id: 'pendiente', 'en_proceso' o "
+            "'hecho'. Marcarla como 'hecho' la elimina de la lista (no queda "
+            "histórico). Si no sabes el id, llama antes a tarea_listar."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Id de la tarea (el #N de tarea_listar).",
+                },
+                "estado": {
+                    "type": "string",
+                    "description": "Nuevo estado: 'pendiente', 'en_proceso' o 'hecho'.",
+                },
+            },
+            "required": ["id", "estado"],
+        },
+        "fn": tarea_actualizar_estado,
+    },
+    {
+        "name": "tarea_borrar",
+        "description": (
+            "Borra una tarea directamente por su id, sin marcarla como hecha (para "
+            "cancelar una tarea creada por error). Si no sabes el id, llama antes a "
+            "tarea_listar."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer", "description": "Id de la tarea a borrar."},
+            },
+            "required": ["id"],
+        },
+        "fn": tarea_borrar,
     },
     # --- Pantalla y portapapeles (Módulo C — utilidades, Tanda A) --------------
     {
