@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from cristopher.tareas import get_tareas
 
-_ESTADOS_VALIDOS = ("pendiente", "en_proceso", "hecho")
-_ICONOS = {"pendiente": "⏳", "en_proceso": "🔧"}
+_ESTADOS_VALIDOS = ("pendiente", "en_proceso", "en_revision", "hecho")
+_ICONOS = {"pendiente": "⏳", "en_proceso": "🔧", "en_revision": "👀"}
 
 
 def _fecha(creado: str) -> str:
@@ -48,7 +48,7 @@ def tarea_actualizar_estado(id: int, estado: str) -> str:
 
     Args:
         id: id de la tarea (el que aparece al listar).
-        estado: nuevo estado — 'pendiente', 'en_proceso' o 'hecho'.
+        estado: nuevo estado — 'pendiente', 'en_proceso', 'en_revision' o 'hecho'.
     """
     estado = (estado or "").strip().lower()
     if estado not in _ESTADOS_VALIDOS:

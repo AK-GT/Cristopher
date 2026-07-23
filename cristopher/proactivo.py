@@ -20,6 +20,8 @@ from cristopher.config import (
     GMAIL_QUERY_PROACTIVO,
     LEAD_MINUTOS,
     POLL_SEGUNDOS,
+    SESION_COLGADA_SEGUNDOS,
+    SESION_CONTEXTO_AVISO_PCT,
 )
 from cristopher.recordatorios import get_recordatorios
 
@@ -64,6 +66,92 @@ def clasificar(texto: str) -> int:
         except Exception:
             return 2
     return 2
+
+
+# Marcador PROPIO (no RESPONSE_MARKER de agent.py): build_system_prompt() ya
+# incluye una instrucción MUY fuerte ("formato OBLIGATORIO") sobre qué significa
+# ===RESPUESTA=== en el chat normal (razonamiento antes / respuesta al usuario
+# después). Reusar ese mismo marcador con un significado distinto aquí generó,
+# probado contra la API real, que el modelo ignorase esta redefinición puntual
+# y siguiera el hábito global: puso el marcador al principio y trató TODO lo de
+# después como "la respuesta para el usuario", mezclando narración y propuesta.
+# Un marcador sin ese significado previo elimina la ambigüedad.
+PROPUESTA_SESION_MARKER = "===PROPUESTA_PARA_LA_SESION==="
+
+
+def _redactar_respuesta_sesion(sesion: dict, transcript: list[dict]) -> tuple[str, str]:
+    """Redacta una propuesta para una sesión de Claude Code en estado 'pregunta',
+    en DOS partes separadas por PROPUESTA_SESION_MARKER: (narración para el
+    usuario — de qué sesión hablamos, qué contexto hay, por qué esta respuesta
+    —, texto literal que se le mandaría a la sesión).
+
+    No reusa el `Cristopher`/agent.py EN VIVO (vive en un único hilo worker por
+    Playwright — ver `hud/__main__.py`; llamarlo desde este hilo del demonio
+    podría corromper una conversación en curso). En su lugar, mismo patrón
+    thread-safe que `clasificar()`: un `genai.Client` suelto, pero usando
+    `agent.build_system_prompt()` como `system_instruction` (función pura, sin
+    tocar Playwright ni estado compartido) para que la propuesta suene a
+    CRISTOPHER de verdad."""
+    from google import genai
+    from google.genai import errors, types
+
+    from cristopher.agent import build_system_prompt
+    from cristopher.config import get_api_key
+
+    convo = "\n".join(f"{e['rol']}: {e['texto']}" for e in transcript)
+    prompt = (
+        f"Una sesión de Claude Code llamada '{sesion['nombre']}' que delegaste "
+        f"sobre un proyecto real se ha quedado esperando respuesta tuya. Carpeta "
+        f"del proyecto: {sesion['ruta']}.\n\n"
+        f"Transcript reciente de la sesión:\n{convo}\n\n"
+        "Para ESTA tarea en concreto, IGNORA el formato habitual de "
+        "===RESPUESTA=== de tu modo de chat normal: NO escribas esa línea en "
+        "absoluto, aquí no aplica y no pinta nada. En su lugar, escribe EN DOS "
+        f"PARTES separadas por la línea EXACTA {PROPUESTA_SESION_MARKER}:\n\n"
+        "PARTE 1 (antes del marcador) — para el USUARIO, no para la sesión: "
+        "explícale de qué sesión hablamos, qué te preguntó o en qué se quedó "
+        "esperando, qué contexto tienes del proyecto, y POR QUÉ vas a responder "
+        "lo que vas a responder (tu razonamiento de programador de élite). Habla "
+        "con tu voz normal, como si se lo contaras al usuario antes de pedirle "
+        "su OK.\n\n"
+        f"PARTE 2 (después de {PROPUESTA_SESION_MARKER}) — el texto LITERAL que "
+        "se le mandaría a la SESIÓN por su entrada estándar: nada de "
+        "explicaciones, comillas ni menciones al usuario, es exactamente lo que "
+        "la sesión recibiría."
+    )
+    try:
+        client = genai.Client(api_key=get_api_key())
+    except Exception as exc:
+        return "", f"(no pude redactar una propuesta: {exc})"
+    system_instruction = build_system_prompt()
+    for model in [CLASSIFIER_MODEL, FALLBACK_MODEL]:
+        if not model:
+            continue
+        try:
+            r = client.models.generate_content(
+                model=model, contents=prompt,
+                config=types.GenerateContentConfig(system_instruction=system_instruction),
+            )
+            texto = (r.text or "").strip()
+            if texto:
+                # El modelo, por el hábito MUY reforzado del formato de chat
+                # normal (build_system_prompt § "formato OBLIGATORIO"), a veces
+                # cuela un ===RESPUESTA=== suelto pese a que se le pide no
+                # hacerlo. Se limpia programáticamente en vez de depender solo
+                # del prompt (probado contra la API real: el prompt solo no basta).
+                from cristopher.agent import RESPONSE_MARKER
+                texto = texto.replace(RESPONSE_MARKER, "").strip()
+                if PROPUESTA_SESION_MARKER in texto:
+                    narracion, _, propuesta = texto.partition(PROPUESTA_SESION_MARKER)
+                    return narracion.strip(), propuesta.strip()
+                return "", texto  # degrada con elegancia: sin marcador, todo es la propuesta
+        except errors.APIError as exc:
+            if getattr(exc, "code", None) == 429:
+                continue  # sin cuota: prueba el siguiente modelo
+            return "", f"(no pude redactar una propuesta: {exc})"
+        except Exception as exc:
+            return "", f"(no pude redactar una propuesta: {exc})"
+    return "", "(no pude redactar una propuesta: todos los modelos agotaron su cuota)"
 
 
 class Demonio:
@@ -201,8 +289,212 @@ class Demonio:
             "Aún no has hecho tu diario de hoy — cuando quieras te escucho, sin prisa.",
         )]
 
+    def _avisos_sesiones(self) -> list[tuple[str, str]]:
+        """Sesiones de Claude Code (modo agentes, Fase 1-2) esperando/con una
+        pregunta sin atender: alerta por el mismo canal que calendario/correo."""
+        try:
+            from cristopher.sesiones import get_gestor_sesiones
+
+            filas = get_gestor_sesiones().listar()
+        except Exception:
+            return []
+        avisos = []
+        for f in filas:
+            if f["estado"] not in ("esperando", "pregunta"):
+                continue
+            motivo = "tiene una pregunta pendiente" if f["estado"] == "pregunta" else "está esperando"
+            avisos.append((
+                f"sesion:{f['nombre']}:{f['ultima_actividad']}",
+                f"La sesión '{f['nombre']}' {motivo} sin atender: {f['ruta']}",
+            ))
+        return avisos
+
+    # --- Modo agentes: propone respuesta a una sesión con pregunta (Fase 3) ----
+    def _revisar_preguntas_sesiones(self) -> None:
+        try:
+            from cristopher.sesiones import get_gestor_sesiones
+
+            gestor = get_gestor_sesiones()
+            filas = [f for f in gestor.listar() if f["estado"] == "pregunta"]
+        except Exception:
+            return
+        for f in filas:
+            clave = f"sesion_pregunta:{f['nombre']}:{f['ultima_actividad']}"
+            if self._rec.ya_visto(clave):
+                continue
+            try:
+                transcript = gestor.leer(f["nombre"], 15)
+                narracion, propuesta = _redactar_respuesta_sesion(f, transcript)
+                ultima_pregunta = next(
+                    (e["texto"] for e in reversed(transcript) if e["rol"] == "asistente"), ""
+                )
+                from cristopher.tools.google_tools import confirmar_accion
+
+                if narracion:
+                    # El modelo narró bien: de qué sesión hablamos, el contexto y
+                    # el porqué ya vienen en su propia voz.
+                    cuerpo = (
+                        f"{narracion}\n\n"
+                        f"Esto es lo que le mandaría a '{f['nombre']}':\n\n« {propuesta} »"
+                    )
+                else:
+                    # Degradado con elegancia: el modelo no separó narración de
+                    # propuesta (o la redacción falló) — vuelve al formato mínimo.
+                    cuerpo = (
+                        f"CRISTOPHER propone responder a la sesión '{f['nombre']}':\n\n"
+                        f"« {ultima_pregunta} »\n\nCon esto:\n\n« {propuesta} »"
+                    )
+                aprobado = confirmar_accion(
+                    f"{cuerpo}\n\n¿Se la envío, o prefieres escribirle tú mismo desde el panel?"
+                )
+                if aprobado:
+                    gestor.escribir(f["nombre"], propuesta)
+            except Exception:
+                pass
+            finally:
+                self._rec.marcar_visto(clave)
+
+    # --- Cristopher Code (Fase 3): vigilancia EXCLUSIVA del modo code -----------
+    def _anunciar_code(self, texto: str) -> None:
+        """Publica un aviso no solicitado en el chat de código. `bus.log` ya
+        etiqueta cada entrada con el modo activo en ese momento (Fase 1); como
+        esto solo se llama con estado_code activo, llega a #code-log, nunca al
+        chat normal. No pasa por _entregar/clasificar (eso es el panel de
+        alertas de calendario/correo, un canal distinto) ni se añade al
+        historial de _contents_code del modelo — es una notificación del
+        demonio, no un turno que el LLM en vivo haya generado (mismo criterio
+        que los avisos de calendario/correo de siempre)."""
+        from cristopher import bus
+        bus.log("answer", texto)
+
+    def _vigilar_sesiones_code(self) -> None:
+        """Vigilancia NUEVA y exclusiva de 'Cristopher Code' (modo code): a
+        diferencia de _revisar_preguntas_sesiones (que sirve al overlay 🤖 del
+        modo agentes original y sigue corriendo siempre, sin gate, para no
+        romperlo), esto solo hace algo con estado_code activo. Detecta 3
+        eventos que _avisos_sesiones/_revisar_preguntas_sesiones no cubren:
+        sesión terminada, sesión colgada y conflicto de archivos nuevo."""
+        from cristopher import estado_code
+
+        if not estado_code.esta_activo():
+            return
+        try:
+            from cristopher.sesiones import ESTADOS_ACTIVOS, get_gestor_sesiones
+
+            gestor = get_gestor_sesiones()
+            filas = gestor.listar()
+        except Exception:
+            return
+
+        # 1) Sesiones que acaban de terminar (limpio o con error): informativo.
+        for f in filas:
+            if f["estado"] not in ("terminado", "error"):
+                continue
+            clave = f"code_fin:{f['nombre']}:{f['ultima_actividad']}"
+            if self._rec.ya_visto(clave):
+                continue
+            if f["estado"] == "error":
+                texto = (
+                    f"Señor, la sesión '{f['nombre']}' terminó con un error — "
+                    "conviene revisar qué pasó."
+                )
+            else:
+                texto = (
+                    f"Señor, la sesión '{f['nombre']}' ha terminado — lista para "
+                    "revisar el diff y decidir si mergea."
+                )
+            self._anunciar_code(texto)
+            self._rec.marcar_visto(clave)
+
+        # 2) Sesiones coladas: 'trabajando' sin actividad más allá del umbral.
+        ahora_ts = datetime.now().timestamp()
+        for f in filas:
+            if f["estado"] != "trabajando":
+                continue
+            try:
+                ts = datetime.fromisoformat(f["ultima_actividad"]).timestamp()
+            except ValueError:
+                continue
+            if ahora_ts - ts < SESION_COLGADA_SEGUNDOS:
+                continue
+            clave = f"code_colgada:{f['nombre']}:{f['ultima_actividad']}"
+            if self._rec.ya_visto(clave):
+                continue
+            try:
+                mins = int((ahora_ts - ts) / 60)
+                from cristopher.tools.google_tools import confirmar_accion
+
+                aprobado = confirmar_accion(
+                    f"Señor, la sesión '{f['nombre']}' lleva {mins} min sin dar "
+                    "señales de vida (parece colgada). ¿La paro?"
+                )
+                if aprobado:
+                    gestor.parar(f["nombre"])
+                    self._anunciar_code(f"Sesión '{f['nombre']}' parada por colgarse.")
+            except Exception:
+                pass
+            finally:
+                self._rec.marcar_visto(clave)
+
+        # 3) Conflictos de archivos recién detectados (Fase 2): informativo.
+        try:
+            conflictos = gestor.conflictos()
+        except Exception:
+            conflictos = []
+        for c in conflictos:
+            clave = (
+                "code_conflicto:"
+                + "|".join(sorted([c["sesion_a"], c["sesion_b"]]))
+                + ":" + ",".join(c["archivos"])
+            )
+            if self._rec.ya_visto(clave):
+                continue
+            texto = (
+                f"Señor, ojo: '{c['sesion_a']}' y '{c['sesion_b']}' están tocando "
+                f"los mismos archivos ({', '.join(c['archivos'])}) — conviene "
+                "resolverlo antes de mergear."
+            )
+            self._anunciar_code(texto)
+            self._rec.marcar_visto(clave)
+
+        # 4) Uso de contexto alto (Fase 4a): activa, sin repetir aviso por el mismo
+        # % (redondeado a 5 puntos, para no spamear en cada turno mientras se queda
+        # estable arriba del umbral). /compact SÍ funciona de verdad por stdin en
+        # modo headless (verificado en Paso 0), así que CRISTOPHER puede ejecutarlo
+        # tras tu confirmación, no solo sugerirlo.
+        for f in filas:
+            if f["estado"] not in ESTADOS_ACTIVOS:
+                continue
+            pct = f.get("uso_contexto_pct")
+            if pct is None or pct < SESION_CONTEXTO_AVISO_PCT:
+                continue
+            bucket = int(pct * 20)  # escalones de 5 puntos porcentuales
+            clave = f"code_contexto:{f['nombre']}:{bucket}"
+            if self._rec.ya_visto(clave):
+                continue
+            try:
+                from cristopher.tools.google_tools import confirmar_accion
+
+                aprobado = confirmar_accion(
+                    f"Señor, la sesión '{f['nombre']}' va por el {pct * 100:.0f}% de "
+                    "su ventana de contexto — a partir de aquí la calidad baja. "
+                    "¿Le mando /compact?"
+                )
+                if aprobado:
+                    gestor.escribir(f["nombre"], "/compact")
+                    self._anunciar_code(f"Compactado el contexto de '{f['nombre']}'.")
+            except Exception:
+                pass
+            finally:
+                self._rec.marcar_visto(clave)
+
     # --- Entrega ---------------------------------------------------------------
     def _entregar(self, nivel: int, mensaje: str) -> None:
+        from cristopher import concentracion
+        if concentracion.esta_silenciando(nivel):
+            concentracion.encolar_aviso(nivel, mensaje)
+            return  # modo concentración activo: se encola, no se entrega ahora
+
         marca = datetime.now().strftime("%H:%M")
         if self._on_aviso is not None:
             try:
@@ -240,6 +532,7 @@ class Demonio:
             + self._avisos_recordatorios()
             + self._avisos_whatsapp()
             + self._avisos_diario()
+            + self._avisos_sesiones()
         )
         for clave, mensaje in avisos:
             if self._rec.ya_visto(clave):
@@ -252,12 +545,24 @@ class Demonio:
             entregados.append((nivel, mensaje))
         return entregados
 
+    def _revisar_concentracion(self) -> None:
+        """Sondea si toca terminar/cambiar de fase el modo concentración (fin por
+        tiempo o transición foco↔descanso). Reutiliza este mismo hilo de sondeo, sin
+        hilo ni busy-loop nuevo (§ arquitectura: cambio mínimo y localizado)."""
+        from cristopher import concentracion
+        mensaje = concentracion.tick()
+        if mensaje:
+            self._entregar(2, mensaje)
+
     def run(self) -> None:
         print(f"{CYAN}{BOLD}CRISTOPHER — demonio proactivo{RESET} "
               f"{DIM}(vigilando cada {POLL_SEGUNDOS}s; Ctrl+C para salir){RESET}")
         while True:
             try:
                 self.revisar_una_vez()
+                self._revisar_concentracion()
+                self._revisar_preguntas_sesiones()
+                self._vigilar_sesiones_code()
             except Exception as exc:  # el demonio nunca debe morir por un fallo puntual
                 print(f"{AMBER}[demonio] error en la revisión: {exc}{RESET}")
             time.sleep(POLL_SEGUNDOS)

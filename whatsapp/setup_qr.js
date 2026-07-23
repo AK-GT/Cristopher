@@ -7,7 +7,10 @@
 
 const path = require("path");
 const qrcodeTerminal = require("qrcode-terminal");
+const qrcode = require("qrcode");
 const { ConexionWhatsApp } = require("./wa");
+
+const QR_PNG_PATH = path.join(__dirname, "qr.png");
 
 const SESSION_DIR =
   process.env.CRISTOPHER_WHATSAPP_SESSION_DIR ||
@@ -42,6 +45,11 @@ async function main() {
     onQr: (qr) => {
       console.log("\nEscanea este QR desde el telefono: WhatsApp > Dispositivos vinculados\n");
       qrcodeTerminal.generate(qr, { small: true });
+      // El QR en ASCII no siempre se ve bien fuera de una terminal real (p.ej. via
+      // chat/CI): tambien lo dejamos como imagen para abrir y escanear a ojo.
+      qrcode.toFile(QR_PNG_PATH, qr, { width: 400 }, (err) => {
+        if (!err) console.log(`(tambien guardado como imagen en: ${QR_PNG_PATH})\n`);
+      });
     },
   });
 

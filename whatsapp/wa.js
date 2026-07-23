@@ -53,7 +53,11 @@ class ConexionWhatsApp {
 
     const { state, saveCreds } = await useMultiFileAuthState(this.sessionDir);
 
-    if (!mostrarQr && !(state.creds && state.creds.registered)) {
+    // "registered" en Baileys solo se marca true en el flujo de codigo de
+    // emparejamiento (8 digitos); el flujo QR que usa setup_qr.js deja ese
+    // flag en false aunque la vinculacion haya sido exitosa. La señal real de
+    // "ya esta vinculado" es creds.me (se puebla en el pair-success del QR).
+    if (!mostrarQr && !(state.creds && state.creds.me)) {
       this.estado = "qr_required";
       return;
     }

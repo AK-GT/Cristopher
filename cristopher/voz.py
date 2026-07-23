@@ -1,7 +1,12 @@
-"""Voz de CRISTOPHER (Fase 6): STT (faster-whisper) + TTS (Piper) + audio I/O.
+"""Voz de CRISTOPHER (Fase 6): STT (faster-whisper) + TTS (Piper, con edge-tts como
+motor en la nube opcional) + audio I/O.
 
 - `transcribir(audio, sr)`: audio → texto (faster-whisper `small`, español, CPU).
-- `hablar(texto)`: texto → voz por el altavoz (Piper).
+- `hablar(texto)`: texto → voz por el altavoz. Piper (local, offline) es el motor base
+  y el que corre siempre por defecto. Si el usuario elige explícitamente una voz en la
+  nube (`nube_elegir`), se intenta esa voz primero y, ante cualquier fallo (sin red,
+  servicio caído, falta la librería), se degrada de inmediato a Piper sin interrumpir
+  la respuesta — ver `motor_actual`/`nube_elegir`/`usar_motor_local`.
 - `grabar_push_to_talk()`: graba del micrófono mientras se mantiene ESPACIO.
 
 Carga perezosa de modelos. Errores explícitos si falta micro/altavoz o un modelo (§1).
@@ -9,10 +14,13 @@ Carga perezosa de modelos. Errores explícitos si falta micro/altavoz o un model
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import threading
 import wave
 from pathlib import Path
@@ -37,6 +45,20 @@ VOCES_CATALOGO: list[dict[str, str]] = [
     {"nombre": "es_MX-claude-high", "region": "México", "calidad": "high"},
     {"nombre": "es_MX-ald-medium", "region": "México", "calidad": "medium"},
     {"nombre": "es_AR-daniela-high", "region": "Argentina", "calidad": "high"},
+]
+
+# Catálogo de voces masculinas de España en la nube (edge-tts, servicio no oficial que
+# reutiliza el TTS neuronal de Microsoft Edge). Motor OPCIONAL y secundario: requiere
+# red, no tiene SLA y solo se activa si el usuario elige una de estas voces a propósito
+# (nube_elegir) — nunca por defecto, ver `VOZ_DEFECTO`/`motor_actual`.
+VOCES_NUBE: list[dict[str, str]] = [
+    {"nombre": "es-ES-AlvaroNeural", "region": "España", "calidad": "nube"},
+    {"nombre": "es-ES-ArnauNeural", "region": "España", "calidad": "nube"},
+    {"nombre": "es-ES-DarioNeural", "region": "España", "calidad": "nube"},
+    {"nombre": "es-ES-EliasNeural", "region": "España", "calidad": "nube"},
+    {"nombre": "es-ES-NilNeural", "region": "España", "calidad": "nube"},
+    {"nombre": "es-ES-SaulNeural", "region": "España", "calidad": "nube"},
+    {"nombre": "es-ES-TeoNeural", "region": "España", "calidad": "nube"},
 ]
 
 _VOZ_PATH = DATA / "voz.json"
@@ -95,15 +117,31 @@ def voces_instaladas() -> list[dict[str, str]]:
     return [v for v in VOCES_CATALOGO if _instalada(v["nombre"])]
 
 
-def _leer_voz_actual() -> str:
+def _leer_voz_json() -> dict:
+    """Lee data/voz.json entero (Piper + estado del motor en la nube comparten el
+    mismo archivo). Dict vacío si no existe o está corrupto."""
     if not _VOZ_PATH.exists():
-        return VOZ_DEFECTO
+        return {}
     try:
         data = json.loads(_VOZ_PATH.read_text(encoding="utf-8"))
-        nombre = data.get("voz") if isinstance(data, dict) else None
-        return nombre if isinstance(nombre, str) and nombre in _nombres_catalogo() else VOZ_DEFECTO
+        return data if isinstance(data, dict) else {}
     except (json.JSONDecodeError, OSError):
-        return VOZ_DEFECTO
+        return {}
+
+
+def _escribir_voz_json(cambios: dict) -> None:
+    """Actualiza solo las claves de `cambios`, preservando el resto (p. ej. elegir
+    una voz Piper no debe borrar la voz en la nube ya guardada, y viceversa)."""
+    with _VOZ_LOCK:
+        DATA.mkdir(parents=True, exist_ok=True)
+        data = _leer_voz_json()
+        data.update(cambios)
+        _VOZ_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _leer_voz_actual() -> str:
+    nombre = _leer_voz_json().get("voz")
+    return nombre if isinstance(nombre, str) and nombre in _nombres_catalogo() else VOZ_DEFECTO
 
 
 def voz_actual_nombre() -> str:
@@ -113,9 +151,48 @@ def voz_actual_nombre() -> str:
 
 
 def _guardar_voz_actual(nombre: str) -> None:
+    _escribir_voz_json({"voz": nombre})
+
+
+# --- Motor en la nube (edge-tts), opcional --------------------------------------
+def _nombres_nube() -> set[str]:
+    return {v["nombre"] for v in VOCES_NUBE}
+
+
+def voces_nube_catalogo() -> list[dict[str, str]]:
+    """Catálogo de voces masculinas de España disponibles en la nube (edge-tts)."""
+    return list(VOCES_NUBE)
+
+
+def motor_actual() -> str:
+    """Motor de voz activo para `hablar()`: 'piper' (local, por defecto) o 'nube'
+    (edge-tts, solo si el usuario la eligió explícitamente con `nube_elegir`)."""
     with _VOZ_LOCK:
-        DATA.mkdir(parents=True, exist_ok=True)
-        _VOZ_PATH.write_text(json.dumps({"voz": nombre}, ensure_ascii=False, indent=2), encoding="utf-8")
+        data = _leer_voz_json()
+    if data.get("motor") == "nube" and data.get("voz_nube") in _nombres_nube():
+        return "nube"
+    return "piper"
+
+
+def voz_nube_actual_nombre() -> Optional[str]:
+    """Nombre de la voz en la nube seleccionada, o None si no hay ninguna elegida."""
+    with _VOZ_LOCK:
+        nombre = _leer_voz_json().get("voz_nube")
+    return nombre if nombre in _nombres_nube() else None
+
+
+def nube_elegir(nombre: str) -> None:
+    """Activa el motor en la nube (edge-tts) con la voz `nombre`. A partir de aquí
+    `hablar()` la usa como primera opción (con fallback automático a Piper si falla).
+    VozError si el nombre no está en `VOCES_NUBE`."""
+    if nombre not in _nombres_nube():
+        raise VozError(f"'{nombre}' no está en el catálogo de voces en la nube.")
+    _escribir_voz_json({"motor": "nube", "voz_nube": nombre})
+
+
+def usar_motor_local() -> None:
+    """Vuelve al motor local (Piper) como voz activa, desactivando la nube."""
+    _escribir_voz_json({"motor": "piper"})
 
 
 def descargar_voz(nombre: str) -> None:
@@ -167,11 +244,10 @@ def sintetizar(texto: str) -> tuple[np.ndarray, int]:
     return data, sr
 
 
-def hablar(texto: str) -> None:
-    """Sintetiza y reproduce el texto por el altavoz."""
-    texto = (texto or "").strip()
-    if not texto:
-        return
+def _hablar_piper(texto: str) -> None:
+    """Sintetiza y reproduce `texto` con Piper (motor base, 100% local/offline). Sin
+    cambios respecto al `hablar()` original: es la implementación de referencia y
+    también el fallback cuando el motor en la nube falla."""
     data, sr = sintetizar(texto)
     try:
         import sounddevice as sd
@@ -182,6 +258,91 @@ def hablar(texto: str) -> None:
         sd.wait()
     except Exception as exc:
         raise VozError(f"No pude reproducir audio (¿altavoz?): {exc}") from exc
+
+
+def _sintetizar_nube(texto: str, nombre: str) -> bytes:
+    """Sintetiza `texto` con edge-tts (voz `nombre`) y devuelve el MP3 resultante.
+    Requiere red; VozError si falta la librería o falla la síntesis (sin red, servicio
+    caído, etc.) — quien llame debe degradar a Piper ante este error."""
+    try:
+        import edge_tts
+    except ImportError as exc:
+        raise VozError("Falta edge-tts: pip install edge-tts") from exc
+
+    async def _generar() -> bytes:
+        comunicador = edge_tts.Communicate(texto, voice=nombre)
+        trozos = bytearray()
+        async for trozo in comunicador.stream():
+            if trozo["type"] == "audio":
+                trozos.extend(trozo["data"])
+        return bytes(trozos)
+
+    try:
+        audio = asyncio.run(_generar())
+    except Exception as exc:  # sin red, servicio no disponible, voz rechazada, etc.
+        raise VozError(f"No pude sintetizar con la voz en la nube '{nombre}': {exc}") from exc
+    if not audio:
+        raise VozError(f"La voz en la nube '{nombre}' no devolvió audio.")
+    return audio
+
+
+def _reproducir_mp3_bloqueante(audio_mp3: bytes) -> None:
+    """Reproduce bytes MP3 hasta el final, bloqueando. Usa VLC (ya es dependencia del
+    proyecto para música, ver `musica/reproductor.py`) en vez de sumar un decodificador
+    MP3 nuevo solo para esto."""
+    from cristopher.musica.reproductor import _preparar_libvlc
+
+    _preparar_libvlc()  # apunta a VLC portable si no hay instalación de sistema
+    try:
+        import vlc
+    except Exception as exc:
+        raise VozError("No encuentro VLC para reproducir la voz en la nube.") from exc
+
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+        f.write(audio_mp3)
+        ruta = f.name
+    try:
+        instancia = vlc.Instance("--no-video", "--quiet")
+        player = instancia.media_player_new()
+        player.set_media(instancia.media_new(ruta))
+        fin = threading.Event()
+        eventos = player.event_manager()
+        eventos.event_attach(vlc.EventType.MediaPlayerEndReached, lambda _e: fin.set())
+        eventos.event_attach(vlc.EventType.MediaPlayerEncounteredError, lambda _e: fin.set())
+        player.play()
+        fin.wait(timeout=60)  # red de seguridad: nunca bloquear para siempre
+        player.stop()
+        player.release()
+        instancia.release()
+    except Exception as exc:
+        raise VozError(f"No pude reproducir la voz en la nube: {exc}") from exc
+    finally:
+        try:
+            os.remove(ruta)
+        except OSError:
+            pass
+
+
+def hablar(texto: str) -> None:
+    """Sintetiza y reproduce el texto por el altavoz.
+
+    Motor local (Piper) por defecto, siempre disponible offline. Si el usuario eligió
+    explícitamente una voz en la nube (`nube_elegir`), se intenta primero; ante
+    cualquier fallo (sin red, servicio caído, falta edge-tts/VLC) degrada de inmediato
+    a Piper sin interrumpir la respuesta — nunca deja a CRISTOPHER sin voz."""
+    texto = (texto or "").strip()
+    if not texto:
+        return
+    if motor_actual() == "nube":
+        nombre_nube = voz_nube_actual_nombre()
+        if nombre_nube is not None:
+            try:
+                audio_mp3 = _sintetizar_nube(texto, nombre_nube)
+                _reproducir_mp3_bloqueante(audio_mp3)
+                return
+            except VozError:
+                pass  # degradación con elegancia (§2/§8): seguimos con Piper local
+    _hablar_piper(texto)
 
 
 # --- Micrófono (push-to-talk) -------------------------------------------------

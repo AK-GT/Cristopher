@@ -95,6 +95,21 @@ Criterios de aceptación (resumen):
 
 **Fase 9 (pulido, pendiente):** interrupciones de voz (barge-in), streaming de respuesta, "habla mientras trabaja" en tareas largas, reducir latencia escuchar→pensar→responder.
 
+**Extensiones post-v1 (construidas, fuera de las 8 fases originales):** modo diario
+(`diario.py`), modo concentración (`concentracion.py`) y modo agentes / sesiones vivas
+de Claude Code (`sesiones.py`, Fases 1-3 de `PLAN_GESTOR_SESIONES.md`). Cada una entró
+por el mismo patrón — un prompt de diseño en un `.md` de la raíz, revisado y aprobado
+antes de tocar código, una fase por sesión — y esos `.md` (`PLAN_GESTOR_SESIONES.md`)
+quedan como documentación del porqué, igual que `cristopher_mega_prompt.md`.
+
+**Backlog (diseñado, aún NO implementado):** `PROMPT_memoria_episodica_para_claude_code.md`
+(línea de tiempo temporal de lo que pasa, tabla `episodios` en `data/memory.db`, distinta
+de la memoria semántica de `memory.py` — no confundir ni tocar esa) y
+`DISENO_motor_huella_por_pivotes.md` (búsqueda OSINT de una persona por pivotes —
+username/email/teléfono — cruzando 2+ fuentes; uso ético: auditoría de la propia huella).
+Son prompts listos para pegar en una sesión de Claude Code cuando toque esa fase; no
+asumas que el código ya existe solo porque el diseño está escrito.
+
 ---
 
 ## Comandos
@@ -169,6 +184,14 @@ hilo. `bus.py` es el pub-sub en memoria que conecta ese worker con las conexione
 del navegador; `estado.py` guarda el flag de modo voz. Las acciones irreversibles
 (`enviar_correo`) usan `set_confirmer` para bloquear el worker hasta que el usuario
 pincha Confirmar/Cancelar en el navegador (con timeout conservador: silencio = no envía).
+Igual que música/notas, las rutas de **modo agentes** (`/sesiones*`) y **concentración**
+(`/concentracion`) llaman a `sesiones.py`/`concentracion.py` **directamente desde el
+hilo HTTP**, nunca por `_JOBS`: son thread-safe por su cuenta (locks propios) y pasar
+por la cola haría esperar una escritura a una sesión detrás del turno en curso de
+CRISTOPHER. Frontend rediseñado en `hud/static/` (`widgets.js` — paneles movibles/
+redimensionables; `bg.js` + `three.min.js` — fondo interactivo y el orbe central como
+red neuronal 3D) sobre el mismo `app.js` que sondea `/musica`, `/notas`, `/concentracion`
+y `/sesiones` y consume el SSE de `/eventos`.
 
 **Módulos de soporte:**
 - `memory.py` — hechos en SQLite + embeddings de Gemini con similitud coseno en Python
@@ -195,9 +218,72 @@ pincha Confirmar/Cancelar en el navegador (con timeout conservador: silencio = n
 - `whatsapp_client.py` — singleton perezoso (mismo patrón que `browser.py`) que lanza
   el servicio Node `whatsapp/server.js` en segundo plano la primera vez que hace falta
   y le habla por HTTP local; `tools/whatsapp_tools.py` lo usa para las 3 tools de
-  WhatsApp, y `proactivo.py::_avisos_whatsapp` para el aviso de mensajes nuevos.
+  WhatsApp, y `proactivo.py::_avisos_whatsapp` para el aviso de mensajes nuevos. Gotcha
+  de Baileys (`whatsapp/wa.js`): `creds.registered` solo se marca `true` en el flujo de
+  código de emparejamiento de 8 dígitos, **no** en el flujo QR que usa `setup_qr.js` —
+  la señal real de "ya vinculado" es `creds.me`. `setup_qr.js` también guarda el QR como
+  `qr.png` además de imprimirlo en ASCII (útil si la terminal no lo renderiza bien).
 - `recordatorios.py` — SQLite (`data/proactivo.db`) con los recordatorios programados
   y el dedup de avisos ya emitidos; lo consume `proactivo.py`.
+- `briefing.py` — súper briefing diario bajo demanda: agenda de hoy, correos, recordatorios
+  y noticias por temas de interés (`data/briefing.json`, gitignored, autoeditado igual que
+  `personalidad.py`); reutiliza `google_tools`/`elite_search`, no `memory.py` (los temas deben
+  regir siempre, no solo cuando el recuerdo semántico los considere relevantes).
+- `notas.py` — notas rápidas del usuario persistidas en la tabla `notas` de
+  `data/memory.db` (reutiliza el SQLite existente de `memory.py`, no uno propio).
+- `tareas.py` — lista de tareas pendientes con estado (`pendiente`/`en_proceso`/`hecho`)
+  en la tabla `tareas` de `data/memory.db` (mismo SQLite reutilizado, calco de
+  `notas.py`); marcar una tarea como `hecho` la borra de la tabla — no hay histórico.
+  CRISTOPHER la gestiona con total libertad (crear/listar/cambiar estado/borrar) vía
+  `tools/tareas_tools.py`, sin gate de confirmación: es una lista local sin efectos
+  externos, no una acción irreversible del §8.
+- `diario.py` / `estado_diario.py` — **modo diario**: reflexión diaria conversacional
+  categorizada (`evento_social`/`dilema`/`hecho_destacado`/`tarea_futura`/`libre`) en la
+  tabla `diario` de `data/memory.db` (mismo SQLite reutilizado). `estado_diario.py` es
+  un flag runtime independiente de `estado.py` (modo voz) — ambos pueden coexistir — que
+  decide si `agent.py::_diario_block` añade el bloque de instrucciones de reflexión al
+  system prompt; se activa/desactiva por intención vía `tools/diario_tools.py`, nunca
+  por keyword.
+- `concentracion.py` — **modo concentración**: orquesta piezas que CRISTOPHER ya
+  controla (minimizar/cerrar apps distractoras vía `system_apps.minimizar_por_nombre`,
+  música de foco vía `musica_tools`, volumen del sistema vía `control_pc_tools`) para
+  defender un bloque de deep work, silenciando (sin perder — se encolan) los avisos de
+  baja prioridad del demonio proactivo mientras dura. Soporta también un modo por
+  turnos (foco→descanso→foco…) solo si el usuario lo pide explícito, nunca por
+  iniciativa propia. Config autoeditable en `data/concentracion.json` (gitignored,
+  mismo patrón que `personalidad.py`/`briefing.py`); estado runtime en memoria (dict +
+  `RLock`, lo tocan el worker del agente y el hilo del demonio) que **no se persiste**
+  a propósito — no debe sobrevivir a un reinicio del proceso. `proactivo.py` la sondea
+  en cada ciclo (`_revisar_concentracion` → `concentracion.tick()`) para cerrar/rotar
+  fases por tiempo sin hilo ni busy-loop propio.
+- `sesiones.py` — **modo agentes**: gestor singleton (`GestorSesiones`) de sesiones
+  vivas de Claude Code, cada una un proceso `claude -p --output-format stream-json
+  --input-format stream-json --permission-mode bypassPermissions --add-dir <carpeta>`
+  de larga duración sobre un proyecto REAL del disco (no sandbox), con un hilo lector
+  por sesión que mantiene `estado`/`transcript` sin bloquear nunca al que llama —
+  distinto de `tools/delegate.py` (`delegar_a_claude`/`analizar_proyecto`), que sigue
+  siendo `subprocess.run` bloqueante de un solo turno. Reutiliza el saneado de entorno
+  de `delegate._entorno_sub_agente()`. Desacoplado del HUD a propósito: expone un
+  callback `on_evento` que `hud/__main__.py` registra para republicar a `bus.py`
+  (`set_sesiones`/`add_sesion_entrada`). Capa "cofounder" en `proactivo.py`
+  (`_revisar_preguntas_sesiones`): cuando una sesión queda en estado `pregunta`,
+  redacta una propuesta de respuesta con la voz de CRISTOPHER (`agent.build_system_prompt()`
+  como `system_instruction`, un `genai.Client` suelto — nunca el `Cristopher` vivo, que
+  está atado al hilo worker de Playwright) y la pasa por el mismo gate de confirmación
+  que `enviar_correo` (`google_tools.confirmar_accion`) antes de enviarla. Ver
+  `PLAN_GESTOR_SESIONES.md` para el diseño completo (Fases 1-3, ya construidas).
+- `musica/` — motor de reproducción propio (`resolver.py` biblioteca local → `yt-dlp`
+  como respaldo web, `reproductor.py` control de VLC vía `python-vlc`, `biblioteca.py`
+  cola/favoritos/listas en SQLite); requiere VLC de 64 bits instalado (o portable en
+  `data/vlc`, ver `config.py::VLC_DIR`).
+- `notificar_remoto.py` — envía un correo directo para avisos proactivos de nivel 3
+  (urgentes); única excepción deliberada al gate de confirmación de `enviar_correo`
+  porque el mensaje lo genera el propio sistema, no el usuario en ese turno.
+- `tools/archivo_tools.py`, `control_pc_tools.py`, `pantalla_tools.py`, `system_apps.py` —
+  utilidades de sistema (buscar/organizar archivos, apagar/bloquear/gestionar ventanas,
+  captura de pantalla con visión, abrir/cerrar apps); cada una implementa su propio
+  "acción con efectos → pide confirmación" según el riesgo real (ver descripciones en
+  `tools/__init__.py`, no asumas el mismo gate para todas).
 - `data/` y `workspace/` son directorios de runtime gitignored (memoria SQLite, perfil
   de navegador, credenciales OAuth, clones de sub-agentes); no asumas que están vacíos
   ni los borres sin confirmar con el usuario.

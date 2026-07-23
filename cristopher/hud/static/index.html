@@ -28,11 +28,13 @@
       </div>
       <div class="clock" id="clock">--:--:--</div>
       <div class="status" id="status"><span class="stled"></span><span id="status-text">reposo</span></div>
+      <button type="button" id="agentes-toggle" class="edit-toggle" title="Modo agentes (sesiones Claude Code)">🤖</button>
+      <button type="button" id="code-toggle" class="edit-toggle" title="Modo code (gestión de sesiones)">🔴</button>
       <button type="button" id="edit-toggle" class="edit-toggle" title="Editar distribución (E)">⚙</button>
     </header>
 
     <!-- Izquierda: métricas de sistema -->
-    <aside class="left panel">
+    <aside class="left panel hud-normal-widget">
       <i class="bracket"></i>
       <div class="widget-drag" aria-hidden="true">⠿</div>
       <div class="widget-resize" aria-hidden="true"></div>
@@ -51,7 +53,9 @@
       <div class="corestat"><span>latido</span><b id="core-beat">·</b></div>
     </aside>
 
-    <!-- Centro: núcleo de partículas -->
+    <!-- Centro: núcleo de partículas. NO lleva hud-normal-widget: en modo code no se
+         oculta, se reduce a una insignia fija (ver style.css §12) para que "la cara"
+         se vea rojiza a la vez que aparece la pantalla de widgets. -->
     <main class="core panel">
       <i class="bracket"></i>
       <div class="widget-drag" aria-hidden="true">⠿</div>
@@ -62,7 +66,7 @@
     </main>
 
     <!-- Derecha: tarea activa · sub-agentes · alertas -->
-    <aside class="right panel">
+    <aside class="right panel hud-normal-widget">
       <i class="bracket"></i>
       <div class="widget-drag" aria-hidden="true">⠿</div>
       <div class="widget-resize" aria-hidden="true"></div>
@@ -71,6 +75,8 @@
       <div class="task" id="task">—</div>
       <div class="panel-title" style="margin-top:18px">SUB-AGENTES</div>
       <div class="roster" id="roster"><div class="empty">sin delegaciones</div></div>
+      <div class="panel-title" style="margin-top:18px">CONCENTRACIÓN</div>
+      <div class="concentracion" id="concentracion" data-activo="0">inactivo</div>
       <div class="panel-title" style="margin-top:18px">ALERTAS</div>
       <div class="alerts" id="alerts"><div class="empty">sin alertas</div></div>
       <div class="panel-title" style="margin-top:18px">NOTAS</div>
@@ -78,7 +84,7 @@
     </aside>
 
     <!-- Barra NOW PLAYING: estado real del reproductor de música -->
-    <section class="nowplaying panel" id="nowplaying" data-sonando="0">
+    <section class="nowplaying panel hud-normal-widget" id="nowplaying" data-sonando="0">
       <i class="bracket"></i>
       <div class="widget-drag" aria-hidden="true">⠿</div>
       <div class="widget-resize" aria-hidden="true"></div>
@@ -121,7 +127,7 @@
     </section>
 
     <!-- Abajo: consola en streaming + entrada -->
-    <footer class="console panel">
+    <footer class="console panel hud-normal-widget">
       <i class="bracket"></i>
       <div class="widget-drag" aria-hidden="true">⠿</div>
       <div class="widget-resize" aria-hidden="true"></div>
@@ -134,6 +140,111 @@
         <button type="submit">enviar</button>
       </form>
     </footer>
+
+    <!-- Modo code (Fase 1): pantalla dedicada de widgets, solo visible con
+         body[data-modo="code"]. Conversación y layout propios, independientes del
+         modo normal (ver PLAN_CRISTOPHER_CODE.md). -->
+    <div class="hud-code">
+      <div class="code-sesiones panel">
+        <i class="bracket"></i>
+        <div class="widget-drag" aria-hidden="true">⠿</div>
+        <div class="widget-resize" aria-hidden="true"></div>
+        <button type="button" class="widget-remove" aria-hidden="true" tabindex="-1" title="Ocultar">×</button>
+        <div class="panel-title">SESIONES</div>
+        <div class="code-lista" id="code-sesiones-lista"><div class="empty">sin sesiones</div></div>
+        <form class="code-crear" id="code-form-crear" autocomplete="off">
+          <select id="code-tipo">
+            <option value="code">code (proyecto real)</option>
+            <option value="chat">chat (idear, sin proyecto)</option>
+          </select>
+          <input id="code-nombre" type="text" placeholder="nombre" required />
+          <input id="code-ruta" type="text" placeholder="carpeta del proyecto (ruta real)" required />
+          <input id="code-tarea" type="text" placeholder="tarea inicial" required />
+          <label class="code-worktree-label">
+            <input id="code-aislamiento-worktree" type="checkbox" />
+            usar git worktree (aislado)
+          </label>
+          <select id="code-modelo">
+            <option value="sonnet">sonnet (por defecto)</option>
+            <option value="opus">opus (solo si hace falta)</option>
+          </select>
+          <input id="code-quality-gate" type="text" placeholder="comando de calidad tras editar (opcional)" />
+          <button type="submit">crear sesión</button>
+        </form>
+      </div>
+
+      <div class="code-chat panel">
+        <i class="bracket"></i>
+        <div class="widget-drag" aria-hidden="true">⠿</div>
+        <div class="widget-resize" aria-hidden="true"></div>
+        <button type="button" class="widget-remove" aria-hidden="true" tabindex="-1" title="Ocultar">×</button>
+        <div class="panel-title">CHAT CON CRISTOPHER</div>
+        <div class="log" id="code-log"></div>
+        <form class="input" id="code-form" autocomplete="off">
+          <span class="prompt">›</span>
+          <input id="code-entrada" type="text" placeholder="Dile a CRISTOPHER qué hacer…" />
+          <button type="submit">enviar</button>
+        </form>
+      </div>
+
+      <div class="code-activa panel">
+        <i class="bracket"></i>
+        <div class="widget-drag" aria-hidden="true">⠿</div>
+        <div class="widget-resize" aria-hidden="true"></div>
+        <button type="button" class="widget-remove" aria-hidden="true" tabindex="-1" title="Ocultar">×</button>
+        <div class="panel-title">SESIÓN ACTIVA</div>
+        <div class="code-tabs">
+          <button type="button" class="code-tab sel" id="code-tab-transcript" data-tab="transcript">Transcript</button>
+          <button type="button" class="code-tab" id="code-tab-diff" data-tab="diff">Diff</button>
+        </div>
+        <div class="code-transcript" id="code-transcript"><div class="empty">selecciona una sesión</div></div>
+        <pre class="code-diff" id="code-diff" hidden><div class="empty">selecciona una sesión</div></pre>
+        <form class="code-escribir" id="code-sesion-form-escribir" autocomplete="off">
+          <input id="code-sesion-mensaje" type="text" placeholder="escribe a la sesión…" disabled />
+          <button type="submit" disabled>enviar</button>
+          <button type="button" id="code-sesion-parar" disabled>parar</button>
+        </form>
+      </div>
+
+      <div class="code-asesor panel">
+        <i class="bracket"></i>
+        <div class="widget-drag" aria-hidden="true">⠿</div>
+        <div class="widget-resize" aria-hidden="true"></div>
+        <button type="button" class="widget-remove" aria-hidden="true" tabindex="-1" title="Ocultar">×</button>
+        <div class="panel-title">ASESOR</div>
+        <div class="code-conflictos" id="code-conflictos"><div class="empty">sin conflictos</div></div>
+        <div class="code-asesor-botones">
+          <button type="button" id="code-btn-prioridades">Pedir prioridades</button>
+          <button type="button" id="code-btn-revisar">Revisar sesión seleccionada</button>
+        </div>
+      </div>
+
+      <div class="code-tareas panel">
+        <i class="bracket"></i>
+        <div class="widget-drag" aria-hidden="true">⠿</div>
+        <div class="widget-resize" aria-hidden="true"></div>
+        <button type="button" class="widget-remove" aria-hidden="true" tabindex="-1" title="Ocultar">×</button>
+        <div class="panel-title">TAREAS</div>
+        <div class="code-tablero" id="code-tablero">
+          <div class="code-columna" data-estado="pendiente">
+            <div class="code-columna-titulo">Pendiente</div>
+            <div class="code-columna-tarjetas" id="code-col-pendiente"></div>
+          </div>
+          <div class="code-columna" data-estado="en_proceso">
+            <div class="code-columna-titulo">En curso</div>
+            <div class="code-columna-tarjetas" id="code-col-en_proceso"></div>
+          </div>
+          <div class="code-columna" data-estado="en_revision">
+            <div class="code-columna-titulo">Revisión</div>
+            <div class="code-columna-tarjetas" id="code-col-en_revision"></div>
+          </div>
+          <div class="code-columna" data-estado="hecho">
+            <div class="code-columna-titulo">Hecho</div>
+            <div class="code-columna-tarjetas" id="code-col-hecho"></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Toolbar de distribuciones (solo visible en modo edición) -->
@@ -162,9 +273,37 @@
     </div>
   </div>
 
+  <!-- Modo agentes: sesiones vivas de Claude Code (Fase 2) -->
+  <div class="agentes-overlay" id="agentes-overlay" hidden>
+    <div class="agentes-card panel">
+      <i class="bracket"></i>
+      <div class="panel-title">MODO AGENTES · SESIONES CLAUDE CODE</div>
+      <button type="button" class="agentes-close" id="agentes-close" title="Cerrar">×</button>
+      <div class="agentes-body">
+        <div class="agentes-lista" id="agentes-lista"><div class="empty">sin sesiones</div></div>
+        <div class="agentes-detalle">
+          <div class="agentes-transcript" id="agentes-transcript"><div class="empty">selecciona una sesión</div></div>
+          <form class="agentes-escribir" id="agentes-form-escribir" autocomplete="off">
+            <input id="agentes-mensaje" type="text" placeholder="Escribe a la sesión seleccionada…" disabled />
+            <button type="submit" disabled>enviar</button>
+            <button type="button" id="agentes-parar" disabled>parar</button>
+          </form>
+        </div>
+      </div>
+      <div class="panel-title" style="margin-top:14px">NUEVA SESIÓN</div>
+      <form class="agentes-crear" id="agentes-form-crear" autocomplete="off">
+        <input id="agentes-nombre" type="text" placeholder="nombre" required />
+        <input id="agentes-ruta" type="text" placeholder="carpeta del proyecto (ruta real)" required />
+        <input id="agentes-tarea" type="text" placeholder="tarea inicial" required />
+        <button type="submit">crear</button>
+      </form>
+    </div>
+  </div>
+
   <script src="three.min.js"></script>
   <script src="app.js"></script>
   <script src="widgets.js"></script>
+  <script src="code.js"></script>
   <script src="bg.js"></script>
 </body>
 </html>

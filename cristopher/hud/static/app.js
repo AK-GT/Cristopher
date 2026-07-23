@@ -538,6 +538,12 @@
   let cur = Object.assign({}, TARGETS.reposo);
   let target = TARGETS.reposo;
   let prevStateName = "reposo", flash = 0;
+  // Modo code (Cristopher Code, Fase 1): el orbe converge a esta variante roja en
+  // vez del color por estado mientras el modo esté activo (ver setModo más abajo).
+  // El TARGETS/uCol de arriba es el único punto de color de toda la geometría (§1
+  // de las correcciones al plan), así que basta este override en animate().
+  let modoCode = false;
+  const CODE_COL = 0xE24B4A;
   function setCoreState(s) {
     if (s === "pensando" && prevStateName !== "pensando") flash = 1.0;  // destello al entrar
     prevStateName = s;
@@ -559,8 +565,9 @@
     U.uBright.value = cur.bright;
     U.uWave.value = cur.wave;
     U.uFreq.value = cur.freq;
-    // Color del estado: todas las capas convergen al mismo tono suavemente.
-    targetCol.set(target.col);
+    // Color del estado: todas las capas convergen al mismo tono suavemente. En modo
+    // code, el rojo manda sobre el color del estado (reposo/pensando/…).
+    targetCol.set(modoCode ? CODE_COL : target.col);
     U.uCol.value.lerp(targetCol, 0.04);
 
     flash *= 0.9;  // decae solo (destello de un solo disparo al entrar en "pensando")
@@ -631,12 +638,38 @@
     $("cpu-bar").style.width = Math.min(100, m.cpu) + "%";
     $("ram-bar").style.width = Math.min(100, m.ram) + "%";
   }
+  // Modo code (Fase 1): flag global que retiñe el orbe (arriba) y transforma la
+  // pantalla vía CSS (body[data-modo="code"], ver style.css §12). code.js escucha
+  // este mismo cambio para arrancar sus propios widgets si hace falta.
+  function setModo(activo) {
+    modoCode = !!activo;
+    document.body.dataset.modo = modoCode ? "code" : "normal";
+    window.__hudCodeSetModo && window.__hudCodeSetModo(modoCode);
+  }
   function setTarea(txt) { $("task").textContent = txt || "—"; }
   function setRoster(list) {
     const el = $("roster");
     if (!list || !list.length) { el.innerHTML = '<div class="empty">sin delegaciones</div>'; return; }
     el.innerHTML = list.map((s) => `<div class="item"><b>${esc(s.nombre)}</b> <small>${esc(s.hora || "")}</small></div>`).join("");
   }
+  function setConcentracion(c) {
+    const el = $("concentracion");
+    if (!c || !c.activo) { el.textContent = "inactivo"; el.dataset.activo = "0"; return; }
+    el.dataset.activo = "1";
+    const mins = Math.floor((c.restante_seg || 0) / 60);
+    const segs = (c.restante_seg || 0) % 60;
+    let txt = (c.fase === "descanso" ? "Descanso" : "Concentración") +
+      ` · ${mins}m ${String(segs).padStart(2, "0")}s`;
+    if (c.ciclo) txt += ` · bloque ${c.ciclo.bloque_actual}/${c.ciclo.bloques_totales}`;
+    if (c.avisos_en_cola) txt += ` · ${c.avisos_en_cola} en cola`;
+    el.textContent = txt;
+  }
+  function concentracionTick() {
+    fetch("/concentracion").then((r) => r.json()).then(setConcentracion).catch(() => {});
+  }
+  concentracionTick();
+  setInterval(concentracionTick, 5000);
+
   const alertBox = $("alerts");
   function addAlerta(a) {
     if (alertBox.querySelector(".empty")) alertBox.innerHTML = "";
@@ -647,6 +680,10 @@
   }
   const logEl = $("log");
   function addLog(e) {
+    // Cada entrada viene etiquetada con el modo en que se generó (bus.py::log). Las
+    // de modo code se pintan en su propia consola (code.js), no en la de aquí, para
+    // no mezclar las dos conversaciones (corrección §2 al plan original).
+    if (e.modo === "code") { window.__hudCodeLog && window.__hudCodeLog(e); return; }
     const d = document.createElement("div");
     d.className = "l " + e.kind;
     const pref = { user: "tú", answer: "CRIS", thought: "···", tool_call: "→", observation: "obs", error: "!!" }[e.kind] || e.kind;
@@ -658,10 +695,13 @@
 
   function applySnapshot(s) {
     setEstado(s.estado || "reposo");
+    setModo(s.modo_code);
     if (s.metricas) setMetricas(s.metricas);
     setTarea(s.tarea); setRoster(s.subagentes);
     if (s.alertas) s.alertas.slice().reverse().forEach(addAlerta);
     if (s.log) s.log.forEach(addLog);
+    if (s.sesiones) { pintarSesiones(s.sesiones); window.__hudCodeSesiones && window.__hudCodeSesiones(s.sesiones); }
+    if (s.concentracion) setConcentracion(s.concentracion);
   }
 
   // ---------- SSE ----------
@@ -678,6 +718,16 @@
         case "subagentes": setRoster(m.datos); break;
         case "alerta": addAlerta(m.datos); break;
         case "confirmacion": showConfirm(m.datos); break;
+        case "sesiones":
+          pintarSesiones(m.datos);
+          window.__hudCodeSesiones && window.__hudCodeSesiones(m.datos);
+          break;
+        case "concentracion": setConcentracion(m.datos); break;
+        case "modo_code": setModo(m.datos); break;
+        case "sesion_entrada":
+          if (m.datos.nombre === sesionSeleccionada) appendTranscriptEntry(m.datos.entrada);
+          window.__hudCodeSesionEntrada && window.__hudCodeSesionEntrada(m.datos);
+          break;
       }
     };
     es.onerror = () => { es.close(); setTimeout(conectar, 2000); };
@@ -827,6 +877,118 @@
   }
   notasTick();
   setInterval(notasTick, 4000);
+
+  // ---------- MODO AGENTES (sesiones vivas de Claude Code, Fase 2) ----------
+  const ag = {
+    overlay: $("agentes-overlay"), lista: $("agentes-lista"), transcript: $("agentes-transcript"),
+    formEscribir: $("agentes-form-escribir"), mensaje: $("agentes-mensaje"), parar: $("agentes-parar"),
+    formCrear: $("agentes-form-crear"), nombre: $("agentes-nombre"), ruta: $("agentes-ruta"), tarea: $("agentes-tarea"),
+  };
+  let sesionSeleccionada = null;
+  let sesionesCache = [];
+  const ICONOS_ESTADO = { arrancando: "🟡", trabajando: "🔧", esperando: "🟢", pregunta: "❓", terminado: "⚪", error: "🔴" };
+
+  function pintarSesiones(list) {
+    sesionesCache = list || [];
+    if (!sesionesCache.length) { ag.lista.innerHTML = '<div class="empty">sin sesiones</div>'; return; }
+    ag.lista.innerHTML = sesionesCache.map((s) => `
+      <div class="item${s.nombre === sesionSeleccionada ? " sel" : ""}" data-nombre="${esc(s.nombre)}">
+        <b>${ICONOS_ESTADO[s.estado] || "•"} ${esc(s.nombre)} [${esc(s.estado)}]</b>
+        <small>${esc(s.ruta)}</small>
+      </div>`).join("");
+    ag.lista.querySelectorAll(".item").forEach((el) => {
+      el.addEventListener("click", () => seleccionarSesion(el.dataset.nombre));
+    });
+    // Si la sesión ya no existe (no debería pasar) desactiva los controles.
+    if (sesionSeleccionada && !sesionesCache.some((s) => s.nombre === sesionSeleccionada)) {
+      sesionSeleccionada = null;
+      actualizarControles();
+    }
+  }
+
+  function actualizarControles() {
+    const activa = !!sesionSeleccionada;
+    ag.mensaje.disabled = !activa;
+    ag.formEscribir.querySelector('button[type="submit"]').disabled = !activa;
+    ag.parar.disabled = !activa;
+  }
+
+  function pintarEntradaTranscript(e) {
+    const d = document.createElement("div");
+    d.className = "e";
+    d.innerHTML = `<span class="t">${esc(e.ts || "")}</span><b>${esc(e.rol)}:</b> ${esc(e.texto)}`;
+    return d;
+  }
+
+  function appendTranscriptEntry(entrada) {
+    if (ag.transcript.querySelector(".empty")) ag.transcript.innerHTML = "";
+    ag.transcript.appendChild(pintarEntradaTranscript(entrada));
+    ag.transcript.scrollTop = ag.transcript.scrollHeight;
+  }
+
+  function cargarTranscript(nombre) {
+    fetch("/sesiones/leer?nombre=" + encodeURIComponent(nombre) + "&n=200")
+      .then((r) => r.json())
+      .then((d) => {
+        const entradas = (d && d.transcript) || [];
+        if (!entradas.length) { ag.transcript.innerHTML = '<div class="empty">todavía sin transcript</div>'; return; }
+        ag.transcript.innerHTML = "";
+        entradas.forEach((e) => ag.transcript.appendChild(pintarEntradaTranscript(e)));
+        ag.transcript.scrollTop = ag.transcript.scrollHeight;
+      })
+      .catch(() => {});
+  }
+
+  function seleccionarSesion(nombre) {
+    sesionSeleccionada = nombre;
+    pintarSesiones(sesionesCache);
+    actualizarControles();
+    cargarTranscript(nombre);
+  }
+
+  function sesionesTick() {
+    fetch("/sesiones").then((r) => r.json()).then((d) => pintarSesiones(d.sesiones || [])).catch(() => {});
+  }
+
+  $("agentes-toggle").addEventListener("click", () => {
+    ag.overlay.hidden = false;
+    sesionesTick();
+  });
+  $("agentes-close").addEventListener("click", () => { ag.overlay.hidden = true; });
+
+  ag.formCrear.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const nombre = ag.nombre.value.trim(), ruta = ag.ruta.value.trim(), tarea = ag.tarea.value.trim();
+    if (!nombre || !ruta || !tarea) return;
+    fetch("/sesiones/crear", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nombre, ruta, tarea }),
+    }).then((r) => r.json()).then((d) => {
+      if (d.ok) { ag.nombre.value = ""; ag.ruta.value = ""; ag.tarea.value = ""; sesionesTick(); }
+      else alert(d.error || "No se pudo crear la sesión.");
+    }).catch(() => {});
+  });
+
+  ag.formEscribir.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const mensaje = ag.mensaje.value.trim();
+    if (!mensaje || !sesionSeleccionada) return;
+    ag.mensaje.value = "";
+    fetch("/sesiones/escribir", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nombre: sesionSeleccionada, mensaje }),
+    }).catch(() => {});
+  });
+
+  ag.parar.addEventListener("click", () => {
+    if (!sesionSeleccionada) return;
+    fetch("/sesiones/parar", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nombre: sesionSeleccionada }),
+    }).then(() => sesionesTick()).catch(() => {});
+  });
+
+  actualizarControles();
 
   // ---------- Reloj ----------
   function tick() { $("clock").textContent = new Date().toLocaleTimeString("es-ES"); }

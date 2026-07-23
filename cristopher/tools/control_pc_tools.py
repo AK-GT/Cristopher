@@ -30,6 +30,13 @@ def _endpoint_volume():
     return AudioUtilities.GetSpeakers().EndpointVolume
 
 
+def _volumen_actual() -> int:
+    """Lee el nivel MAESTRO actual (0-100). Usada por el modo concentración para
+    guardar el volumen previo y poder restaurarlo; no es una tool de la LLM."""
+    vol = _endpoint_volume()
+    return round(vol.GetMasterVolumeLevelScalar() * 100)
+
+
 def volumen_sistema(accion: str, nivel: int | None = None) -> str:
     """Ajusta el volumen MAESTRO del sistema (distinto del volumen de la música).
 

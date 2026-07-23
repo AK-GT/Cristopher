@@ -47,6 +47,13 @@ def set_confirmer(fn: Callable[[str], bool]) -> None:
     _confirm = fn
 
 
+def confirmar_accion(prompt: str) -> bool:
+    """Punto de entrada público al MISMO gate de confirmación que usan
+    enviar_correo/crear_evento (§9). Lo usa proactivo.py (Fase 3, capa cofounder)
+    para pedir aprobación antes de responder por una sesión de Claude Code."""
+    return _confirm(prompt)
+
+
 # --- Calendar (lectura) -------------------------------------------------------
 def proximo_evento(n: int = 1) -> str:
     """Devuelve los próximos N eventos del calendario principal.

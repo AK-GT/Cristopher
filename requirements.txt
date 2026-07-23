@@ -21,6 +21,12 @@ sounddevice>=0.4.6
 numpy>=1.24.0
 pynput>=1.7.0
 
+# Voz — motor en la nube OPCIONAL (voces masculinas de España vía edge-tts, servicio no
+# oficial de Microsoft Edge). Piper sigue siendo el motor por defecto y offline; esto
+# solo hace falta si el usuario elige explícitamente una voz en la nube (voz.nube_elegir).
+# Reproduce el MP3 resultante con VLC (ya es dependencia del proyecto, ver más abajo).
+edge-tts>=6.1.0
+
 # Fase 8 — HUD. Métricas de sistema. three.js va vendorizado en
 # cristopher/hud/static/three.min.js (offline, sin CDN).
 psutil>=5.9.0
@@ -42,6 +48,15 @@ mss>=9.0                # captura de pantalla rápida; entrega PNG directo (sin 
 # El resto del módulo (bloquear, apagar/reiniciar/suspender, ventanas) es ctypes/subprocess.
 pycaw>=20230407         # volumen maestro del sistema (Core Audio)
 comtypes>=1.2.0         # dependencia de pycaw (COM en Windows)
+
+# Motor de huella digital por pivotes (Tanda A) — pivote username.
+# Gotcha verificado en Windows: `aiodns` (dependencia de Maigret) usa pycares, que en
+# esta máquina no detecta los DNS del adaptador de red y rompe TODAS las resoluciones
+# (tanto de Maigret como de Socialscan, que comparte aiohttp). Mitigación en huella.py:
+# Maigret se lanza con --dns-resolver threaded; Socialscan bloquea el import de aiodns
+# antes de arrancar. Ver docstring de cristopher/huella.py para el detalle completo.
+maigret>=0.6.3
+socialscan>=2.0.1
 
 # Integración de WhatsApp (Baileys) — nada nuevo en pip: `requests` ya llega
 # transitivamente vía google-genai (igual que para Tavily). El servicio en sí es

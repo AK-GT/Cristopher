@@ -318,6 +318,11 @@ body[data-estado="pensando"] .core{
   padding-left:11px; border-left:2px solid var(--line-cyan);
 }
 .roster .empty,.alerts .empty{color:var(--steel); font-size:11px; font-style:italic}
+.concentracion{
+  font-family:var(--mono); font-size:12px; color:var(--steel); line-height:1.5;
+  padding-left:11px; border-left:2px solid var(--steel);
+}
+.concentracion[data-activo="1"]{color:var(--cyan-glow); border-left-color:var(--cyan)}
 .roster .item{
   font-family:var(--mono); font-size:11px; color:var(--steel-2);
   padding:7px 9px; border-left:2px solid var(--cyan);
@@ -429,6 +434,238 @@ body[data-estado="pensando"] .core{
 .btn-cancel:hover{border-color:var(--steel-2); color:var(--text-hi)}
 .btn-ok{background:linear-gradient(180deg, rgba(34,211,238,.20), rgba(34,211,238,.10)); border:1px solid var(--line-cyan); color:var(--cyan-glow)}
 .btn-ok:hover{background:linear-gradient(180deg, rgba(34,211,238,.32), rgba(34,211,238,.18)); box-shadow:0 0 16px -2px rgba(34,211,238,.4)}
+
+/* ---------- 12a. Modal "modo agentes" (sesiones Claude Code) ---------- */
+.agentes-overlay{
+  position:fixed; inset:0; z-index:20; display:flex; align-items:center; justify-content:center;
+  background:rgba(4,7,12,.74); backdrop-filter:blur(4px);
+  animation:fade .2s var(--ease) both;
+}
+.agentes-overlay[hidden]{display:none}
+.agentes-card{
+  width:min(920px,94vw); max-height:88vh; display:flex; flex-direction:column;
+  border-color:var(--line-cyan); box-shadow:0 0 60px -10px rgba(34,211,238,.22), var(--shadow);
+  animation:pop .28s var(--ease) both;
+}
+.agentes-close{
+  position:absolute; top:14px; right:15px; background:transparent; border:1px solid var(--line);
+  color:var(--steel-2); width:24px; height:24px; border-radius:50%; cursor:pointer; font-size:14px;
+  line-height:1; transition:border-color .2s var(--ease), color .2s var(--ease);
+}
+.agentes-close:hover{border-color:var(--line-cyan); color:var(--cyan-glow)}
+.agentes-body{display:flex; gap:14px; min-height:0; flex:1}
+.agentes-lista{
+  flex:0 0 220px; overflow-y:auto; border-right:1px solid var(--line); padding-right:12px;
+}
+.agentes-lista .empty,.agentes-transcript .empty{color:var(--steel); font-size:11px; font-style:italic}
+.agentes-lista .item{
+  font-family:var(--mono); font-size:11px; color:var(--steel-2); cursor:pointer;
+  padding:8px 9px; border-left:2px solid var(--steel); border-radius:0 var(--r) var(--r) 0;
+  margin-bottom:6px; transition:background .15s var(--ease), border-color .15s var(--ease);
+}
+.agentes-lista .item:hover{background:rgba(34,211,238,.06)}
+.agentes-lista .item.sel{border-color:var(--cyan); background:rgba(34,211,238,.10)}
+.agentes-lista .item b{color:var(--cyan-glow); display:block}
+.agentes-lista .item small{opacity:.6; display:block; margin-top:2px; word-break:break-all}
+.agentes-detalle{flex:1; display:flex; flex-direction:column; min-width:0}
+.agentes-transcript{
+  flex:1; overflow-y:auto; font-family:var(--mono); font-size:12px; line-height:1.55;
+  padding:4px 4px 4px 0; white-space:pre-wrap; word-break:break-word;
+}
+.agentes-transcript .e{padding:3px 0; animation:log-in .28s var(--ease) both}
+.agentes-transcript .e .t{color:var(--steel); opacity:.55; margin-right:8px; font-variant-numeric:tabular-nums}
+.agentes-transcript .e b{display:inline-block; min-width:56px; margin-right:6px; opacity:.9}
+.agentes-escribir{display:flex; align-items:center; gap:9px; margin-top:10px; border-top:1px solid var(--line); padding-top:10px}
+.agentes-escribir input{
+  flex:1; background:rgba(6,10,16,.66); border:1px solid var(--line); color:var(--text);
+  font-family:var(--mono); font-size:12.5px; padding:9px 12px; border-radius:var(--r); outline:none;
+}
+.agentes-escribir input:focus{border-color:var(--line-cyan); box-shadow:0 0 0 3px rgba(34,211,238,.10)}
+.agentes-escribir button{
+  font-family:var(--mono); font-size:11.5px; letter-spacing:.06em; padding:9px 15px;
+  border-radius:var(--r); cursor:pointer; text-transform:uppercase;
+  background:transparent; border:1px solid var(--line); color:var(--steel-2);
+  transition:border-color .2s var(--ease), color .2s var(--ease);
+}
+.agentes-escribir button[type="submit"]{border-color:var(--line-cyan); color:var(--cyan-glow)}
+.agentes-escribir button:disabled{opacity:.4; cursor:not-allowed}
+.agentes-crear{display:flex; align-items:center; gap:9px; flex-wrap:wrap}
+.agentes-crear input{
+  background:rgba(6,10,16,.66); border:1px solid var(--line); color:var(--text);
+  font-family:var(--mono); font-size:12.5px; padding:9px 12px; border-radius:var(--r); outline:none;
+}
+.agentes-crear input:focus{border-color:var(--line-cyan); box-shadow:0 0 0 3px rgba(34,211,238,.10)}
+#agentes-nombre{flex:0 1 140px}
+#agentes-ruta{flex:1 1 260px}
+#agentes-tarea{flex:1 1 260px}
+.agentes-crear button{
+  font-family:var(--mono); font-size:11.5px; letter-spacing:.06em; padding:9px 18px;
+  border-radius:var(--r); cursor:pointer; text-transform:uppercase;
+  background:linear-gradient(180deg, rgba(34,211,238,.18), rgba(34,211,238,.10));
+  border:1px solid var(--line-cyan); color:var(--cyan-glow);
+}
+.agentes-crear button:hover{background:linear-gradient(180deg, rgba(34,211,238,.30), rgba(34,211,238,.16))}
+
+/* ---------- 12. Modo code ("Cristopher Code", Fase 1) ---------- */
+/* Skin rojo: remapea los acentes cian a una rampa roja bajo el mismo body[data-...]
+   que ya usa el HUD para estado/edición. Cubre bordes/LEDs/botones/texto de log de
+   forma automática (todo lo que ya usa var(--cyan)/var(--line-cyan) etc). El orbe 3D
+   NO lee estas variables (su color sale de TARGETS/uCol en app.js) — se retiñe aparte. */
+body[data-modo="code"]{
+  --cyan:#E24B4A;
+  --cyan-bright:#F09595;
+  --cyan-glow:#F0997B;
+  --line-cyan:rgba(226,75,74,.28);
+}
+/* Los 4 widgets del modo normal que no aportan nada en code (izquierda/derecha/
+   now playing/consola) se ocultan; la topbar (reloj/estado/botones) es común a
+   ambos modos y sigue viéndose siempre. El núcleo (.core) NO se oculta: se encoge
+   a una insignia fija en la esquina (regla siguiente) para que "la cara" del modo
+   se vea rojiza a la vez que aparece la pantalla de widgets. */
+body[data-modo="code"] .hud-normal-widget{display:none !important}
+body[data-modo="code"] .core{
+  position:fixed; top:66px; right:18px; width:150px; height:150px; z-index:3;
+  padding:0; border:none; background:none; box-shadow:none; pointer-events:none;
+}
+body[data-modo="code"] .core .bracket,
+body[data-modo="code"] .core::before,
+body[data-modo="code"] .core::after,
+body[data-modo="code"] .core .widget-drag,
+body[data-modo="code"] .core .widget-resize,
+body[data-modo="code"] .core .widget-remove,
+body[data-modo="code"] .core .core-caption{display:none}
+
+/* Pantalla dedicada del modo code: ocupa el mismo hueco de la rejilla de .hud que
+   dejan libres los 5 widgets normales ocultos (todo menos la fila de la topbar). */
+.hud-code{display:none; grid-column:1/13; grid-row:2/15}
+body[data-modo="code"] .hud-code{
+  display:grid; grid-template-columns:repeat(12, 1fr); grid-template-rows:repeat(13, 1fr);
+  gap:var(--gap);
+}
+.code-sesiones{grid-column:1/4; grid-row:1/9; display:flex; flex-direction:column; min-height:0}
+.code-chat{grid-column:4/10; grid-row:1/9; display:flex; flex-direction:column; min-height:0}
+.code-activa{grid-column:10/13; grid-row:1/9; display:flex; flex-direction:column; min-height:0}
+.code-asesor{grid-column:1/5; grid-row:9/14; display:flex; flex-direction:column; min-height:0}
+.code-tareas{grid-column:5/13; grid-row:9/14; display:flex; flex-direction:column; min-height:0}
+
+.code-lista{flex:1; overflow-y:auto; min-height:0}
+.code-lista .item{
+  font-family:var(--mono); font-size:11px; color:var(--steel-2); cursor:pointer;
+  padding:8px 9px; border-left:2px solid var(--steel); border-radius:0 var(--r) var(--r) 0;
+  margin-bottom:6px; transition:background .15s var(--ease), border-color .15s var(--ease);
+}
+.code-lista .item:hover{background:rgba(226,75,74,.08)}
+.code-lista .item.sel{border-color:var(--cyan); background:rgba(226,75,74,.12)}
+.code-lista .item b{color:var(--cyan-glow); display:block}
+.code-lista .item small{opacity:.6; display:block; margin-top:2px; word-break:break-all}
+.code-lista .empty,.code-transcript .empty,.code-diff .empty,.code-conflictos .empty{color:var(--steel); font-size:11px; font-style:italic}
+
+.code-transcript{
+  flex:1; overflow-y:auto; min-height:0; font-family:var(--mono); font-size:12px;
+  line-height:1.55; padding:4px 4px 4px 0; white-space:pre-wrap; word-break:break-word;
+}
+.code-transcript .e{padding:3px 0; animation:log-in .28s var(--ease) both}
+.code-transcript .e .t{color:var(--steel); opacity:.55; margin-right:8px; font-variant-numeric:tabular-nums}
+.code-transcript .e b{display:inline-block; min-width:56px; margin-right:6px; opacity:.9}
+
+.code-escribir{display:flex; align-items:center; gap:9px; margin-top:10px; border-top:1px solid var(--line); padding-top:10px}
+.code-escribir input{
+  flex:1; background:rgba(6,10,16,.66); border:1px solid var(--line); color:var(--text);
+  font-family:var(--mono); font-size:12.5px; padding:9px 12px; border-radius:var(--r); outline:none;
+}
+.code-escribir input:focus{border-color:var(--line-cyan); box-shadow:0 0 0 3px rgba(226,75,74,.10)}
+.code-escribir button{
+  font-family:var(--mono); font-size:11.5px; letter-spacing:.06em; padding:9px 15px;
+  border-radius:var(--r); cursor:pointer; text-transform:uppercase;
+  background:transparent; border:1px solid var(--line); color:var(--steel-2);
+  transition:border-color .2s var(--ease), color .2s var(--ease);
+}
+.code-escribir button[type="submit"]{border-color:var(--line-cyan); color:var(--cyan-glow)}
+.code-escribir button:disabled{opacity:.4; cursor:not-allowed}
+
+.code-crear{display:flex; flex-direction:column; gap:8px; margin-top:12px; border-top:1px solid var(--line); padding-top:10px}
+.code-crear input{
+  background:rgba(6,10,16,.66); border:1px solid var(--line); color:var(--text);
+  font-family:var(--mono); font-size:12px; padding:8px 11px; border-radius:var(--r); outline:none;
+}
+.code-crear input:focus{border-color:var(--line-cyan); box-shadow:0 0 0 3px rgba(226,75,74,.10)}
+.code-crear button{
+  font-family:var(--mono); font-size:11px; letter-spacing:.06em; padding:8px 14px;
+  border-radius:var(--r); cursor:pointer; text-transform:uppercase; align-self:flex-start;
+  background:linear-gradient(180deg, rgba(226,75,74,.20), rgba(226,75,74,.10));
+  border:1px solid var(--line-cyan); color:var(--cyan-glow);
+}
+.code-crear button:hover{background:linear-gradient(180deg, rgba(226,75,74,.32), rgba(226,75,74,.16))}
+
+.code-worktree-label{
+  display:flex; align-items:center; gap:7px; font-family:var(--mono); font-size:11px;
+  color:var(--steel-2); cursor:pointer;
+}
+.code-worktree-label input{accent-color:var(--cyan); cursor:pointer}
+
+/* Pestañas Transcript/Diff (widget Sesión activa, Fase 2) */
+.code-tabs{display:flex; gap:6px; margin-bottom:8px}
+.code-tab{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;
+  padding:5px 11px; border-radius:var(--r); cursor:pointer;
+  background:transparent; border:1px solid var(--line); color:var(--steel-2);
+  transition:border-color .2s var(--ease), color .2s var(--ease), background .2s var(--ease);
+}
+.code-tab:hover{border-color:var(--line-cyan); color:var(--cyan-glow)}
+.code-tab.sel{border-color:var(--line-cyan); color:var(--cyan-glow); background:rgba(226,75,74,.12)}
+
+.code-diff{
+  flex:1; overflow-y:auto; min-height:0; font-family:var(--mono); font-size:11.5px;
+  line-height:1.5; padding:4px 4px 4px 0; white-space:pre-wrap; word-break:break-word;
+  margin:0;
+}
+.code-diff .d-add{color:#8FD19E}
+.code-diff .d-del{color:var(--cyan-glow)}
+.code-diff .d-hunk{color:var(--steel-2); opacity:.8}
+.code-diff .d-ctx{color:var(--text)}
+
+/* Widget Asesor: tarjetas de conflicto (calculadas) + atajos al chat */
+.code-conflictos{flex:1; overflow-y:auto; min-height:0}
+.code-conflictos .item{
+  font-family:var(--mono); font-size:11px; color:var(--amber-bright);
+  padding:7px 9px; border-left:2px solid var(--amber); border-radius:0 var(--r) var(--r) 0;
+  margin-bottom:6px; background:rgba(245,185,66,.06);
+}
+.code-asesor-botones{display:flex; flex-direction:column; gap:8px; margin-top:10px; border-top:1px solid var(--line); padding-top:10px}
+.code-asesor-botones button{
+  font-family:var(--mono); font-size:11px; letter-spacing:.06em; padding:8px 12px;
+  border-radius:var(--r); cursor:pointer; text-transform:uppercase;
+  background:transparent; border:1px solid var(--line-cyan); color:var(--cyan-glow);
+  transition:background .2s var(--ease);
+}
+.code-asesor-botones button:hover{background:rgba(226,75,74,.14)}
+
+/* Tablero de tareas (drag & drop nativo, Fase 2) */
+.code-tablero{flex:1; display:flex; gap:10px; min-height:0; overflow-x:auto}
+.code-columna{
+  flex:1 1 0; min-width:110px; display:flex; flex-direction:column; min-height:0;
+  background:rgba(6,10,16,.35); border:1px solid var(--line); border-radius:var(--r);
+  padding:8px;
+}
+.code-columna.drop-over{border-color:var(--line-cyan); background:rgba(226,75,74,.08)}
+.code-columna-titulo{
+  font-family:var(--mono); font-size:9.5px; letter-spacing:.16em; text-transform:uppercase;
+  color:var(--steel); margin-bottom:8px;
+}
+.code-columna-tarjetas{flex:1; overflow-y:auto; min-height:0; display:flex; flex-direction:column; gap:6px}
+.code-tarjeta{
+  font-family:var(--mono); font-size:11px; color:var(--text); cursor:grab;
+  padding:7px 8px; border:1px solid var(--line); border-radius:var(--r);
+  background:var(--panel-solid);
+}
+.code-tarjeta:active{cursor:grabbing}
+.code-tarjeta.dragging{opacity:.4}
+.code-tarjeta button{
+  display:block; margin-top:5px; font-family:var(--mono); font-size:9.5px;
+  letter-spacing:.04em; text-transform:uppercase; padding:3px 7px; cursor:pointer;
+  background:transparent; border:1px solid var(--line-cyan); color:var(--cyan-glow);
+  border-radius:var(--r);
+}
 
 /* ---------- 12b. NOW PLAYING (barra de música) ---------- */
 .nowplaying{padding:11px 17px}

@@ -71,9 +71,27 @@ que es también lo que declara honestamente si le preguntas:
   visión cuando el texto no basta.
 - **Google** — próximos eventos de Calendar, leer Gmail, y **enviar correo con confirmación**.
 - **Memoria** — `remember`/`recall` de hechos entre sesiones (SQLite + vector store).
-- **Sub-agentes** — `delegar_a_claude` para tareas de código en carpeta aislada.
+- **Notas y tareas** — apuntes rápidos y una lista pendiente/en_proceso/hecho, ambas en
+  `data/memory.db`.
+- **Sub-agentes** — `delegar_a_claude`/`analizar_proyecto` para tareas de código en
+  carpeta aislada (un solo turno, bloqueante).
+- **Modo agentes** — sesiones **vivas** de Claude Code (`sesion_crear`/`escribir`/
+  `listar`/`leer`/`parar`) sobre un proyecto real del disco, en paralelo y sin bloquear
+  a CRISTOPHER; panel propio en el HUD (🤖). Si una sesión se queda esperando una
+  respuesta, CRISTOPHER redacta una propuesta con su propia voz y pide tu confirmación
+  antes de mandarla — nunca responde por su cuenta.
+- **Modo concentración** — bloquea deep work: despeja apps distractoras (minimiza o
+  cierra), pone música de foco, ajusta el volumen y encola (sin perder) los avisos de
+  baja prioridad hasta que termina el bloque; soporta ciclos foco/descanso si se lo
+  pides explícitamente.
+- **Modo diario** — reflexión diaria conversacional categorizada (evento social, dilema,
+  hecho destacado, tarea futura, libre), activable/desactivable por intención.
 - **Voz** — activar/desactivar modo audio por intención.
 - **Recordatorios** — programar avisos que dispara el demonio proactivo.
+- **Música** — reproducir/cola/favoritos/listas con motor propio (biblioteca local +
+  respaldo `yt-dlp`, control por VLC).
+- **Control de PC** — apps, ventanas, volumen, capturas de pantalla con visión,
+  organizar/buscar archivos, apagar/bloquear/suspender (con confirmación si hace falta).
 - **WhatsApp (opcional)** — leer/enviar mensajes del WhatsApp personal bajo petición
   explícita (Baileys, no oficial; ver sección de setup arriba).
 
@@ -96,13 +114,24 @@ cristopher/
   main.py              # REPL de consola (texto)
   voz_repl.py          # REPL por voz (push-to-talk)
   memory.py            # memoria persistente (SQLite + vector store)
-  proactivo.py         # demonio proactivo (eventos, correo, recordatorios, WhatsApp)
+  notas.py / tareas.py # notas rápidas y lista de tareas (mismo SQLite que memory.py)
+  diario.py            # modo diario: reflexión diaria conversacional categorizada
+  concentracion.py     # modo concentración: bloquea deep work (apps/música/volumen)
+  sesiones.py          # modo agentes: sesiones vivas de Claude Code sobre un proyecto real
+  proactivo.py         # demonio proactivo (eventos, correo, recordatorios, WhatsApp, sesiones)
   whatsapp_client.py   # cliente/gestor del servicio Node de WhatsApp (Baileys)
   bus.py / estado.py   # bus de estado del HUD / modo voz en caliente
-  hud/                 # HUD web (command-center + núcleo neuronal, SSE)
+  hud/                 # HUD web (command-center + núcleo neuronal 3D, widgets movibles, SSE)
   tools/               # registro de herramientas (fuente única de verdad)
 whatsapp/              # servicio Node.js (Baileys) — runtime separado, ver README
 ```
+
+Documentos de diseño en la raíz (prompts de tarea para Claude Code, uno por
+funcionalidad, revisados antes de implementar): `cristopher_mega_prompt.md` (system
+prompt de referencia), `PLAN_GESTOR_SESIONES.md` (modo agentes, ya construido),
+`PROMPT_modo_concentracion_para_claude_code.md` (modo concentración, ya construido),
+`PROMPT_memoria_episodica_para_claude_code.md` y `DISENO_motor_huella_por_pivotes.md`
+(diseñados, **aún no implementados**).
 
 ## Seguridad
 

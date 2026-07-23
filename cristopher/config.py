@@ -50,6 +50,27 @@ SUBAGENT_TIMEOUT = 600
 # un proyecto real de punta a punta tarda más que una tarea acotada.
 PROJECT_ANALYSIS_TIMEOUT = 900
 
+# --- Gestor de sesiones vivas de Claude Code (sesiones.py, Fase 1) -----------
+SESION_TRANSCRIPT_MAXLEN = 300  # tope de entradas de transcript por sesión
+SESION_STOP_TIMEOUT = 5         # s de espera tras terminate() antes de kill()
+# Cuánto tiempo sin actividad en estado 'trabajando' se considera "colgada" (modo
+# code, Fase 3 de Cristopher Code) — mismo orden de magnitud que SUBAGENT_TIMEOUT.
+SESION_COLGADA_SEGUNDOS = 600
+
+# --- Fase 4a: tipo de sesión, modelo y vigilancia de contexto ----------------
+# permission-mode de las sesiones tipo "chat" (idear/conversar, sin proyecto real).
+# Verificado real en Paso 0: "plan" dispara el flujo completo de Plan Mode (escribe
+# un .md en ~/.claude/plans y llama a ExitPlanMode, que falla en headless) — NO
+# sirve. "dontAsk" deniega cada tool call arriesgada con un mensaje claro, sin
+# colgarse (no hay TTY) y sin tocar disco: es el que de verdad cumple "sin tocar
+# disco" del diseño. Las sesiones tipo "code" siguen en bypassPermissions (Fase 1-3).
+SESION_CHAT_PERMISSION_MODE = "dontAsk"
+# Umbral de aviso proactivo de contexto alto (0-1). Regla del propio diseño: parar
+# sobre el ~75% de contexto da mejor calidad que exprimir al 90%. El tamaño real de
+# la ventana de contexto NO se hardcodea aquí: se lee del propio evento `result`
+# (modelUsage.<modelo>.contextWindow), que la API ya reporta con exactitud.
+SESION_CONTEXTO_AVISO_PCT = 0.75
+
 # --- Fase 4: integraciones Google + búsqueda de élite ------------------------
 # Credenciales OAuth y token persistente (bajo data/, gitignored; §9).
 GOOGLE_DIR = DATA / "google"
@@ -128,6 +149,15 @@ YTDLP_FORMAT  = os.getenv("CRISTOPHER_YTDLP_FORMAT", "bestaudio/best")
 # reproductor busca libvlc.dll aquí y apunta python-vlc a ella; si el sistema ya tiene
 # VLC, esto se ignora. Sobrescribible con CRISTOPHER_VLC_DIR. Por defecto data/vlc.
 VLC_DIR       = Path(os.getenv("CRISTOPHER_VLC_DIR", str(DATA / "vlc")))
+
+# --- Motor de huella digital por pivotes (huella.py, Tanda A) ----------------
+# Dossiers de OSINT sobre terceros: base propia y aislada (no data/memory.db, que
+# guarda hechos/notas/tareas del propio usuario), ciclo de vida y borrado distintos.
+HUELLA_DIR = DATA / "huella"
+# Maigret puede tardar varios minutos si escanea sus 3000+ sitios; se acota con
+# --top-sites y se da un timeout generoso de subproceso por herramienta.
+HUELLA_TIMEOUT = 180
+HUELLA_MAIGRET_TOP_SITES = int(os.getenv("CRISTOPHER_HUELLA_TOP_SITES", "500"))
 
 # --- Integración de WhatsApp (Baileys, Node.js) -------------------------------
 # Baileys es una librería NO OFICIAL que reimplementa el protocolo de WhatsApp Web;

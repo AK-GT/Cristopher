@@ -18,6 +18,7 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from cristopher import bus, estado, voz
 from cristopher.agent import Cristopher, split_final
@@ -156,6 +157,14 @@ def _musica_control(accion: str, valor) -> dict:
 # El almacén de notas es thread-safe (su propio lock), así que se consulta DIRECTAMENTE
 # desde el hilo HTTP (no toca el worker/Playwright). Import perezoso para no acoplar el
 # arranque del HUD. El frontend sondea /notas cada pocos segundos.
+def _concentracion_estado() -> dict:
+    try:
+        from cristopher import concentracion
+        return concentracion.estado_actual()
+    except Exception as exc:
+        return {"activo": False, "error": str(exc)}
+
+
 def _notas_recientes(n: int = 8) -> dict:
     try:
         from cristopher.notas import get_notas
@@ -163,6 +172,127 @@ def _notas_recientes(n: int = 8) -> dict:
         return {"notas": [{"id": r[0], "texto": r[1], "creado": r[2]} for r in rows]}
     except Exception as exc:
         return {"notas": [], "error": str(exc)}
+
+
+# --- Modo agentes (Fase 2): sesiones vivas de Claude Code -------------------------
+# El gestor es thread-safe (su propio lock), así que estas rutas lo llaman
+# DIRECTAMENTE desde el hilo HTTP, igual que música/notas — nunca pasan por _JOBS
+# (si lo hicieran, escribir a una sesión esperaría detrás del turno en curso de
+# CRISTOPHER). Import perezoso para no acoplar el arranque del HUD.
+def _on_evento_sesion(nombre: str, evento: dict) -> None:
+    """Callback del gestor (cristopher.sesiones): republica al bus del HUD."""
+    from cristopher.sesiones import get_gestor_sesiones
+    try:
+        bus.set_sesiones(get_gestor_sesiones().listar())
+        entrada = evento.get("entrada")
+        if entrada:
+            bus.add_sesion_entrada(nombre, entrada)
+    except Exception:
+        pass
+
+
+def _sesiones_listar() -> dict:
+    from cristopher.sesiones import get_gestor_sesiones
+    return {"sesiones": get_gestor_sesiones().listar()}
+
+
+def _sesiones_leer(nombre: str, n: int) -> dict:
+    from cristopher.sesiones import SesionesError, get_gestor_sesiones
+    try:
+        return {"transcript": get_gestor_sesiones().leer(nombre, n)}
+    except SesionesError as exc:
+        return {"error": str(exc)}
+
+
+def _sesiones_crear(
+    nombre: str, ruta: str, tarea: str, aislamiento: str = "directo",
+    tipo: str = "code", modelo: str = "sonnet", quality_gate: str = "",
+) -> dict:
+    from cristopher.sesiones import SesionesError, get_gestor_sesiones
+    try:
+        msg = get_gestor_sesiones().crear(
+            nombre, ruta, tarea, aislamiento, tipo, modelo, quality_gate=quality_gate,
+        )
+        return {"ok": True, "msg": msg}
+    except SesionesError as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _sesiones_diff(nombre: str) -> dict:
+    from cristopher.sesiones import SesionesError, get_gestor_sesiones
+    try:
+        return {"diff": get_gestor_sesiones().diff(nombre)}
+    except SesionesError as exc:
+        return {"error": str(exc)}
+
+
+def _sesiones_conflictos() -> dict:
+    from cristopher.sesiones import get_gestor_sesiones
+    return {"conflictos": get_gestor_sesiones().conflictos()}
+
+
+def _sesiones_limpiar_worktree(nombre: str) -> dict:
+    from cristopher.sesiones import SesionesError, get_gestor_sesiones
+    try:
+        msg = get_gestor_sesiones().limpiar_worktree(nombre)
+        return {"ok": True, "msg": msg}
+    except SesionesError as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _sesiones_escribir(nombre: str, mensaje: str) -> dict:
+    from cristopher.sesiones import SesionesError, get_gestor_sesiones
+    try:
+        msg = get_gestor_sesiones().escribir(nombre, mensaje)
+        return {"ok": True, "msg": msg}
+    except SesionesError as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _sesiones_parar(nombre: str) -> dict:
+    from cristopher.sesiones import SesionesError, get_gestor_sesiones
+    try:
+        msg = get_gestor_sesiones().parar(nombre)
+        return {"ok": True, "msg": msg}
+    except SesionesError as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+# --- Modo code (Fase 1): entrar/salir por botón + tareas para el widget -----------
+# `estado_code` es un flag sin lock propio (como estado.py/estado_diario.py), así que
+# es seguro leerlo/mutarlo directamente desde el hilo HTTP, igual que música/notas.
+def _modo_code_set(activo: bool) -> dict:
+    from cristopher import estado_code
+    if activo:
+        estado_code.activar()
+    else:
+        estado_code.desactivar()
+    bus.set_modo_code(activo)
+    return {"ok": True, "activo": activo}
+
+
+def _tareas_listar() -> dict:
+    try:
+        from cristopher.tareas import get_tareas
+        rows = get_tareas().listar()
+        return {"tareas": [
+            {"id": r[0], "texto": r[1], "estado": r[2], "creado": r[3]} for r in rows
+        ]}
+    except Exception as exc:
+        return {"tareas": [], "error": str(exc)}
+
+
+def _tareas_actualizar_estado(id_: int, estado: str) -> dict:
+    """Cambia el estado de una tarea desde el tablero (drag & drop, Fase 2). Mismo
+    estado libre (TEXT) que tareas.py ya acepta; 'hecho' la elimina."""
+    try:
+        from cristopher.tareas import get_tareas
+        texto = get_tareas().actualizar_estado(id_, estado)
+        if texto is None:
+            return {"ok": False, "error": f"No hay ninguna tarea con id #{id_}."}
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -190,6 +320,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_musica_estado())
         if self.path == "/notas":
             return self._json(_notas_recientes())
+        if self.path == "/concentracion":
+            return self._json(_concentracion_estado())
+        if self.path == "/sesiones":
+            return self._json(_sesiones_listar())
+        if self.path.startswith("/sesiones/leer"):
+            qs = parse_qs(urlparse(self.path).query)
+            nombre = (qs.get("nombre") or [""])[0]
+            n = int((qs.get("n") or ["20"])[0])
+            return self._json(_sesiones_leer(nombre, n))
+        if self.path.startswith("/sesiones/diff"):
+            qs = parse_qs(urlparse(self.path).query)
+            nombre = (qs.get("nombre") or [""])[0]
+            return self._json(_sesiones_diff(nombre))
+        if self.path == "/sesiones/conflictos":
+            return self._json(_sesiones_conflictos())
+        if self.path == "/tareas":
+            return self._json(_tareas_listar())
         # archivo estático por nombre
         nombre = self.path.lstrip("/").split("?")[0]
         if (STATIC / nombre).is_file():
@@ -243,6 +390,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_confirmar()
         if self.path == "/musica/control":
             return self._post_musica()
+        if self.path == "/sesiones/crear":
+            return self._post_sesiones_crear()
+        if self.path == "/sesiones/escribir":
+            return self._post_sesiones_escribir()
+        if self.path == "/sesiones/parar":
+            return self._post_sesiones_parar()
+        if self.path == "/sesiones/limpiar_worktree":
+            return self._post_sesiones_limpiar_worktree()
+        if self.path == "/tareas/estado":
+            return self._post_tareas_estado()
+        if self.path == "/modo_code":
+            return self._post_modo_code()
         return self.send_error(404)
 
     def _post_enviar(self):
@@ -278,6 +437,53 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             accion, valor = "", None
         self._json(_musica_control(accion, valor))
+
+    def _body_json(self) -> dict:
+        n = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(n) if n else b"{}"
+        try:
+            return json.loads(body)
+        except Exception:
+            return {}
+
+    def _post_sesiones_crear(self):
+        data = self._body_json()
+        self._json(_sesiones_crear(
+            str(data.get("nombre") or ""),
+            str(data.get("ruta") or ""),
+            str(data.get("tarea") or ""),
+            str(data.get("aislamiento") or "directo"),
+            str(data.get("tipo") or "code"),
+            str(data.get("modelo") or "sonnet"),
+            str(data.get("quality_gate") or ""),
+        ))
+
+    def _post_sesiones_escribir(self):
+        data = self._body_json()
+        self._json(_sesiones_escribir(
+            str(data.get("nombre") or ""),
+            str(data.get("mensaje") or ""),
+        ))
+
+    def _post_sesiones_parar(self):
+        data = self._body_json()
+        self._json(_sesiones_parar(str(data.get("nombre") or "")))
+
+    def _post_sesiones_limpiar_worktree(self):
+        data = self._body_json()
+        self._json(_sesiones_limpiar_worktree(str(data.get("nombre") or "")))
+
+    def _post_tareas_estado(self):
+        data = self._body_json()
+        try:
+            id_ = int(data.get("id"))
+        except (TypeError, ValueError):
+            return self._json({"ok": False, "error": "id inválido"})
+        self._json(_tareas_actualizar_estado(id_, str(data.get("estado") or "")))
+
+    def _post_modo_code(self):
+        data = self._body_json()
+        self._json(_modo_code_set(bool(data.get("activo"))))
 
 
 def _muestreo_metricas():
@@ -320,6 +526,8 @@ def main() -> int:
     # En el HUD, la confirmación de acciones irreversibles (§9) es por clic, no por
     # stdin: el usuario escribe desde el navegador y no vería un input() del servidor.
     set_confirmer(_hud_confirm)
+    from cristopher.sesiones import get_gestor_sesiones
+    get_gestor_sesiones().set_on_evento(_on_evento_sesion)
     threading.Thread(target=_worker, daemon=True).start()
     threading.Thread(target=_muestreo_metricas, daemon=True).start()
     threading.Thread(target=_demonio_proactivo, daemon=True).start()

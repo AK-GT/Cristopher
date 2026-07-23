@@ -213,6 +213,74 @@ def _cerrar_ventana(v: dict) -> bool:
         return False
 
 
+def _ventanas_hwnd() -> list[dict]:
+    """Todas las ventanas visibles con título, como `_ventanas_abiertas` pero con el
+    HWND (no el PID): `ShowWindow` (minimizar/restaurar) necesita el HWND, no el PID
+    que basta para `taskkill`. Vía `EnumWindows` (ctypes), mismo patrón que
+    `pantalla_tools._rect_ventana_activa`."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    resultado: list[dict] = []
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def _callback(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length == 0:
+            return True
+        buff = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buff, length + 1)
+        titulo = buff.value
+        if titulo:
+            resultado.append({"hwnd": hwnd, "titulo": titulo})
+        return True
+
+    try:
+        user32.EnumWindows(WNDENUMPROC(_callback), 0)
+    except Exception:
+        return []
+    return resultado
+
+
+def minimizar_por_nombre(nombres: list[str]) -> str:
+    """Minimiza todas las ventanas visibles cuyo título case con alguno de `nombres`.
+
+    A diferencia de `gestionar_ventana` (que solo actúa sobre la ventana en primer
+    plano), esta busca por TÍTULO entre todas las ventanas abiertas, para poder
+    despejar una app distractora aunque no esté activa ahora mismo. Usada por el modo
+    concentración; no es una tool de la LLM (no está en el registro de TOOLS).
+    """
+    SW_MINIMIZE = 6
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    ventanas = _ventanas_hwnd()
+    minimizadas, sin_match = [], []
+    for nombre in nombres:
+        norm = _normaliza(nombre)
+        casan = [v for v in ventanas if norm in _normaliza(v["titulo"])]
+        if not casan:
+            sin_match.append(nombre)
+            continue
+        for v in casan:
+            try:
+                user32.ShowWindow(v["hwnd"], SW_MINIMIZE)
+                minimizadas.append(v["titulo"])
+            except Exception:
+                sin_match.append(nombre)
+
+    partes = []
+    if minimizadas:
+        partes.append("Minimizadas: " + ", ".join(dict.fromkeys(minimizadas)) + ".")
+    if sin_match:
+        partes.append("No encontré ninguna ventana de: " + ", ".join(sin_match) + ".")
+    return " ".join(partes) if partes else "No había nada que minimizar."
+
+
 def cerrar_app(nombre: str) -> str:
     """Cierra una aplicación en marcha por su nombre. Acción CON EFECTOS: avisa al
     usuario y pide confirmación explícita ANTES de matar el proceso (§9). Silencio, No o

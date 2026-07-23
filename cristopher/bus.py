@@ -14,6 +14,8 @@ from collections import deque
 from datetime import datetime
 from typing import Any
 
+from cristopher import estado_code
+
 _LOCK = threading.Lock()
 
 # Estado actual (snapshot para la carga inicial).
@@ -24,6 +26,9 @@ _estado: dict[str, Any] = {
     "subagentes": [],            # roster: [{nombre, carpeta}]
     "metricas": {"cpu": 0.0, "ram": 0.0},
     "alertas": [],               # [{nivel, texto, hora}]
+    "sesiones": [],              # snapshot de GestorSesiones.listar() (Fase 2 modo agentes)
+    "concentracion": {"activo": False},  # snapshot de concentracion.estado_actual()
+    "modo_code": False,           # snapshot de estado_code.esta_activo() (Cristopher Code)
 }
 _log: deque = deque(maxlen=200)   # trazas recientes: [{kind, text, hora}]
 _subs: list[queue.Queue] = []     # colas de suscriptores SSE
@@ -61,7 +66,11 @@ def set_tarea(texto: str) -> None:
 
 
 def log(kind: str, text: str) -> None:
-    entry = {"kind": kind, "text": text, "hora": _now()}
+    # Etiqueta cada entrada con el modo activo en el momento de loguearla, para que
+    # el HUD pueda pintar cada turno en su consola correcta (chat normal vs chat de
+    # código) sin mezclar el historial de ambos modos.
+    modo = "code" if estado_code.esta_activo() else "normal"
+    entry = {"kind": kind, "text": text, "hora": _now(), "modo": modo}
     with _LOCK:
         _log.append(entry)
     _emit("log", entry)
@@ -85,6 +94,34 @@ def add_alerta(nivel: int, texto: str) -> None:
     with _LOCK:
         _estado["alertas"] = ([item] + _estado["alertas"])[:12]
     _emit("alerta", item)
+
+
+def set_sesiones(snapshot: list[dict]) -> None:
+    """Snapshot completo de sesiones de Claude Code (modo agentes, Fase 2)."""
+    with _LOCK:
+        _estado["sesiones"] = snapshot
+    _emit("sesiones", snapshot)
+
+
+def set_modo_code(activo: bool) -> None:
+    """Flag del modo code (Cristopher Code): el HUD lo usa para transformar la
+    pantalla (núcleo rojo + layout de widgets propio)."""
+    with _LOCK:
+        _estado["modo_code"] = activo
+    _emit("modo_code", activo)
+
+
+def set_concentracion(snapshot: dict) -> None:
+    """Snapshot del modo concentración (activo/fase/tiempo restante/avisos en cola)."""
+    with _LOCK:
+        _estado["concentracion"] = snapshot
+    _emit("concentracion", snapshot)
+
+
+def add_sesion_entrada(nombre: str, entrada: dict) -> None:
+    """Nueva entrada de transcript de una sesión, para pintarla en vivo en el HUD.
+    Efímera (no se guarda en el snapshot), igual que `pedir_confirmacion`."""
+    _emit("sesion_entrada", {"nombre": nombre, "entrada": entrada})
 
 
 def pedir_confirmacion(texto: str) -> None:
