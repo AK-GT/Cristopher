@@ -63,6 +63,11 @@ from cristopher.tools.tareas_tools import (
     tarea_crear,
     tarea_listar,
 )
+from cristopher.tools.episodica_tools import (
+    episodio_borrar,
+    episodio_registrar,
+    episodios_periodo,
+)
 from cristopher.tools.diario_tools import (
     activar_modo_diario,
     desactivar_modo_diario,
@@ -1118,6 +1123,73 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["id"],
         },
         "fn": tarea_borrar,
+    },
+    # --- Memoria episódica (línea de tiempo de eventos con fecha) ---------------
+    {
+        "name": "episodio_registrar",
+        "description": (
+            "Registra un episodio notable con hora (algo que pasó: enviaste un "
+            "correo, ejecutaste una rutina, hablaste con alguien). Úsalo por "
+            "iniciativa propia cuando pase algo digno de quedar en la línea de "
+            "tiempo, además del registro automático de cada turno de conversación."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "resumen": {"type": "string", "description": "Qué pasó, en una frase."},
+                "tipo": {
+                    "type": "string",
+                    "description": (
+                        "Categoría libre: 'conversacion', 'herramienta', 'aviso', "
+                        "'evento'... (por defecto 'evento')."
+                    ),
+                },
+                "entidad": {
+                    "type": "string",
+                    "description": "Con quién o sobre qué (persona, app, tema); opcional.",
+                },
+            },
+            "required": ["resumen"],
+        },
+        "fn": episodio_registrar,
+    },
+    {
+        "name": "episodios_periodo",
+        "description": (
+            "Devuelve la línea de tiempo de episodios en un periodo, para "
+            "responder preguntas temporales o de patrón: '¿qué hice esta semana?', "
+            "'¿con quién he hablado más este mes?', '¿cuándo fue la última vez "
+            "que...?'. Tú cuentas/comparas sobre lo devuelto, la tool no agrega."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "periodo": {
+                    "type": "string",
+                    "description": (
+                        "'hoy', 'ayer', 'esta semana', 'semana pasada', 'este mes', "
+                        "'últimos N días', una fecha ISO (2026-07-15) o un rango "
+                        "ISO (2026-07-01:2026-07-15)."
+                    ),
+                },
+                "tipo": {"type": "string", "description": "Filtra por tipo de episodio; opcional."},
+                "entidad": {"type": "string", "description": "Filtra por entidad; opcional."},
+            },
+            "required": ["periodo"],
+        },
+        "fn": episodios_periodo,
+    },
+    {
+        "name": "episodio_borrar",
+        "description": "Borra un episodio de la línea de tiempo por su id.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer", "description": "Id del episodio a borrar."},
+            },
+            "required": ["id"],
+        },
+        "fn": episodio_borrar,
     },
     # --- Diario (modo diario) ---------------------------------------------------
     {

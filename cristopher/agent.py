@@ -19,6 +19,7 @@ from google.genai import errors, types
 
 from cristopher import estado_diario, personalidad
 from cristopher.config import FALLBACK_MODEL, MODEL, get_api_key
+from cristopher.episodica import get_episodica
 from cristopher.memory import get_memory
 from cristopher.tools import TOOLS, call_tool
 
@@ -396,6 +397,15 @@ class Cristopher:
                     raise self._clean_error(code) from exc
         raise self._clean_error(last_code)
 
+    def _registrar_episodio_turno(self, user_message: str) -> None:
+        """Registra el turno del usuario como episodio en la línea de tiempo, sin
+        llamada extra al LLM (determinista). Nunca debe tumbar el bucle si falla —
+        misma filosofía que _recall_context."""
+        try:
+            get_episodica().registrar(user_message, tipo="conversacion")
+        except Exception:
+            pass
+
     def _recall_context(self, user_message: str) -> str:
         """Recupera hechos relevantes de la memoria y los formatea como bloque de
         contexto etiquetado (DATO), o cadena vacía si no hay nada."""
@@ -414,6 +424,9 @@ class Cristopher:
     def send(self, user_message: str) -> str:
         """Procesa un mensaje del usuario a través del bucle ReAct y devuelve la
         respuesta final en texto."""
+        # Episodio automático del turno: barato, determinista, sin llamada al LLM.
+        self._registrar_episodio_turno(user_message)
+
         # Auto-recall: antepone hechos recordados relevantes al mensaje del usuario.
         context = self._recall_context(user_message)
         if context:
