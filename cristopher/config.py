@@ -159,6 +159,17 @@ HUELLA_DIR = DATA / "huella"
 HUELLA_TIMEOUT = 180
 HUELLA_MAIGRET_TOP_SITES = int(os.getenv("CRISTOPHER_HUELLA_TOP_SITES", "500"))
 
+# --- Motor de huella digital: bucle de pivote (huella.py, Tanda C) -----------
+# Profundidad y topes del BFS que encadena buscar_username/buscar_email/buscar_telefono
+# automáticamente — cinturón y tirantes contra bucles infinitos/explosión de nodos.
+HUELLA_PROFUNDIDAD_MAX = int(os.getenv("CRISTOPHER_HUELLA_PROFUNDIDAD", "2"))
+# Cuántos url_perfil se exploran por cada pivote resuelto. Verificado con datos reales
+# (alias con 30+ perfiles hallados): un tope de 5 dejaba fuera sitios con extracción
+# real conocida (GitHub) por un solo puesto de diferencia frente a sitios sin scheme.
+HUELLA_MAX_PIVOTES_POR_NIVEL = 10
+HUELLA_MAX_NODOS_TOTAL = 40        # tope duro de pivotes visitados en toda la investigación
+HUELLA_EXTRACCION_TIMEOUT = 8      # s por fetch de socid_extractor.parse (una URL de perfil)
+
 # --- Integración de WhatsApp (Baileys, Node.js) -------------------------------
 # Baileys es una librería NO OFICIAL que reimplementa el protocolo de WhatsApp Web;
 # usarla conlleva riesgo de que Meta limite o banee el número. Decisión ya tomada por

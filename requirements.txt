@@ -79,6 +79,11 @@ phonenumbers>=9.0.34    # puerto Python de libphonenumber: país/operadora/tipo,
 # extensión de navegador "GHunt Companion"), guarda credenciales en
 # ~/.malfrats/ghunt/creds.m — sin login, sigue "no configurado" aunque esté instalado.
 
+# Motor de huella digital (Tanda C) — bucle de pivote + puntuación de confianza.
+# socid-extractor ya llegaba transitivo (Maigret lo usa por dentro); se declara aquí
+# explícito porque huella.py ahora lo importa directamente (parse/extract/mutate_url).
+socid-extractor>=0.1.1
+
 # Integración de WhatsApp (Baileys) — nada nuevo en pip: `requests` ya llega
 # transitivamente vía google-genai (igual que para Tavily). El servicio en sí es
 # Node.js: requiere Node.js instalado en el sistema + `npm install` en whatsapp/

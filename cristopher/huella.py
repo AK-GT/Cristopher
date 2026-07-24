@@ -1,19 +1,26 @@
 """Motor de huella digital por pivotes (OSINT). Tanda A: cimientos + pivote username.
-Tanda B: pivotes email, brechas y teléfono.
+Tanda B: pivotes email, brechas y teléfono. Tanda C: bucle de pivote (BFS) + puntuación
+de confianza fina.
 
-Modelo de datos común (Nodo/Arista/Dossier) que usarán las tandas C-E, y tres pivotes
-reales:
+Modelo de datos común (Nodo/Arista/Dossier/Investigacion) que usarán las tandas D-E, y
+tres pivotes reales:
   - username, vía Maigret (amplitud, 3000+ sitios) + Socialscan (alta confianza,
     endpoints de registro).
   - email, vía user-scanner (servicios registrados) + GHunt (Gmail, opcional) +
     Gravatar (perfil público) + XposedOrNot (brechas).
   - teléfono, vía `phonenumbers` (país/operadora/tipo, offline) + ignorant (apps
     donde está registrado).
-Un sitio confirmado por ≥2 fuentes independientes se marca "confirmado"; por una
-sola, "tentativo" (§5/regla de ≥2 fuentes de HERRAMIENTA_BUSQUEDA.md — la
-puntuación numérica fina llega en la Tanda C). Los nodos "brecha" son la excepción
-explícita: un hecho directo de base de datos, no una corroboración de identidad, se
-marcan `confianza="expuesto"` y no consumen esa regla (decisión de la Tanda B).
+Cada cuenta hallada se puntúa 0.0-1.0 (`_puntuar()`, suma de pesos por FUENTE
+INDEPENDIENTE — dos módulos que preguntan a la misma API cuentan como una sola,
+`_grupo_independencia()`) y se etiqueta por umbral: `<0.4` tentativo · `0.4-0.7`
+probable · `>0.7` confirmado (§5/HERRAMIENTA_BUSQUEDA.md). Los nodos "brecha" son la
+excepción explícita: un hecho directo de base de datos, no una corroboración de
+identidad, se marcan `confianza="expuesto"` y no pasan por `_puntuar()` (Tanda B).
+
+`investigar()` (Tanda C) encadena BFS estos tres pivotes: cada cuenta confirmada o
+probable se pasa por `socid_extractor` para extraer nuevos identificadores (email en
+bio, alias enlazado...) que se encolan como pivotes nuevos, deduplicados, hasta
+`HUELLA_PROFUNDIDAD_MAX` niveles — con topes duros de nodos para que no explote.
 
 GHunt es OPCIONAL y no vive en el venv del proyecto: `pip install ghunt` baja
 `httpx` por debajo de 0.28 y rompe `google-genai`/`ddgs` (verificado, no hipotético
@@ -61,7 +68,17 @@ import trio
 from phonenumbers import PhoneNumberType, carrier, geocoder
 from xposedornot import XposedOrNot
 
-from cristopher.config import HUELLA_DIR, HUELLA_MAIGRET_TOP_SITES, HUELLA_TIMEOUT
+from socid_extractor import extract, mutate_url, parse as socid_parse
+
+from cristopher.config import (
+    HUELLA_DIR,
+    HUELLA_EXTRACCION_TIMEOUT,
+    HUELLA_MAIGRET_TOP_SITES,
+    HUELLA_MAX_NODOS_TOTAL,
+    HUELLA_MAX_PIVOTES_POR_NIVEL,
+    HUELLA_PROFUNDIDAD_MAX,
+    HUELLA_TIMEOUT,
+)
 
 
 def _now() -> str:
@@ -86,10 +103,15 @@ class Nodo:
     id: str
     tipo: str  # alias|email|telefono|nombre|url_perfil|foto|brecha
     valor: str
-    # "tentativo" | "confirmado" (corroboración de identidad, puntuación fina: Tanda C) |
+    # Etiqueta DERIVADA de `puntuacion` vía `_puntuar()` (Tanda C): "tentativo" (<0.4) |
+    # "probable" (0.4-0.7) | "confirmado" (>0.7) — corroboración de identidad. Excepción:
     # "expuesto" (solo tipo="brecha": hecho directo de base de datos, no corroboración de
-    # identidad — no consume la regla de ≥2 fuentes, ver Tanda B).
+    # identidad — no pasa por `_puntuar()`, ver Tanda B).
     confianza: str = "tentativo"
+    # Puntuación 0.0-1.0 que produce `confianza` (suma de pesos por fuente independiente,
+    # capada a 1.0; ver PESO_FUENTE/_grupo_independencia/_puntuar). 0.0 en nodos que no
+    # pasan por el cruce de fuentes (el propio pivote, nodos "expuesto"/"dato").
+    puntuacion: float = 0.0
     # Texto descriptivo determinista calculado sobre el propio nodo (p. ej. país/operadora/
     # tipo de línea de un teléfono, vía `phonenumbers`) — no implica una fuente externa
     # corroborando una identidad, así que no genera Arista ni consume la escala de confianza.
@@ -101,6 +123,7 @@ class Nodo:
             "tipo": self.tipo,
             "valor": self.valor,
             "confianza": self.confianza,
+            "puntuacion": self.puntuacion,
             "detalle": self.detalle,
         }
 
@@ -111,7 +134,7 @@ class Arista:
     destino: str
     tipo_enlace: str
     fuente: str
-    peso: float = 1.0  # sin lógica de ponderación todavía (llega en la Tanda C)
+    peso: float = 1.0  # peso de ESTA fuente en la puntuación del nodo destino (Tanda C, PESO_FUENTE)
 
     def to_dict(self) -> dict:
         return {
@@ -169,12 +192,33 @@ class Huella:
                     creado TEXT NOT NULL
                 )"""
             )
+            # Tanda C: resultado del bucle de pivote (BFS), varios dossiers anidados
+            # bajo una sola semilla — tabla propia, no se mezcla con huella_dossiers
+            # (un dossier = una búsqueda; una investigación = varias encadenadas).
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS huella_investigaciones (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pivote_semilla TEXT NOT NULL,
+                    tipo_semilla TEXT NOT NULL,
+                    datos TEXT NOT NULL,
+                    creado TEXT NOT NULL
+                )"""
+            )
 
     def guardar_dossier(self, dossier: Dossier) -> int:
         with self._lock, self._conn:
             cur = self._conn.execute(
                 "INSERT INTO huella_dossiers (pivote, tipo, datos, creado) VALUES (?, ?, ?, ?)",
                 (dossier.pivote, dossier.tipo, json.dumps(dossier.to_dict(), ensure_ascii=False), dossier.creado),
+            )
+            return cur.lastrowid
+
+    def guardar_investigacion(self, inv: "Investigacion") -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT INTO huella_investigaciones (pivote_semilla, tipo_semilla, datos, creado) "
+                "VALUES (?, ?, ?, ?)",
+                (inv.pivote_semilla, inv.tipo_semilla, json.dumps(inv.to_dict(), ensure_ascii=False), inv.creado),
             )
             return cur.lastrowid
 
@@ -317,13 +361,61 @@ def _clave_sitio(sitio: str) -> str:
     return sitio.strip().lower()
 
 
+# Peso por fuente según su fuerza real (§5: "enlaces fuertes... pesan más que débiles").
+# Endpoint de registro confirmado (Socialscan/user-scanner) > dato de cuenta real (GHunt) >
+# perfil público verificable (Gravatar) > check de login/registro (ignorant) > presencia
+# por patrón de texto (Maigret, más falsos positivos). Fuentes futuras no listadas: 0.3.
+PESO_FUENTE = {
+    "socialscan": 0.6,
+    "user-scanner": 0.6,
+    "ghunt": 0.6,
+    "gravatar": 0.5,
+    "ignorant": 0.45,
+    "maigret": 0.35,
+}
+_PESO_FUENTE_DEFECTO = 0.3
+
+# Umbrales exactos de HERRAMIENTA_BUSQUEDA.md §5.
+_UMBRAL_CONFIRMADO = 0.7
+_UMBRAL_PROBABLE = 0.4
+
+
+def _grupo_independencia(fuente: str, clave_sitio: str) -> str:
+    """Dos fuentes que preguntan a la MISMA API no cuentan como 2 confirmaciones
+    independientes (§5, "dos módulos que leen la MISMA API cuentan como UNA
+    fuente") — regla dura, no una excepción puntual. Caso real encontrado en la
+    Tanda B: el módulo Gravatar de `user-scanner` y nuestra consulta directa a
+    Gravatar (`_consultar_gravatar`) preguntan lo mismo."""
+    if clave_sitio == "gravatar" and fuente in ("gravatar", "user-scanner"):
+        return "gravatar_api"
+    return fuente
+
+
+def _puntuar(fuentes: set[str], clave_sitio: str) -> tuple[float, str]:
+    """Suma el peso MÁXIMO por grupo de independencia (no la suma de repeticiones
+    dentro del mismo grupo), capada a 1.0, y la traduce a etiqueta por umbral."""
+    por_grupo: dict[str, float] = {}
+    for fuente in fuentes:
+        grupo = _grupo_independencia(fuente, clave_sitio)
+        peso = PESO_FUENTE.get(fuente, _PESO_FUENTE_DEFECTO)
+        por_grupo[grupo] = max(por_grupo.get(grupo, 0.0), peso)
+    puntuacion = min(sum(por_grupo.values()), 1.0)
+    if puntuacion > _UMBRAL_CONFIRMADO:
+        etiqueta = "confirmado"
+    elif puntuacion >= _UMBRAL_PROBABLE:
+        etiqueta = "probable"
+    else:
+        etiqueta = "tentativo"
+    return puntuacion, etiqueta
+
+
 def _cruzar_hallazgos(
     dossier: Dossier, nodo_origen: Nodo, hallazgos_por_fuente: dict[str, list[dict]]
 ) -> None:
     """Cruza hallazgos {sitio, url} de varias fuentes y añade nodos `url_perfil` +
-    aristas al dossier. Un sitio hallado por ≥2 fuentes se marca "confirmado"; por
-    una sola, "tentativo" (regla dura de §5/HERRAMIENTA_BUSQUEDA.md). Reutilizado
-    por todos los pivotes que producen listas de cuentas (username, email)."""
+    aristas al dossier, puntuados por `_puntuar()` (§5/HERRAMIENTA_BUSQUEDA.md,
+    puntuación fina de la Tanda C). Reutilizado por todos los pivotes que producen
+    listas de cuentas (username, email)."""
     por_sitio: dict[str, dict] = {}
     for fuente, hallazgos in hallazgos_por_fuente.items():
         for h in hallazgos:
@@ -334,26 +426,32 @@ def _cruzar_hallazgos(
             entrada["fuentes"].add(fuente)
 
     for clave, entrada in sorted(por_sitio.items()):
-        confirmado = len(entrada["fuentes"]) >= 2
+        puntuacion, etiqueta = _puntuar(entrada["fuentes"], clave)
         nodo = Nodo(
             id=f"url_perfil:{entrada['url'] or clave}",
             tipo="url_perfil",
             valor=entrada["url"] or entrada["sitio"],
-            confianza="confirmado" if confirmado else "tentativo",
+            confianza=etiqueta,
+            puntuacion=puntuacion,
         )
         dossier.nodos.append(nodo)
         for fuente in sorted(entrada["fuentes"]):
             dossier.aristas.append(
-                Arista(origen=nodo_origen.id, destino=nodo.id, tipo_enlace="cuenta_en", fuente=fuente)
+                Arista(
+                    origen=nodo_origen.id,
+                    destino=nodo.id,
+                    tipo_enlace="cuenta_en",
+                    fuente=fuente,
+                    peso=PESO_FUENTE.get(fuente, _PESO_FUENTE_DEFECTO),
+                )
             )
 
 
 def buscar_username(alias: str) -> Dossier:
-    """Pivote USERNAME: lanza Maigret + Socialscan y cruza resultados.
-
-    Un sitio hallado por AMBAS herramientas se marca "confirmado"; por una sola,
-    "tentativo". Cada fallo de herramienta se guarda en `dossier.errores` (nunca se
-    oculta), y el dossier se persiste siempre, aunque una de las dos falle.
+    """Pivote USERNAME: lanza Maigret + Socialscan y cruza resultados (puntuados vía
+    `_cruzar_hallazgos`/`_puntuar`). Cada fallo de herramienta se guarda en
+    `dossier.errores` (nunca se oculta), y el dossier se persiste siempre, aunque una
+    de las dos falle.
     """
     dossier = Dossier(pivote=alias, tipo="alias")
 
@@ -553,9 +651,9 @@ def buscar_email(email: str) -> Dossier:
     """Pivote EMAIL: user-scanner (servicios registrados) + GHunt (si Gmail y está
     configurado) + Gravatar (perfil público) + XposedOrNot (brechas).
 
-    Los nodos `url_perfil` siguen la misma regla de ≥2 fuentes que `buscar_username`.
-    Los nodos `brecha` se marcan `confianza="expuesto"` (hecho directo de base de
-    datos, no corroboración de identidad — no consume la regla de ≥2 fuentes).
+    Los nodos `url_perfil` pasan por la misma puntuación fina que `buscar_username`
+    (`_cruzar_hallazgos`). Los nodos `brecha` se marcan `confianza="expuesto"` (hecho
+    directo de base de datos, no corroboración de identidad — no pasa por `_puntuar`).
     """
     dossier = Dossier(pivote=email, tipo="email")
     nodo_pivote = Nodo(id=f"email:{email}", tipo="email", valor=email, confianza="confirmado")
@@ -636,3 +734,145 @@ def buscar_telefono(numero: str) -> Dossier:
 
     get_huella().guardar_dossier(dossier)
     return dossier
+
+
+# --- Bucle de pivote (BFS) + motor de extracción (socid-extractor) -----------
+
+# Campos que socid_extractor puede devolver y que son pivotes nuevos, no metadata
+# descriptiva (bio, followers, avatar...). El resto de los 300+ campos posibles se
+# ignora a propósito.
+_CAMPOS_EMAIL = {"email", "emails", "your_emails", "business_email"}
+_CAMPOS_TELEFONO = {"phone", "your_phone"}
+
+
+def _extraer_pivotes(url: str) -> list[tuple[str, str]]:
+    """Extrae candidatos a pivote nuevo (tipo, valor) de una página de perfil vía
+    `socid_extractor`. Muchos "schemes" apuntan a un endpoint de API, no a la URL
+    canónica del perfil (p. ej. github.com/<user> -> api.github.com/users/<user>) —
+    `mutate_url()` da esas variantes. Un mismo sitio puede tener VARIAS mutaciones
+    útiles a la vez (p. ej. GitHub: perfil + social_accounts, cada uno con campos
+    distintos) — se prueban TODAS (más la URL original) y se fusionan los campos,
+    no se para en la primera que responda. Nunca lanza: red/parseo fallido en una
+    URL candidata = se ignora esa URL (igual que `_consultar_gravatar`), es una
+    fuente opcional y de bajo coste por nodo.
+    """
+    candidatas = [u for u, _ in mutate_url(url)] + [url]
+    datos: dict = {}
+    for candidata in dict.fromkeys(candidatas):  # dedup preservando orden
+        try:
+            html, status = socid_parse(candidata, timeout=HUELLA_EXTRACCION_TIMEOUT)
+        except Exception:
+            continue
+        if status != 200:
+            continue
+        try:
+            datos.update(extract(html))
+        except Exception:
+            continue
+
+    candidatos: list[tuple[str, str]] = []
+    for campo, valor in datos.items():
+        if not valor or not isinstance(valor, str):
+            continue
+        campo_l = campo.lower()
+        if campo_l in _CAMPOS_EMAIL and "@" in valor:
+            candidatos.append(("email", valor.split(",")[0].strip()))
+        elif campo_l in _CAMPOS_TELEFONO:
+            candidatos.append(("telefono", valor.strip()))
+        elif campo_l.endswith("_username") or campo_l in ("username", "nickname"):
+            candidatos.append(("alias", valor.strip()))
+    return candidatos
+
+
+def _clasificar_pivote(valor: str) -> str:
+    """Red de seguridad para candidatos que no vienen ya tipados (en la práctica,
+    `_extraer_pivotes` los tipa todos): email si tiene "@", teléfono si es mayoría
+    dígitos con longitud plausible, si no alias."""
+    if "@" in valor:
+        return "email"
+    digitos = sum(c.isdigit() for c in valor)
+    if digitos >= 7 and digitos / max(len(valor), 1) > 0.6:
+        return "telefono"
+    return "alias"
+
+
+@dataclass
+class Investigacion:
+    pivote_semilla: str
+    tipo_semilla: str
+    dossiers: list[Dossier] = field(default_factory=list)
+    # Todo lo descubierto durante el BFS, aunque no llegara a investigarse por el
+    # tope de nodos — trazabilidad honesta de lo que el motor vio pero no siguió.
+    pivotes_nuevos: list[tuple[str, str]] = field(default_factory=list)
+    profundidad_alcanzada: int = 0
+    creado: str = field(default_factory=_now)
+
+    def to_dict(self) -> dict:
+        return {
+            "pivote_semilla": self.pivote_semilla,
+            "tipo_semilla": self.tipo_semilla,
+            "dossiers": [d.to_dict() for d in self.dossiers],
+            "pivotes_nuevos": [list(p) for p in self.pivotes_nuevos],
+            "profundidad_alcanzada": self.profundidad_alcanzada,
+            "creado": self.creado,
+        }
+
+
+_BUSCADORES = {"alias": buscar_username, "email": buscar_email, "telefono": buscar_telefono}
+
+
+def investigar(pivote: str, tipo: str, profundidad: int = HUELLA_PROFUNDIDAD_MAX) -> Investigacion:
+    """Bucle de pivote (BFS): resuelve `pivote` con el colector de su tipo (Tanda
+    A/B, sin tocar su firma), extrae nuevos identificadores (`_extraer_pivotes`) de
+    las cuentas que encuentra y los encola para el siguiente nivel — hasta
+    `profundidad` niveles, deduplicados, con topes duros de nodos por nivel y en
+    total para que el bucle nunca explote ni entre en ciclo.
+
+    Explora primero las cuentas de mayor puntuación (confirmadas/probables), pero
+    NO se limita a ellas en solitario: verificado con datos reales que muchas cuentas
+    solo las encuentra Maigret (tentativo, presencia por patrón) y aun así revelan
+    identificadores nuevos genuinos (p. ej. redes sociales enlazadas en GitHub) — la
+    disciplina de "no afirmar sin corroborar" vive en la PUNTUACIÓN de cada hallazgo,
+    no en qué cuentas se exploran para seguir tirando del hilo.
+    """
+    inv = Investigacion(pivote_semilla=pivote, tipo_semilla=tipo)
+    visitados: set[tuple[str, str]] = set()
+    cola: list[tuple[str, str, int]] = [(pivote, tipo, 0)]
+
+    while cola:
+        if len(visitados) >= HUELLA_MAX_NODOS_TOTAL:
+            break
+        pivote_actual, tipo_actual, nivel = cola.pop(0)
+        clave = (tipo_actual, pivote_actual.strip().lower())
+        if clave in visitados or tipo_actual not in _BUSCADORES:
+            continue
+        visitados.add(clave)
+
+        dossier = _BUSCADORES[tipo_actual](pivote_actual)
+        inv.dossiers.append(dossier)
+        inv.profundidad_alcanzada = max(inv.profundidad_alcanzada, nivel)
+
+        if nivel >= profundidad:
+            continue
+
+        # Prioriza primero los sitios que `socid_extractor` sabe extraer de verdad
+        # (tiene una mutación de URL registrada): con decenas de perfiles "tentativo"
+        # empatados a la misma puntuación (un solo Maigret), ordenar solo por
+        # puntuación gastaba el tope de exploración en sitios sin scheme conocido
+        # (bit.ly, blogspot...) en vez de en los que sí revelan datos (GitHub,
+        # GitLab...) — verificado con datos reales (alias 'gaearon').
+        candidatos_nodo = sorted(
+            (n for n in dossier.nodos if n.tipo == "url_perfil" and n.valor.startswith("http")),
+            key=lambda n: (bool(mutate_url(n.valor)), n.puntuacion),
+            reverse=True,
+        )
+        for nodo in candidatos_nodo[:HUELLA_MAX_PIVOTES_POR_NIVEL]:
+            for tipo_nuevo, valor_nuevo in _extraer_pivotes(nodo.valor):
+                clave_nuevo = (tipo_nuevo, valor_nuevo.strip().lower())
+                if clave_nuevo in visitados or clave_nuevo == clave:
+                    continue
+                inv.pivotes_nuevos.append((tipo_nuevo, valor_nuevo))
+                cola.append((valor_nuevo, tipo_nuevo, nivel + 1))
+
+    get_huella().guardar_investigacion(inv)
+    return inv
