@@ -425,7 +425,11 @@ def _ghunt_configurado() -> bool:
 
 
 def _correr_ghunt(email: str) -> tuple[bool, str, str]:
-    """Devuelve (ok, mensaje_error_o_vacio, texto_de_salida)."""
+    """Devuelve (ok, mensaje_error_o_vacio, texto_de_salida).
+
+    Usa `--json` (confirmado real: `ghunt email --help` lo expone) en vez de
+    parsear el stdout con colores/ASCII-art de la CLI.
+    """
     if not _ghunt_configurado():
         return (
             False,
@@ -433,9 +437,20 @@ def _correr_ghunt(email: str) -> tuple[bool, str, str]:
             "'pipx install ghunt' y ejecuta 'ghunt login' una vez; ver requirements.txt).",
             "",
         )
-    cmd = ["ghunt", "email", email]
-    ok, salida = _ejecutar_herramienta("ghunt", cmd, HUELLA_TIMEOUT)
-    return ok, ("" if ok else salida), (salida if ok else "")
+    with tempfile.TemporaryDirectory(prefix="huella_ghunt_") as tmp:
+        out_file = Path(tmp) / "ghunt.json"
+        cmd = ["ghunt", "email", email, "--json", str(out_file)]
+        ok, salida = _ejecutar_herramienta("ghunt", cmd, HUELLA_TIMEOUT)
+        if not ok:
+            return False, salida, ""
+        if not out_file.exists():
+            return False, "ERROR: GHunt no generó el reporte esperado.", ""
+        try:
+            datos = json.loads(out_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            return False, f"ERROR: no pude parsear la salida de GHunt: {exc}", ""
+
+    return True, "", json.dumps(datos, ensure_ascii=False, indent=2)[:2000]
 
 
 def _consultar_gravatar(email: str) -> Optional[dict]:
