@@ -20,16 +20,19 @@ from cristopher.config import HUELLA_PROFUNDIDAD_MAX
 from cristopher.huella import (
     Dossier,
     Investigacion,
+    auditar_pivote,
     buscar_cara,
     buscar_email,
     buscar_nombre,
     buscar_telefono,
+    buscar_termino,
     buscar_username,
+    get_huella,
     investigar,
 )
 from cristopher.tools.google_tools import confirmar_accion
 
-_TIPOS_SOPORTADOS = ("alias", "email", "telefono", "nombre")
+_TIPOS_SOPORTADOS = ("alias", "email", "telefono", "nombre", "termino")
 
 
 def _formatear_dossier(d: Dossier, encabezado: bool = True) -> str:
@@ -172,8 +175,10 @@ def huella_buscar(pivote: str, tipo: str = "alias", ciudad: str = "") -> str:
         dossier = buscar_email(pivote)
     elif tipo == "telefono":
         dossier = buscar_telefono(pivote)
-    else:
+    elif tipo == "nombre":
         dossier = buscar_nombre(pivote, ciudad)
+    else:
+        dossier = buscar_termino(pivote)
     return _formatear_dossier(dossier)
 
 
@@ -196,6 +201,8 @@ def huella_investigar(pivote: str, tipo: str = "alias", profundidad: int = 2) ->
     if not pivote:
         return "ERROR: falta el pivote a investigar."
     tipo = (tipo or "alias").strip().lower()
+    if tipo == "termino":
+        return "ERROR: 'termino' no admite investigación profunda (solo dorking, sin cuentas que seguir). Usa 'huella_buscar'."
     if tipo not in _TIPOS_SOPORTADOS:
         return (
             f"ERROR: tipo de pivote {tipo!r} no soportado. Usa uno de: "
@@ -228,3 +235,179 @@ def huella_buscar_cara(imagen: str) -> str:
         return "Búsqueda por cara CANCELADA por el usuario. No se ejecutó ninguna búsqueda."
     dossier = buscar_cara(imagen)
     return _formatear_dossier(dossier)
+
+
+# --- Protección continua: vigilancia + auditoría + remediación (Tanda E) -----
+
+
+def huella_vigilar_agregar(pivote: str, tipo: str = "alias") -> str:
+    """Añade un pivote o término a la lista de vigilancia: a partir de ahora
+    Cristopher lo re-audita automáticamente (una vez al mes, vía el demonio
+    proactivo) y avisa SOLO de lo NUEVO (cuenta nueva, mención nueva, brecha
+    nueva) — no de "alguien lo buscó" (eso no es detectable), sino de "algo nuevo
+    salió a la luz". Úsala cuando el usuario pida explícitamente que le avises si
+    aparece algo nuevo sobre un alias, email, teléfono, nombre o frase.
+
+    Args:
+        pivote: qué vigilar (un alias, email, teléfono, nombre real o frase libre).
+        tipo: 'alias', 'email', 'telefono', 'nombre' o 'termino' (frase libre que no
+            encaja en los otros tipos — solo se vigila por menciones, sin permutar).
+    """
+    pivote = (pivote or "").strip()
+    if not pivote:
+        return "ERROR: falta el pivote o término a vigilar."
+    tipo = (tipo or "alias").strip().lower()
+    if tipo not in _TIPOS_SOPORTADOS:
+        return f"ERROR: tipo {tipo!r} no soportado. Usa uno de: " + ", ".join(_TIPOS_SOPORTADOS)
+    vid = get_huella().agregar_vigilancia(tipo, pivote)
+    return (
+        f"Vigilancia #{vid} añadida: avisaré si aparece algo NUEVO sobre '{pivote}' "
+        f"(tipo: {tipo}). Se revisa automáticamente una vez al mes; pide "
+        "'audítalo ya' (huella_auditar_ahora) para comprobarlo ahora mismo."
+    )
+
+
+def huella_vigilar_listar() -> str:
+    """Lista todo lo que está en la lista de vigilancia del motor de huella
+    digital (pivotes/términos que se re-auditan mensualmente)."""
+    filas = get_huella().listar_vigilancia()
+    if not filas:
+        return "No hay ningún pivote o término en vigilancia."
+    return "\n".join(f"#{i} [{tipo}] {valor} (desde {creado[:10]})" for i, tipo, valor, creado in filas)
+
+
+def huella_vigilar_quitar(id: int) -> str:
+    """Quita un pivote/término de la lista de vigilancia por su id (el que aparece
+    en `huella_vigilar_listar`). Deja de auditarse, sin borrar el histórico de
+    dossiers ya guardados.
+
+    Args:
+        id: id de la vigilancia a quitar.
+    """
+    valor = get_huella().quitar_vigilancia(id)
+    if valor is None:
+        return f"No hay ninguna vigilancia con id #{id}."
+    return f"Vigilancia #{id} eliminada: ya no avisaré sobre '{valor}'."
+
+
+def huella_auditar_ahora(pivote: str, tipo: str = "alias") -> str:
+    """Audita un pivote YA (sin esperar al ciclo mensual del demonio) y compara
+    contra la última vez que se auditó: informa SOLO de lo NUEVO (o "sin
+    novedades" si nada cambió). No hace falta que el pivote esté en la lista de
+    vigilancia — funciona igual para cualquiera. Úsala cuando el usuario pida
+    comprobar ahora mismo si hay algo nuevo, o para verificar que la vigilancia
+    de un pivote funciona sin esperar 30 días.
+
+    Args:
+        pivote: el identificador a auditar (alias, email, teléfono, nombre o término).
+        tipo: 'alias', 'email', 'telefono', 'nombre' o 'termino'.
+    """
+    pivote = (pivote or "").strip()
+    if not pivote:
+        return "ERROR: falta el pivote a auditar."
+    tipo = (tipo or "alias").strip().lower()
+    if tipo not in _TIPOS_SOPORTADOS:
+        return f"ERROR: tipo {tipo!r} no soportado. Usa uno de: " + ", ".join(_TIPOS_SOPORTADOS)
+    resultado = auditar_pivote(tipo, pivote)
+    if resultado.brechas_nuevas:
+        return f"⚠ HALLAZGO SENSIBLE — {resultado.mensaje}"
+    return resultado.mensaje
+
+
+def huella_remediar(pivote: str) -> str:
+    """Redacta un checklist de remediación CONCRETO (no genérico) a partir de la
+    última auditoría guardada de un pivote: qué contraseñas cambiar, qué cuentas
+    revisar, y sugerencias de protección continua. Solo lectura — sin efectos, sin
+    gate. Úsala tras un `huella_buscar`/`huella_auditar_ahora` cuando el usuario
+    pida qué hacer con lo encontrado.
+
+    Args:
+        pivote: el pivote (normalmente un email) sobre el que pedir el checklist.
+    """
+    pivote = (pivote or "").strip()
+    if not pivote:
+        return "ERROR: falta el pivote para el que redactar el checklist."
+    datos = get_huella().ultimo_dossier(pivote)
+    if datos is None:
+        return f"No hay ningún dossier guardado de '{pivote}' todavía. Audítalo primero (huella_buscar)."
+
+    nodos = datos.get("nodos", [])
+    brechas = [n for n in nodos if n.get("tipo") == "brecha"]
+    cuentas = [
+        n for n in nodos if n.get("tipo") == "url_perfil" and n.get("confianza") in ("confirmado", "probable")
+    ]
+
+    partes = [f"Checklist de remediación para '{pivote}':"]
+    if brechas:
+        partes.append(
+            f"\n1. Brechas encontradas ({len(brechas)}) — cambia la contraseña y activa "
+            "verificación en dos pasos en cada sitio si todavía no lo tenías:"
+        )
+        for b in brechas[:15]:
+            partes.append(f"   - {b.get('valor')}")
+        if len(brechas) > 15:
+            partes.append(f"   ... y {len(brechas) - 15} más.")
+    if cuentas:
+        partes.append(
+            f"\n2. Cuentas de buena confianza encontradas ({len(cuentas)}) — revisa cuáles "
+            "reconoces como tuyas; las que NO, son candidatas a pedir su borrado "
+            "(usa huella_redactar_borrado_rgpd):"
+        )
+        for c in cuentas[:15]:
+            partes.append(f"   - {c.get('valor')} ({c.get('confianza')})")
+        if len(cuentas) > 15:
+            partes.append(f"   ... y {len(cuentas) - 15} más.")
+    partes.append(
+        "\n3. Alertas continuas: si es un email, activa notificaciones de Have I Been "
+        "Pwned (haveibeenpwned.com) para enterarte de brechas futuras sin depender solo "
+        "de esta auditoría."
+    )
+    partes.append(
+        "4. Si aparece un dato antiguo que ya no debería estar público, puedes pedir su "
+        "retirada de los buscadores (herramienta de eliminación de resultados de Google) "
+        "además de al sitio en sí."
+    )
+    if not brechas and not cuentas:
+        partes.append(
+            "\nSin brechas ni cuentas de buena confianza en la última auditoría — nada "
+            "concreto que remediar por ahora."
+        )
+    return "\n".join(partes)
+
+
+def huella_redactar_borrado_rgpd(sitio: str, email_destino: str, pivote: str) -> str:
+    """Redacta el TEXTO de una solicitud de supresión de datos (derecho al olvido,
+    Art. 17 RGPD) lista para revisar. NUNCA la envía — devuelve solo el borrador.
+    Si el usuario quiere enviarla, pídeselo explícitamente y usa `enviar_correo`
+    (que ya pide confirmación por su cuenta). Úsala cuando el usuario pida
+    redactar/preparar una solicitud de borrado para un sitio concreto.
+
+    Args:
+        sitio: nombre del sitio/servicio al que se dirige la solicitud.
+        email_destino: a qué dirección de correo enviarla (la de contacto/privacidad del sitio).
+        pivote: el dato personal (email, alias, nombre...) que identifica al usuario ante ese sitio.
+    """
+    sitio = (sitio or "").strip()
+    email_destino = (email_destino or "").strip()
+    pivote = (pivote or "").strip()
+    if not sitio or not email_destino or not pivote:
+        return "ERROR: faltan datos — hacen falta 'sitio', 'email_destino' y 'pivote'."
+
+    asunto = f"Solicitud de supresión de datos personales (Art. 17 RGPD) — {sitio}"
+    cuerpo = (
+        f"A quien corresponda en {sitio}:\n\n"
+        "Por la presente ejercito mi derecho de supresión (\"derecho al olvido\") "
+        "recogido en el artículo 17 del Reglamento General de Protección de Datos "
+        f"(RGPD, UE 2016/679), en relación con los datos personales asociados a: {pivote}.\n\n"
+        "Solicito la eliminación completa de cualquier cuenta, perfil o dato personal "
+        "mío que conserven, así como la confirmación por escrito de que dicha "
+        "supresión se ha llevado a cabo, en el plazo máximo de un mes que establece "
+        "el artículo 12.3 del citado reglamento.\n\n"
+        "Quedo a la espera de su respuesta.\n\nAtentamente."
+    )
+    return (
+        f"Borrador listo para revisar — destino: {email_destino} · asunto: {asunto!r}\n\n"
+        f"{cuerpo}\n\n"
+        "(Esto es solo el TEXTO — no se ha enviado nada. Si quieres que lo envíe, dímelo "
+        "explícitamente y usaré enviar_correo, que pedirá tu confirmación antes de mandarlo.)"
+    )

@@ -86,6 +86,7 @@ from cristopher.config import (
     HUELLA_PROFUNDIDAD_MAX,
     HUELLA_TIMEOUT,
 )
+from cristopher.episodica import get_episodica
 from cristopher.vision import preguntar_sobre_imagen
 
 
@@ -109,7 +110,7 @@ def _entorno_saneado() -> dict[str, str]:
 @dataclass
 class Nodo:
     id: str
-    tipo: str  # alias|email|telefono|nombre|url_perfil|foto|brecha
+    tipo: str  # alias|email|telefono|nombre|url_perfil|foto|brecha|termino
     valor: str
     # Etiqueta DERIVADA de `puntuacion` vía `_puntuar()` (Tanda C): "tentativo" (<0.4) |
     # "probable" (0.4-0.7) | "confirmado" (>0.7) — corroboración de identidad. Excepción:
@@ -216,6 +217,42 @@ class Huella:
                     creado TEXT NOT NULL
                 )"""
             )
+            # Tanda E: pivotes/términos que el usuario pide vigilar — el demonio
+            # proactivo los re-audita periódicamente (ver proactivo.py).
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS huella_vigilancia (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tipo TEXT NOT NULL,
+                    valor TEXT NOT NULL,
+                    creado TEXT NOT NULL
+                )"""
+            )
+
+    def agregar_vigilancia(self, tipo: str, valor: str) -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT INTO huella_vigilancia (tipo, valor, creado) VALUES (?, ?, ?)",
+                (tipo, valor, _now()),
+            )
+            return cur.lastrowid
+
+    def listar_vigilancia(self) -> list[tuple[int, str, str, str]]:
+        """(id, tipo, valor, creado) de todo lo vigilado."""
+        with self._lock:
+            return self._conn.execute(
+                "SELECT id, tipo, valor, creado FROM huella_vigilancia ORDER BY id"
+            ).fetchall()
+
+    def quitar_vigilancia(self, vigilancia_id: int) -> Optional[str]:
+        """Borra por id. Devuelve el `valor` borrado, o None si no existía."""
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT valor FROM huella_vigilancia WHERE id=?", (vigilancia_id,)
+            ).fetchone()
+            if not row:
+                return None
+            self._conn.execute("DELETE FROM huella_vigilancia WHERE id=?", (vigilancia_id,))
+            return row[0]
 
     def guardar_dossier(self, dossier: Dossier) -> int:
         with self._lock, self._conn:
@@ -919,6 +956,32 @@ def buscar_cara(imagen: str) -> Dossier:
     return dossier
 
 
+# --- Pivote TÉRMINO: término libre para la lista de vigilancia (Tanda E) -----
+
+
+def buscar_termino(texto: str) -> Dossier:
+    """Pivote TÉRMINO: para la lista de vigilancia (Tanda E) cuando lo que se
+    vigila no es un alias/email/teléfono/nombre-de-persona, sino una frase u otro
+    identificador libre. SOLO dorking (`_dorking_nombre` reutilizado tal cual, sin
+    permutación ni `buscar_username` — un término libre no es necesariamente el
+    nombre de una persona real, permutarlo no tendría sentido). Todos los hallazgos
+    son `tentativo` (un resultado de búsqueda no es una cuenta verificada).
+    """
+    dossier = Dossier(pivote=texto, tipo="termino")
+    nodo_pivote = Nodo(id=f"termino:{texto}", tipo="termino", valor=texto, confianza="confirmado")
+    dossier.nodos.append(nodo_pivote)
+
+    for hallazgo in _dorking_nombre(texto, "")[:HUELLA_DORK_RESULTADOS_MAX]:
+        nodo_url = Nodo(id=f"url_perfil:{hallazgo['url']}", tipo="url_perfil", valor=hallazgo["url"], confianza="tentativo")
+        dossier.nodos.append(nodo_url)
+        dossier.aristas.append(
+            Arista(origen=nodo_pivote.id, destino=nodo_url.id, tipo_enlace="dorking", fuente="google_dork", peso=0.3)
+        )
+
+    get_huella().guardar_dossier(dossier)
+    return dossier
+
+
 # --- Bucle de pivote (BFS) + motor de extracción (socid-extractor) -----------
 
 # Campos que socid_extractor puede devolver y que son pivotes nuevos, no metadata
@@ -1117,3 +1180,77 @@ def investigar(pivote: str, tipo: str, profundidad: int = HUELLA_PROFUNDIDAD_MAX
     inv.aristas_correlacion = _correlacionar_avatares(inv)
     get_huella().guardar_investigacion(inv)
     return inv
+
+
+# --- Protección continua: diff + auditoría periódica (Tanda E) ---------------
+
+
+def _diferenciar(anterior: Optional[dict], nuevo: Dossier) -> tuple[list[Nodo], list[Nodo]]:
+    """Compara el dossier ANTERIOR (dict, de `Huella.ultimo_dossier`) contra el
+    `nuevo` recién buscado, por `(tipo, valor normalizado)`. `anterior=None`
+    (primera vez que se audita este pivote) devuelve listas vacías A PROPÓSITO: no
+    tiene sentido avisar de "todo es nuevo" en la línea base — sería puro ruido.
+
+    Devuelve `(nodos_nuevos, brechas_nuevas)` — `brechas_nuevas` es el subconjunto
+    de `nodos_nuevos` con `tipo == "brecha"`, la señal que dispara nivel 3.
+    """
+    if anterior is None:
+        return [], []
+    conocidos = {(n["tipo"], n["valor"].strip().lower()) for n in anterior.get("nodos", [])}
+    nuevos = [n for n in nuevo.nodos if (n.tipo, n.valor.strip().lower()) not in conocidos]
+    brechas_nuevas = [n for n in nuevos if n.tipo == "brecha"]
+    return nuevos, brechas_nuevas
+
+
+@dataclass
+class ResultadoAuditoria:
+    pivote: str
+    tipo: str
+    hay_novedades: bool
+    nodos_nuevos: list[Nodo]
+    brechas_nuevas: list[Nodo]
+    mensaje: str
+
+
+def auditar_pivote(tipo: str, valor: str) -> ResultadoAuditoria:
+    """Re-audita un pivote/término vigilado y compara contra su última auditoría
+    (`Huella.ultimo_dossier`, pedido ANTES de buscar — si no, compararíamos el
+    dossier nuevo contra sí mismo). Registra un episodio (`tipo="huella_auditoria"`)
+    con el resumen, para que quede en la línea de tiempo del usuario. Reutilizable
+    tanto por el demonio proactivo (mensual) como por una tool bajo demanda.
+    """
+    anterior = get_huella().ultimo_dossier(valor)
+
+    if tipo == "termino":
+        nuevo = buscar_termino(valor)
+    elif tipo in _BUSCADORES:
+        nuevo = _BUSCADORES[tipo](valor)
+    else:
+        raise ValueError(f"tipo de vigilancia no soportado: {tipo!r}")
+
+    nodos_nuevos, brechas_nuevas = _diferenciar(anterior, nuevo)
+    hay_novedades = bool(nodos_nuevos)
+
+    if anterior is None:
+        mensaje = f"Primera auditoría de '{valor}' ({tipo}): línea base guardada, {len(nuevo.nodos)} elemento(s)."
+    elif hay_novedades:
+        partes = [f"{len(nodos_nuevos)} novedad(es) en '{valor}' ({tipo})"]
+        if brechas_nuevas:
+            partes.append("⚠ brecha(s) NUEVA(s): " + ", ".join(n.valor for n in brechas_nuevas))
+        otras = [n for n in nodos_nuevos if n.tipo != "brecha"]
+        if otras:
+            partes.append(", ".join(f"{n.tipo}:{n.valor}" for n in otras[:5]))
+        mensaje = " — ".join(partes)
+    else:
+        mensaje = f"Auditoría de '{valor}' ({tipo}): sin novedades."
+
+    get_episodica().registrar(mensaje, tipo="huella_auditoria", entidad=valor)
+
+    return ResultadoAuditoria(
+        pivote=valor,
+        tipo=tipo,
+        hay_novedades=hay_novedades,
+        nodos_nuevos=nodos_nuevos,
+        brechas_nuevas=brechas_nuevas,
+        mensaje=mensaje,
+    )

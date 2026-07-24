@@ -545,6 +545,37 @@ class Demonio:
             entregados.append((nivel, mensaje))
         return entregados
 
+    def _revisar_auditoria_huella(self) -> None:
+        """Re-audita mensualmente los pivotes/términos de la lista de vigilancia
+        del motor de huella digital (Tanda E): dedup por mes embebido en la clave
+        (mismo patrón que `_avisos_whatsapp` — "auto-limpia" sola al cambiar de
+        mes, sin tabla de estado nueva). Nivel 3 (URGENTE) si apareció una brecha
+        nueva; nivel 1 para el resto de novedades (cuenta/mención nueva) — la
+        severidad OSINT se decide aquí en código, no por el clasificador LLM
+        genérico de `revisar_una_vez` (es dominio específico, no texto libre)."""
+        try:
+            from cristopher.huella import auditar_pivote, get_huella
+
+            vigilados = get_huella().listar_vigilancia()
+        except Exception:
+            return
+        if not vigilados:
+            return
+        mes = datetime.now().strftime("%Y-%m")
+        for _id, tipo, valor, _creado in vigilados:
+            clave = f"huella_auditoria:{tipo}:{valor}:{mes}"
+            if self._rec.ya_visto(clave):
+                continue
+            try:
+                resultado = auditar_pivote(tipo, valor)
+                if resultado.hay_novedades:
+                    nivel = 3 if resultado.brechas_nuevas else 1
+                    self._entregar(nivel, f"Auditoría de huella digital — {resultado.mensaje}")
+            except Exception as exc:
+                print(f"{AMBER}[demonio] error auditando huella de '{valor}': {exc}{RESET}")
+            finally:
+                self._rec.marcar_visto(clave)
+
     def _revisar_concentracion(self) -> None:
         """Sondea si toca terminar/cambiar de fase el modo concentración (fin por
         tiempo o transición foco↔descanso). Reutiliza este mismo hilo de sondeo, sin
@@ -563,6 +594,7 @@ class Demonio:
                 self._revisar_concentracion()
                 self._revisar_preguntas_sesiones()
                 self._vigilar_sesiones_code()
+                self._revisar_auditoria_huella()
             except Exception as exc:  # el demonio nunca debe morir por un fallo puntual
                 print(f"{AMBER}[demonio] error en la revisión: {exc}{RESET}")
             time.sleep(POLL_SEGUNDOS)

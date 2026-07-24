@@ -67,7 +67,17 @@ from cristopher.tools.google_tools import (
     proximo_evento,
     responder_correo,
 )
-from cristopher.tools.huella_tools import huella_buscar, huella_buscar_cara, huella_investigar
+from cristopher.tools.huella_tools import (
+    huella_auditar_ahora,
+    huella_buscar,
+    huella_buscar_cara,
+    huella_investigar,
+    huella_redactar_borrado_rgpd,
+    huella_remediar,
+    huella_vigilar_agregar,
+    huella_vigilar_listar,
+    huella_vigilar_quitar,
+)
 from cristopher.tools.memory_tools import olvidar_hecho, recall, remember
 from cristopher.tools.notas_tools import apuntar, borrar_nota, buscar_nota, listar_notas
 from cristopher.tools.tareas_tools import (
@@ -1914,8 +1924,11 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "tipo": {
                     "type": "string",
-                    "description": "Tipo de pivote: 'alias' (username), 'email', 'telefono' o 'nombre'.",
-                    "enum": ["alias", "email", "telefono", "nombre"],
+                    "description": (
+                        "Tipo de pivote: 'alias' (username), 'email', 'telefono', 'nombre' o "
+                        "'termino' (frase libre, solo dorking, sin permutar)."
+                    ),
+                    "enum": ["alias", "email", "telefono", "nombre", "termino"],
                 },
                 "ciudad": {
                     "type": "string",
@@ -1947,6 +1960,124 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["imagen"],
         },
         "fn": huella_buscar_cara,
+    },
+    {
+        "name": "huella_vigilar_agregar",
+        "description": (
+            "Añade un pivote o término a la lista de vigilancia del motor de huella "
+            "digital: a partir de ahora se re-audita automáticamente (una vez al mes, "
+            "vía el demonio proactivo) y avisa SOLO de lo NUEVO (cuenta nueva, mención "
+            "nueva, brecha nueva) — no 'alguien lo buscó' (no detectable), sino 'algo "
+            "nuevo salió a la luz'. Úsala cuando el usuario pida explícitamente que le "
+            "avises si aparece algo nuevo sobre un alias, email, teléfono, nombre o frase."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pivote": {
+                    "type": "string",
+                    "description": "Qué vigilar (alias, email, teléfono, nombre real o frase libre).",
+                },
+                "tipo": {
+                    "type": "string",
+                    "description": "'alias', 'email', 'telefono', 'nombre' o 'termino' (frase libre).",
+                    "enum": ["alias", "email", "telefono", "nombre", "termino"],
+                },
+            },
+            "required": ["pivote"],
+        },
+        "fn": huella_vigilar_agregar,
+    },
+    {
+        "name": "huella_vigilar_listar",
+        "description": "Lista todo lo que está en la lista de vigilancia del motor de huella digital (se re-audita mensualmente).",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": huella_vigilar_listar,
+    },
+    {
+        "name": "huella_vigilar_quitar",
+        "description": "Quita un pivote/término de la lista de vigilancia por su id (el que da huella_vigilar_listar). No borra el histórico de auditorías ya guardadas.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer", "description": "Id de la vigilancia a quitar."},
+            },
+            "required": ["id"],
+        },
+        "fn": huella_vigilar_quitar,
+    },
+    {
+        "name": "huella_auditar_ahora",
+        "description": (
+            "Audita un pivote YA (sin esperar al ciclo mensual) y compara contra la "
+            "última vez que se auditó: informa SOLO de lo NUEVO, o 'sin novedades' si "
+            "nada cambió. No hace falta que esté en la lista de vigilancia. Úsala cuando "
+            "el usuario pida comprobar ahora mismo si hay algo nuevo, o para verificar "
+            "que una vigilancia funciona sin esperar 30 días."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pivote": {
+                    "type": "string",
+                    "description": "El identificador a auditar (alias, email, teléfono, nombre o término).",
+                },
+                "tipo": {
+                    "type": "string",
+                    "description": "'alias', 'email', 'telefono', 'nombre' o 'termino'.",
+                    "enum": ["alias", "email", "telefono", "nombre", "termino"],
+                },
+            },
+            "required": ["pivote"],
+        },
+        "fn": huella_auditar_ahora,
+    },
+    {
+        "name": "huella_remediar",
+        "description": (
+            "Redacta un checklist de remediación CONCRETO (no genérico) a partir de la "
+            "última auditoría guardada de un pivote: qué contraseñas cambiar, qué "
+            "cuentas revisar, sugerencias de protección continua. Solo lectura, sin "
+            "efectos, sin gate. Úsala tras una búsqueda/auditoría cuando el usuario "
+            "pida qué hacer con lo encontrado."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pivote": {
+                    "type": "string",
+                    "description": "El pivote (normalmente un email) sobre el que pedir el checklist.",
+                },
+            },
+            "required": ["pivote"],
+        },
+        "fn": huella_remediar,
+    },
+    {
+        "name": "huella_redactar_borrado_rgpd",
+        "description": (
+            "Redacta el TEXTO de una solicitud de supresión de datos (derecho al "
+            "olvido, Art. 17 RGPD) lista para revisar. NUNCA la envía — solo devuelve "
+            "el borrador. Si el usuario quiere enviarla, pídeselo explícitamente y usa "
+            "`enviar_correo` (que ya pide su propia confirmación). Úsala cuando el "
+            "usuario pida redactar/preparar una solicitud de borrado para un sitio."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sitio": {"type": "string", "description": "Nombre del sitio/servicio al que se dirige la solicitud."},
+                "email_destino": {
+                    "type": "string",
+                    "description": "Dirección de correo de contacto/privacidad del sitio.",
+                },
+                "pivote": {
+                    "type": "string",
+                    "description": "El dato personal (email, alias, nombre...) que identifica al usuario ante ese sitio.",
+                },
+            },
+            "required": ["sitio", "email_destino", "pivote"],
+        },
+        "fn": huella_redactar_borrado_rgpd,
     },
     {
         "name": "huella_investigar",
