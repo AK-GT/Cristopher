@@ -58,27 +58,35 @@ import tempfile
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
 import httpx
+import imagehash
 import phonenumbers
 import requests
 import trio
+from PIL import Image
 from phonenumbers import PhoneNumberType, carrier, geocoder
 from xposedornot import XposedOrNot
 
 from socid_extractor import extract, mutate_url, parse as socid_parse
 
+from cristopher.browser import get_browser
 from cristopher.config import (
+    HUELLA_AVATAR_TIMEOUT,
     HUELLA_DIR,
+    HUELLA_DORK_RESULTADOS_MAX,
     HUELLA_EXTRACCION_TIMEOUT,
     HUELLA_MAIGRET_TOP_SITES,
     HUELLA_MAX_NODOS_TOTAL,
     HUELLA_MAX_PIVOTES_POR_NIVEL,
+    HUELLA_PHASH_UMBRAL,
     HUELLA_PROFUNDIDAD_MAX,
     HUELLA_TIMEOUT,
 )
+from cristopher.vision import preguntar_sobre_imagen
 
 
 def _now() -> str:
@@ -116,6 +124,9 @@ class Nodo:
     # tipo de línea de un teléfono, vía `phonenumbers`) — no implica una fuente externa
     # corroborando una identidad, así que no genera Arista ni consume la escala de confianza.
     detalle: str = ""
+    # URL del avatar de esta cuenta, si la fuente lo dio (Maigret/Gravatar). Alimenta la
+    # correlación por pHash (Tanda D) — vacío si no se conoce.
+    avatar_url: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -125,6 +136,7 @@ class Nodo:
             "confianza": self.confianza,
             "puntuacion": self.puntuacion,
             "detalle": self.detalle,
+            "avatar_url": self.avatar_url,
         }
 
 
@@ -318,8 +330,9 @@ def _correr_maigret(alias: str, out_dir: Path) -> tuple[bool, str, list[dict]]:
         status = registro.get("status", {})
         sitio = status.get("site_name") or registro.get("sitename")
         url = status.get("url") or registro.get("url_user")
+        avatar = status.get("ids", {}).get("image", "")
         if sitio and url:
-            hallazgos.append({"sitio": sitio, "url": url})
+            hallazgos.append({"sitio": sitio, "url": url, "avatar": avatar})
     return True, "", hallazgos
 
 
@@ -420,9 +433,13 @@ def _cruzar_hallazgos(
     for fuente, hallazgos in hallazgos_por_fuente.items():
         for h in hallazgos:
             clave = _clave_sitio(h["sitio"])
-            entrada = por_sitio.setdefault(clave, {"sitio": h["sitio"], "url": h.get("url", ""), "fuentes": set()})
+            entrada = por_sitio.setdefault(
+                clave, {"sitio": h["sitio"], "url": h.get("url", ""), "avatar": "", "fuentes": set()}
+            )
             if not entrada["url"] and h.get("url"):
                 entrada["url"] = h["url"]
+            if not entrada["avatar"] and h.get("avatar"):
+                entrada["avatar"] = h["avatar"]
             entrada["fuentes"].add(fuente)
 
     for clave, entrada in sorted(por_sitio.items()):
@@ -433,6 +450,7 @@ def _cruzar_hallazgos(
             valor=entrada["url"] or entrada["sitio"],
             confianza=etiqueta,
             puntuacion=puntuacion,
+            avatar_url=entrada["avatar"],
         )
         dossier.nodos.append(nodo)
         for fuente in sorted(entrada["fuentes"]):
@@ -667,7 +685,13 @@ def buscar_email(email: str) -> Dossier:
     hallazgos_gravatar: list[dict] = []
     perfil_gravatar = _consultar_gravatar(email)
     if perfil_gravatar:
-        hallazgos_gravatar = [{"sitio": "Gravatar", "url": perfil_gravatar.get("profile_url", "")}]
+        hallazgos_gravatar = [
+            {
+                "sitio": "Gravatar",
+                "url": perfil_gravatar.get("profile_url", ""),
+                "avatar": perfil_gravatar.get("avatar_url", ""),
+            }
+        ]
 
     _cruzar_hallazgos(dossier, nodo_pivote, {"user-scanner": hallazgos_us, "gravatar": hallazgos_gravatar})
 
@@ -731,6 +755,165 @@ def buscar_telefono(numero: str) -> Dossier:
     if not ok_ig:
         dossier.errores.append(f"ignorant: {err_ig}")
     _cruzar_hallazgos(dossier, nodo_pivote, {"ignorant": hallazgos_ig})
+
+    get_huella().guardar_dossier(dossier)
+    return dossier
+
+
+# --- Pivote NOMBRE: permutación validada + dorking (Tanda D) -----------------
+
+
+def _permutar_nombre(nombre_completo: str) -> list[str]:
+    """Genera candidatos a alias a partir de un nombre real: 'nombre.apellido',
+    'nombreapellido', inicial+apellido, 'nombre_apellido', 'apellidonombre'. Sin
+    variante "+año": no hay fecha de nacimiento como entrada, inventar un año sería
+    puro ruido. El nombre real es el pivote MÁS DÉBIL (§1/HERRAMIENTA_BUSQUEDA.md) —
+    ninguno de estos candidatos se afirma como pivote real sin validarlo (ver
+    `buscar_nombre`)."""
+    partes = [p for p in nombre_completo.strip().split() if p]
+    if len(partes) < 2:
+        return []
+    nombre, apellido = partes[0], partes[-1]
+    candidatos = {
+        f"{nombre}.{apellido}",
+        f"{nombre}{apellido}",
+        f"{nombre[0]}{apellido}",
+        f"{nombre}_{apellido}",
+        f"{apellido}{nombre}",
+    }
+    return sorted(c.lower() for c in candidatos)
+
+
+def _dorking_nombre(nombre_completo: str, ciudad: str) -> list[dict]:
+    """Consultas dirigidas ('dorks') vía DuckDuckGo (`ddgs`) — sin navegador: Google
+    bloquea el Chromium headless sin perfil persistente con un muro anti-bot
+    ("unusual traffic"), verificado real al intentarlo por Playwright. `ddgs` ya es
+    dependencia del proyecto (`web_search.py`, fallback de la búsqueda de élite).
+    Nunca lanza: fallo de red/rate-limit = lista vacía."""
+    from ddgs import DDGS
+
+    consultas = [f'"{nombre_completo}" {ciudad}'.strip(), f'site:linkedin.com "{nombre_completo}"']
+    resultados: list[dict] = []
+    for consulta in consultas:
+        try:
+            with DDGS() as ddgs:
+                for r in ddgs.text(consulta, max_results=HUELLA_DORK_RESULTADOS_MAX):
+                    url = r.get("href") or r.get("url", "")
+                    if url:
+                        resultados.append({"titulo": r.get("title", url), "url": url})
+        except Exception:
+            continue
+    return resultados
+
+
+def buscar_nombre(nombre_completo: str, ciudad: str = "") -> Dossier:
+    """Pivote NOMBRE (el más débil en solitario — §1): genera permutaciones de alias
+    y solo promueve una a pivote real si `buscar_username` la corrobora con algún
+    sitio "confirmado" (≥2 fuentes independientes, la misma regla dura de §5 — no se
+    relaja para este pivote). Cribado barato con Socialscan antes de pagar el coste
+    de Maigret en cada permutación. Además, dorking (`_dorking_nombre`) por si hay
+    perfiles públicos indexados (LinkedIn, prensa...) — resultados de búsqueda, no
+    cuentas verificadas, siempre `tentativo`.
+    """
+    dossier = Dossier(pivote=nombre_completo, tipo="nombre")
+    nodo_pivote = Nodo(id=f"nombre:{nombre_completo}", tipo="nombre", valor=nombre_completo, confianza="confirmado")
+    dossier.nodos.append(nodo_pivote)
+
+    permutaciones = _permutar_nombre(nombre_completo)
+    if not permutaciones:
+        dossier.errores.append("Nombre incompleto: hace falta al menos nombre y apellido para permutar.")
+
+    for candidato in permutaciones:
+        with tempfile.TemporaryDirectory(prefix="huella_nombre_") as tmp:
+            ok_s, _, hallazgos_s = _correr_socialscan(candidato, Path(tmp) / "ss.json")
+        if not ok_s or not hallazgos_s:
+            continue  # cribado: nada en Socialscan, no merece el coste de Maigret
+
+        sub_dossier = buscar_username(candidato)  # reutiliza la Tanda A tal cual
+        confirmados = [n for n in sub_dossier.nodos if n.tipo == "url_perfil" and n.confianza == "confirmado"]
+        if not confirmados:
+            continue
+
+        nodo_candidato = Nodo(id=f"alias:{candidato}", tipo="alias", valor=candidato, confianza="confirmado")
+        dossier.nodos.append(nodo_candidato)
+        dossier.aristas.append(
+            Arista(
+                origen=nodo_pivote.id,
+                destino=nodo_candidato.id,
+                tipo_enlace="permutacion_validada",
+                fuente="permutador",
+                peso=1.0,
+            )
+        )
+        dossier.errores.extend(f"(vía permutación '{candidato}') {e}" for e in sub_dossier.errores)
+
+    for hallazgo in _dorking_nombre(nombre_completo, ciudad)[: HUELLA_DORK_RESULTADOS_MAX]:
+        nodo_url = Nodo(id=f"url_perfil:{hallazgo['url']}", tipo="url_perfil", valor=hallazgo["url"], confianza="tentativo")
+        dossier.nodos.append(nodo_url)
+        dossier.aristas.append(
+            Arista(origen=nodo_pivote.id, destino=nodo_url.id, tipo_enlace="dorking", fuente="google_dork", peso=0.3)
+        )
+
+    get_huella().guardar_dossier(dossier)
+    return dossier
+
+
+# --- Pivote CARA: búsqueda inversa por imagen (Yandex) — Tanda D -------------
+
+
+def buscar_cara(imagen: str) -> Dossier:
+    """Pivote CARA: dónde más aparece una foto, vía búsqueda inversa en Yandex
+    Images (`browser.buscar_por_imagen`). El pivote más potente y más sensible del
+    sistema (reconocimiento facial sobre datos públicos) — SIN gate aquí dentro: el
+    gate vive en la tool (`huella_tools.huella_buscar_cara`), `huella.py` no importa
+    `confirmar_accion` (mismo criterio de capas que el resto del módulo: el motor
+    ejecuta, la capa de tool decide permisos).
+
+    `imagen`: URL (http/https) o ruta local a la foto.
+    """
+    dossier = Dossier(pivote=imagen, tipo="foto")
+    nodo_pivote = Nodo(id=f"foto:{imagen}", tipo="foto", valor=imagen, confianza="confirmado")
+    dossier.nodos.append(nodo_pivote)
+
+    try:
+        resultados, captura = get_browser().buscar_por_imagen(imagen)
+    except Exception as exc:
+        dossier.errores.append(f"Yandex: {exc}")
+        get_huella().guardar_dossier(dossier)
+        return dossier
+
+    for r in resultados:
+        nodo_url = Nodo(id=f"url_perfil:{r['url']}", tipo="url_perfil", valor=r["url"], confianza="tentativo")
+        dossier.nodos.append(nodo_url)
+        dossier.aristas.append(
+            Arista(origen=nodo_pivote.id, destino=nodo_url.id, tipo_enlace="aparece_en", fuente="yandex_cara", peso=0.4)
+        )
+
+    # Red de seguridad: el DOM de Yandex cambia con frecuencia (gotcha conocido). Si
+    # no dio resultados estructurados pero sí una captura, la visión lee la pantalla
+    # (mismo patrón que `navegador_captura`).
+    if not resultados and captura:
+        try:
+            resumen = preguntar_sobre_imagen(
+                captura,
+                "Esta es una captura de resultados de búsqueda inversa por imagen en "
+                "Yandex Images. Lista los sitios o páginas donde aparece la foto "
+                "buscada, con su URL si es legible en la captura.",
+            )
+            dossier.nodos.append(
+                Nodo(
+                    id=f"vision:{imagen}",
+                    tipo="url_perfil",
+                    valor="(ver detalle — leído por visión, no del DOM)",
+                    confianza="tentativo",
+                    detalle=resumen,
+                )
+            )
+            dossier.aristas.append(
+                Arista(origen=nodo_pivote.id, destino=f"vision:{imagen}", tipo_enlace="aparece_en", fuente="yandex_cara_vision")
+            )
+        except Exception as exc:
+            dossier.errores.append(f"Visión sobre captura de Yandex: {exc}")
 
     get_huella().guardar_dossier(dossier)
     return dossier
@@ -805,6 +988,10 @@ class Investigacion:
     # tope de nodos — trazabilidad honesta de lo que el motor vio pero no siguió.
     pivotes_nuevos: list[tuple[str, str]] = field(default_factory=list)
     profundidad_alcanzada: int = 0
+    # Aristas CRUZADAS entre dossiers distintos (Tanda D: mismo avatar aunque cambie
+    # el alias) — fuera del modelo "una arista vive dentro de un dossier" porque por
+    # definición conectan cuentas de búsquedas/pivotes diferentes.
+    aristas_correlacion: list[Arista] = field(default_factory=list)
     creado: str = field(default_factory=_now)
 
     def to_dict(self) -> dict:
@@ -814,11 +1001,64 @@ class Investigacion:
             "dossiers": [d.to_dict() for d in self.dossiers],
             "pivotes_nuevos": [list(p) for p in self.pivotes_nuevos],
             "profundidad_alcanzada": self.profundidad_alcanzada,
+            "aristas_correlacion": [a.to_dict() for a in self.aristas_correlacion],
             "creado": self.creado,
         }
 
 
-_BUSCADORES = {"alias": buscar_username, "email": buscar_email, "telefono": buscar_telefono}
+# --- Correlación por avatar (pHash, Tanda D) ----------------------------------
+
+
+def _hash_avatar(url: str) -> Optional["imagehash.ImageHash"]:
+    """Descarga un avatar y calcula su hash perceptual (pHash). `None` ante
+    cualquier fallo (red, imagen corrupta/formato no soportado) — ese avatar
+    simplemente no participa en la correlación, nunca rompe el resto."""
+    try:
+        r = requests.get(url, timeout=HUELLA_AVATAR_TIMEOUT)
+        r.raise_for_status()
+        return imagehash.phash(Image.open(BytesIO(r.content)))
+    except Exception:
+        return None
+
+
+def _correlacionar_avatares(inv: Investigacion) -> list[Arista]:
+    """Enlaza cuentas de DISTINTOS pivotes/dossiers que comparten avatar (distancia
+    de Hamming ≤ HUELLA_PHASH_UMBRAL) — "aunque cambie el alias" (§ Tanda D). Solo
+    tiene sentido comparando cuentas de búsquedas distintas: dentro de UN mismo
+    alias, casi todas las cuentas ya comparten avatar por ser la misma persona
+    registrándose igual en todas partes, eso no es una correlación nueva.
+    """
+    candidatos: list[Nodo] = [
+        n for d in inv.dossiers for n in d.nodos if n.tipo == "url_perfil" and n.avatar_url
+    ]
+    hashes: list[tuple[Nodo, "imagehash.ImageHash"]] = []
+    for n in candidatos:
+        h = _hash_avatar(n.avatar_url)
+        if h is not None:
+            hashes.append((n, h))
+
+    aristas: list[Arista] = []
+    for i in range(len(hashes)):
+        n1, h1 = hashes[i]
+        for j in range(i + 1, len(hashes)):
+            n2, h2 = hashes[j]
+            if n1.valor == n2.valor:
+                continue
+            distancia = h1 - h2
+            if distancia <= HUELLA_PHASH_UMBRAL:
+                peso = round(1.0 - distancia / max(HUELLA_PHASH_UMBRAL, 1), 2)
+                aristas.append(
+                    Arista(origen=n1.id, destino=n2.id, tipo_enlace="mismo_avatar", fuente="phash", peso=peso)
+                )
+    return aristas
+
+
+_BUSCADORES = {
+    "alias": buscar_username,
+    "email": buscar_email,
+    "telefono": buscar_telefono,
+    "nombre": buscar_nombre,
+}
 
 
 def investigar(pivote: str, tipo: str, profundidad: int = HUELLA_PROFUNDIDAD_MAX) -> Investigacion:
@@ -874,5 +1114,6 @@ def investigar(pivote: str, tipo: str, profundidad: int = HUELLA_PROFUNDIDAD_MAX
                 inv.pivotes_nuevos.append((tipo_nuevo, valor_nuevo))
                 cola.append((valor_nuevo, tipo_nuevo, nivel + 1))
 
+    inv.aristas_correlacion = _correlacionar_avatares(inv)
     get_huella().guardar_investigacion(inv)
     return inv

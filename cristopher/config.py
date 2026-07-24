@@ -170,6 +170,17 @@ HUELLA_MAX_PIVOTES_POR_NIVEL = 10
 HUELLA_MAX_NODOS_TOTAL = 40        # tope duro de pivotes visitados en toda la investigación
 HUELLA_EXTRACCION_TIMEOUT = 8      # s por fetch de socid_extractor.parse (una URL de perfil)
 
+# --- Motor de huella digital: correlación avanzada (huella.py, Tanda D) ------
+# Distancia de Hamming (hash de 64 bits) para enlazar dos avatares como "el mismo".
+# Conservador a propósito: el propio documento avisa de falsos positivos con avatares
+# genéricos/por defecto — verificado con avatares reales distintos (distancia 24).
+HUELLA_PHASH_UMBRAL = 6
+HUELLA_AVATAR_TIMEOUT = 8          # s por descarga de avatar para pHash
+# Dorking del pivote nombre: vía `ddgs` (DuckDuckGo), no navegador — Google bloquea el
+# Chromium headless sin perfil persistente con un muro anti-bot ("unusual traffic"),
+# verificado real (no hipotético) al probar el dorking por Playwright headless.
+HUELLA_DORK_RESULTADOS_MAX = 5
+
 # --- Integración de WhatsApp (Baileys, Node.js) -------------------------------
 # Baileys es una librería NO OFICIAL que reimplementa el protocolo de WhatsApp Web;
 # usarla conlleva riesgo de que Meta limite o banee el número. Decisión ya tomada por

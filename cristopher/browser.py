@@ -86,6 +86,57 @@ class _Browser:
                 page.close()
         return _clip(f"[{title}] — {url}\n{body}".strip())
 
+    def buscar_por_imagen(self, imagen: str) -> tuple[list[dict], Optional[bytes]]:
+        """Búsqueda inversa por imagen en Yandex Images: sitios donde aparece una foto
+        visualmente similar. `imagen` es una URL (http/https) o una ruta local.
+
+        Devuelve (resultados, captura): `resultados` es una lista {title, url} de las
+        páginas donde Yandex encontró la imagen; `captura` son los bytes PNG de la
+        pantalla de resultados SOLO si el DOM no dio nada (para que el llamante pueda
+        recurrir a visión, igual que `navegador_captura`) — si el DOM sí dio resultados,
+        `captura` es `None` (no hace falta gastar una llamada de visión).
+
+        Selectores verificados en vivo contra Yandex real (pueden cambiar con el
+        tiempo — es una herramienta de terceros, gotcha conocido): el botón de cámara
+        tiene `aria-label="Image search"`; pegar URL usa el campo con
+        `placeholder="Enter image URL"`; subir archivo usa el `<input type=file
+        class="CbirCore-FileInput">` (oculto, pero `set_input_files` funciona sobre él
+        sin necesidad de que sea visible); los resultados de "dónde aparece esta
+        imagen" están en `.CbirSites-Item .CbirSites-ItemTitle a` (título + URL de la
+        página, no de la imagen en sí — hay un enlace distinto al thumbnail que NO es
+        el que queremos).
+        """
+        with self._lock:
+            if self._headless is None:
+                self._headless = self._launch(headless=True)
+            page = self._headless.new_page()
+            try:
+                page.goto("https://yandex.com/images/", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+                page.get_by_label("Image search").click(timeout=10_000)
+                if imagen.strip().lower().startswith(("http://", "https://")):
+                    page.get_by_placeholder("Enter image URL").fill(imagen)
+                    page.keyboard.press("Enter")
+                else:
+                    page.locator("input.CbirCore-FileInput").set_input_files(imagen)
+                page.wait_for_url("**/images/search*", timeout=15_000)
+                page.wait_for_timeout(1500)  # deja asentar los resultados tras la navegación
+                resultados = page.evaluate(
+                    """() => {
+                        const out = [];
+                        document.querySelectorAll('.CbirSites-Item').forEach(el => {
+                            const a = el.querySelector('.CbirSites-ItemTitle a');
+                            if (a && a.href) out.push({title: a.innerText, url: a.href});
+                        });
+                        return out;
+                    }"""
+                )
+                captura = None if resultados else page.screenshot()
+            except Exception as exc:
+                raise BrowserError(f"No pude buscar por imagen en Yandex: {exc}") from exc
+            finally:
+                page.close()
+        return resultados or [], captura
+
     # --- Sesión interactiva visible -------------------------------------------
     def _ensure_session(self):
         if self._session is None:

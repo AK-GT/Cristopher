@@ -84,6 +84,16 @@ phonenumbers>=9.0.34    # puerto Python de libphonenumber: país/operadora/tipo,
 # explícito porque huella.py ahora lo importa directamente (parse/extract/mutate_url).
 socid-extractor>=0.1.1
 
+# Motor de huella digital (Tanda D) — correlación avanzada (pHash + nombre + cara).
+# imagehash/Pillow ya estaban instalados (quedaron de un intento de la Tanda B); se
+# declaran ahora a propósito, verificados de verdad decodificando avatares reales.
+# ddgs (ya dependencia, ver arriba) hace el dorking del pivote nombre — Google
+# bloquea el Chromium headless sin perfil persistente con un muro anti-bot
+# ("unusual traffic"), verificado real; Yandex Images (pivote cara) sí funciona bien
+# vía Playwright headless, automatizado en cristopher/browser.py::buscar_por_imagen.
+imagehash>=4.3.2
+Pillow>=10.4.0
+
 # Integración de WhatsApp (Baileys) — nada nuevo en pip: `requests` ya llega
 # transitivamente vía google-genai (igual que para Tavily). El servicio en sí es
 # Node.js: requiere Node.js instalado en el sistema + `npm install` en whatsapp/
