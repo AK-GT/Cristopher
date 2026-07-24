@@ -1,10 +1,25 @@
-"""Motor de huella digital por pivotes (OSINT) — Tanda A: cimientos + pivote username.
+"""Motor de huella digital por pivotes (OSINT). Tanda A: cimientos + pivote username.
+Tanda B: pivotes email, brechas y teléfono.
 
-Modelo de datos común (Nodo/Arista/Dossier) que usarán las tandas B-E, y el primer
-pivote real: username, vía Maigret (amplitud, 3000+ sitios) + Socialscan (alta
-confianza, endpoints de registro). Un sitio confirmado por AMBAS herramientas se
-marca "confirmado"; por una sola, "tentativo" (§5/regla de ≥2 fuentes de
-HERRAMIENTA_BUSQUEDA.md — la puntuación numérica fina llega en la Tanda C).
+Modelo de datos común (Nodo/Arista/Dossier) que usarán las tandas C-E, y tres pivotes
+reales:
+  - username, vía Maigret (amplitud, 3000+ sitios) + Socialscan (alta confianza,
+    endpoints de registro).
+  - email, vía user-scanner (servicios registrados) + GHunt (Gmail, opcional) +
+    Gravatar (perfil público) + XposedOrNot (brechas).
+  - teléfono, vía `phonenumbers` (país/operadora/tipo, offline) + ignorant (apps
+    donde está registrado).
+Un sitio confirmado por ≥2 fuentes independientes se marca "confirmado"; por una
+sola, "tentativo" (§5/regla de ≥2 fuentes de HERRAMIENTA_BUSQUEDA.md — la
+puntuación numérica fina llega en la Tanda C). Los nodos "brecha" son la excepción
+explícita: un hecho directo de base de datos, no una corroboración de identidad, se
+marcan `confianza="expuesto"` y no consumen esa regla (decisión de la Tanda B).
+
+GHunt es OPCIONAL y no vive en el venv del proyecto: `pip install ghunt` baja
+`httpx` por debajo de 0.28 y rompe `google-genai`/`ddgs` (verificado, no hipotético
+— ver `requirements.txt`). Se instala aislado (pipx u otro venv) y solo se usa si
+`ghunt` está en el PATH Y hay sesión (`ghunt login`) guardada; si no, `buscar_email`
+lo reporta en `dossier.errores` sin romper el resto.
 
 Gotcha de esta máquina (documentado para no repetir la investigación): `aiodns`
 (dependencia de Maigret) usa `pycares`, que en este Windows no detecta los
@@ -25,6 +40,7 @@ resolución DNS normal por socket funciona bien).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -37,6 +53,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+import httpx
+import phonenumbers
+import requests
+import trio
+from phonenumbers import PhoneNumberType, carrier, geocoder
+from xposedornot import XposedOrNot
 
 from cristopher.config import HUELLA_DIR, HUELLA_MAIGRET_TOP_SITES, HUELLA_TIMEOUT
 
@@ -63,10 +86,23 @@ class Nodo:
     id: str
     tipo: str  # alias|email|telefono|nombre|url_perfil|foto|brecha
     valor: str
-    confianza: str = "tentativo"  # "tentativo" | "confirmado" (puntuación fina: Tanda C)
+    # "tentativo" | "confirmado" (corroboración de identidad, puntuación fina: Tanda C) |
+    # "expuesto" (solo tipo="brecha": hecho directo de base de datos, no corroboración de
+    # identidad — no consume la regla de ≥2 fuentes, ver Tanda B).
+    confianza: str = "tentativo"
+    # Texto descriptivo determinista calculado sobre el propio nodo (p. ej. país/operadora/
+    # tipo de línea de un teléfono, vía `phonenumbers`) — no implica una fuente externa
+    # corroborando una identidad, así que no genera Arista ni consume la escala de confianza.
+    detalle: str = ""
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "tipo": self.tipo, "valor": self.valor, "confianza": self.confianza}
+        return {
+            "id": self.id,
+            "tipo": self.tipo,
+            "valor": self.valor,
+            "confianza": self.confianza,
+            "detalle": self.detalle,
+        }
 
 
 @dataclass
@@ -281,6 +317,37 @@ def _clave_sitio(sitio: str) -> str:
     return sitio.strip().lower()
 
 
+def _cruzar_hallazgos(
+    dossier: Dossier, nodo_origen: Nodo, hallazgos_por_fuente: dict[str, list[dict]]
+) -> None:
+    """Cruza hallazgos {sitio, url} de varias fuentes y añade nodos `url_perfil` +
+    aristas al dossier. Un sitio hallado por ≥2 fuentes se marca "confirmado"; por
+    una sola, "tentativo" (regla dura de §5/HERRAMIENTA_BUSQUEDA.md). Reutilizado
+    por todos los pivotes que producen listas de cuentas (username, email)."""
+    por_sitio: dict[str, dict] = {}
+    for fuente, hallazgos in hallazgos_por_fuente.items():
+        for h in hallazgos:
+            clave = _clave_sitio(h["sitio"])
+            entrada = por_sitio.setdefault(clave, {"sitio": h["sitio"], "url": h.get("url", ""), "fuentes": set()})
+            if not entrada["url"] and h.get("url"):
+                entrada["url"] = h["url"]
+            entrada["fuentes"].add(fuente)
+
+    for clave, entrada in sorted(por_sitio.items()):
+        confirmado = len(entrada["fuentes"]) >= 2
+        nodo = Nodo(
+            id=f"url_perfil:{entrada['url'] or clave}",
+            tipo="url_perfil",
+            valor=entrada["url"] or entrada["sitio"],
+            confianza="confirmado" if confirmado else "tentativo",
+        )
+        dossier.nodos.append(nodo)
+        for fuente in sorted(entrada["fuentes"]):
+            dossier.aristas.append(
+                Arista(origen=nodo_origen.id, destino=nodo.id, tipo_enlace="cuenta_en", fuente=fuente)
+            )
+
+
 def buscar_username(alias: str) -> Dossier:
     """Pivote USERNAME: lanza Maigret + Socialscan y cruza resultados.
 
@@ -301,34 +368,256 @@ def buscar_username(alias: str) -> Dossier:
         if not ok_s:
             dossier.errores.append(f"Socialscan: {err_s}")
 
-    por_sitio: dict[str, dict] = {}
-    for h in hallazgos_m:
-        clave = _clave_sitio(h["sitio"])
-        por_sitio.setdefault(clave, {"sitio": h["sitio"], "url": h["url"], "fuentes": set()})
-        por_sitio[clave]["fuentes"].add("maigret")
-    for h in hallazgos_s:
-        clave = _clave_sitio(h["sitio"])
-        entrada = por_sitio.setdefault(clave, {"sitio": h["sitio"], "url": h["url"] or "", "fuentes": set()})
-        if not entrada["url"] and h["url"]:
-            entrada["url"] = h["url"]
-        entrada["fuentes"].add("socialscan")
-
     nodo_pivote = Nodo(id=f"alias:{alias}", tipo="alias", valor=alias, confianza="confirmado")
     dossier.nodos.append(nodo_pivote)
+    _cruzar_hallazgos(dossier, nodo_pivote, {"maigret": hallazgos_m, "socialscan": hallazgos_s})
 
-    for clave, entrada in sorted(por_sitio.items()):
-        confirmado = len(entrada["fuentes"]) >= 2
-        nodo = Nodo(
-            id=f"url_perfil:{entrada['url'] or clave}",
-            tipo="url_perfil",
-            valor=entrada["url"] or entrada["sitio"],
-            confianza="confirmado" if confirmado else "tentativo",
+    get_huella().guardar_dossier(dossier)
+    return dossier
+
+
+# --- Pivote EMAIL: user-scanner + GHunt (Gmail) + Gravatar + XposedOrNot -------
+
+
+def _correr_user_scanner(email: str, out_file: Path) -> tuple[bool, str, list[dict]]:
+    """Devuelve (ok, mensaje_error_o_vacio, hallazgos). hallazgos: [{sitio, url}]."""
+    cmd = [
+        sys.executable,
+        "-m",
+        "user_scanner",
+        "-e",
+        email,
+        "-f",
+        "json",
+        "-o",
+        str(out_file),
+        "--no-nsfw",
+    ]
+    ok, salida = _ejecutar_herramienta("user-scanner", cmd, HUELLA_TIMEOUT)
+    if not ok:
+        return False, salida, []
+
+    if not out_file.exists():
+        return False, "ERROR: user-scanner no generó el reporte esperado.", []
+
+    try:
+        datos = json.loads(out_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return False, f"ERROR: no pude parsear la salida de user-scanner: {exc}", []
+
+    hallazgos = [
+        {"sitio": fila.get("site_name", "?"), "url": fila.get("url", "")}
+        for fila in datos
+        if fila.get("status") == "Registered"
+    ]
+    return True, "", hallazgos
+
+
+def _ghunt_configurado() -> bool:
+    """GHunt no vive en el venv del proyecto (rompe httpx de google-genai/ddgs, ver
+    requirements.txt) — se instala aislado (pipx) y solo funciona si además se hizo
+    `ghunt login` una vez. Comprobamos AMBAS condiciones antes de intentar nada, para
+    no perder tiempo en un fallo garantizado."""
+    if not shutil.which("ghunt"):
+        return False
+    creds = Path.home() / ".malfrats" / "ghunt" / "creds.m"
+    return creds.exists()
+
+
+def _correr_ghunt(email: str) -> tuple[bool, str, str]:
+    """Devuelve (ok, mensaje_error_o_vacio, texto_de_salida)."""
+    if not _ghunt_configurado():
+        return (
+            False,
+            "GHunt no está instalado/configurado (opcional: instálalo aislado con "
+            "'pipx install ghunt' y ejecuta 'ghunt login' una vez; ver requirements.txt).",
+            "",
         )
-        dossier.nodos.append(nodo)
-        for fuente in sorted(entrada["fuentes"]):
-            dossier.aristas.append(
-                Arista(origen=nodo_pivote.id, destino=nodo.id, tipo_enlace="cuenta_en", fuente=fuente)
+    cmd = ["ghunt", "email", email]
+    ok, salida = _ejecutar_herramienta("ghunt", cmd, HUELLA_TIMEOUT)
+    return ok, ("" if ok else salida), (salida if ok else "")
+
+
+def _consultar_gravatar(email: str) -> Optional[dict]:
+    """Perfil público de Gravatar (API v3, sin key). None si no existe (404) o falla
+    la petición — nunca lanza, es una fuente opcional y de bajo coste."""
+    hash_ = hashlib.sha256(email.strip().lower().encode()).hexdigest()
+    try:
+        r = requests.get(f"https://api.gravatar.com/v3/profiles/{hash_}", timeout=10)
+    except requests.RequestException:
+        return None
+    if r.status_code != 200:
+        return None
+    try:
+        return r.json()
+    except ValueError:
+        return None
+
+
+def _consultar_xposedornot(email: str) -> tuple[bool, str, list[str]]:
+    """Devuelve (ok, mensaje_error_o_vacio, nombres_de_brechas)."""
+    try:
+        resultado = XposedOrNot().check_email(email)
+    except Exception as exc:
+        return False, f"ERROR al consultar XposedOrNot: {exc}", []
+    return True, "", list(resultado.breaches or [])
+
+
+_TIPO_LINEA = {
+    PhoneNumberType.MOBILE: "móvil",
+    PhoneNumberType.FIXED_LINE: "fijo",
+    PhoneNumberType.FIXED_LINE_OR_MOBILE: "fijo o móvil",
+    PhoneNumberType.VOIP: "VoIP",
+    PhoneNumberType.TOLL_FREE: "gratuito",
+    PhoneNumberType.PREMIUM_RATE: "tarificación especial",
+    PhoneNumberType.PAGER: "buscapersonas",
+    PhoneNumberType.UAN: "UAN",
+    PhoneNumberType.VOICEMAIL: "buzón de voz",
+    PhoneNumberType.PERSONAL_NUMBER: "número personal",
+    PhoneNumberType.SHARED_COST: "coste compartido",
+}
+
+
+def _analizar_telefono(numero: str) -> Optional[dict]:
+    """Metadata determinista y 100% offline (sin red, sin key) vía `phonenumbers`.
+    Región por defecto "ES" si el número no viene con prefijo "+". None si no
+    parsea como número de teléfono."""
+    try:
+        p = phonenumbers.parse(numero, None if numero.strip().startswith("+") else "ES")
+    except phonenumbers.NumberParseException:
+        return None
+    return {
+        "valido": phonenumbers.is_valid_number(p),
+        "pais": geocoder.description_for_number(p, "es") or "desconocido",
+        "operadora": carrier.name_for_number(p, "es") or "sin dato",
+        "tipo": _TIPO_LINEA.get(phonenumbers.number_type(p), "desconocido"),
+        "e164": phonenumbers.format_number(p, phonenumbers.PhoneNumberFormat.E164),
+    }
+
+
+async def _lanzar_ignorant(numero_nacional: str, codigo_pais: str) -> list[dict]:
+    from ignorant.core import get_functions, import_submodules, launch_module
+
+    modulos = import_submodules("ignorant.modules")
+    sitios = get_functions(modulos)
+    cliente = httpx.AsyncClient(timeout=10)
+    salida: list[dict] = []
+    async with trio.open_nursery() as nursery:
+        for sitio in sitios:
+            nursery.start_soon(launch_module, sitio, numero_nacional, codigo_pais, cliente, salida)
+    await cliente.aclose()
+    return salida
+
+
+def _correr_ignorant(numero_e164: str) -> tuple[bool, str, list[dict]]:
+    """Devuelve (ok, mensaje_error_o_vacio, hallazgos). hallazgos: [{sitio, url}].
+
+    Llama a las funciones internas de `ignorant` EN PROCESO (trio), no a su CLI: su
+    `main()` intenta auto-actualizarse por pip en cada arranque
+    (`ignorant/core.py::check_update`), efecto secundario que no queremos disparar
+    desde aquí. No usa aiohttp/aiodns (es httpx/trio-based) — no sufre el bug de
+    DNS de la Tanda A.
+    """
+    p = phonenumbers.parse(numero_e164, None)
+    codigo_pais = str(p.country_code)
+    numero_nacional = str(p.national_number)
+    try:
+        salida = trio.run(_lanzar_ignorant, numero_nacional, codigo_pais)
+    except Exception as exc:
+        return False, f"ERROR al lanzar ignorant: {exc}", []
+
+    hallazgos = [
+        {"sitio": r["name"], "url": ""}
+        for r in salida
+        if r.get("exists") and not r.get("rateLimit")
+    ]
+    return True, "", hallazgos
+
+
+def buscar_email(email: str) -> Dossier:
+    """Pivote EMAIL: user-scanner (servicios registrados) + GHunt (si Gmail y está
+    configurado) + Gravatar (perfil público) + XposedOrNot (brechas).
+
+    Los nodos `url_perfil` siguen la misma regla de ≥2 fuentes que `buscar_username`.
+    Los nodos `brecha` se marcan `confianza="expuesto"` (hecho directo de base de
+    datos, no corroboración de identidad — no consume la regla de ≥2 fuentes).
+    """
+    dossier = Dossier(pivote=email, tipo="email")
+    nodo_pivote = Nodo(id=f"email:{email}", tipo="email", valor=email, confianza="confirmado")
+    dossier.nodos.append(nodo_pivote)
+
+    with tempfile.TemporaryDirectory(prefix="huella_") as tmp:
+        ok_us, err_us, hallazgos_us = _correr_user_scanner(email, Path(tmp) / "user_scanner.json")
+    if not ok_us:
+        dossier.errores.append(f"user-scanner: {err_us}")
+
+    hallazgos_gravatar: list[dict] = []
+    perfil_gravatar = _consultar_gravatar(email)
+    if perfil_gravatar:
+        hallazgos_gravatar = [{"sitio": "Gravatar", "url": perfil_gravatar.get("profile_url", "")}]
+
+    _cruzar_hallazgos(dossier, nodo_pivote, {"user-scanner": hallazgos_us, "gravatar": hallazgos_gravatar})
+
+    if email.strip().lower().endswith(("@gmail.com", "@googlemail.com")):
+        ok_gh, err_gh, salida_gh = _correr_ghunt(email)
+        if not ok_gh:
+            dossier.errores.append(f"GHunt: {err_gh}")
+        elif salida_gh.strip():
+            dossier.nodos.append(
+                Nodo(
+                    id=f"ghunt:{email}",
+                    tipo="nombre",
+                    valor="(ver detalle)",
+                    confianza="tentativo",
+                    detalle=salida_gh.strip()[:2000],
+                )
             )
+            dossier.aristas.append(
+                Arista(origen=nodo_pivote.id, destino=f"ghunt:{email}", tipo_enlace="perfil_google", fuente="ghunt")
+            )
+
+    ok_xon, err_xon, brechas = _consultar_xposedornot(email)
+    if not ok_xon:
+        dossier.errores.append(f"XposedOrNot: {err_xon}")
+    for nombre_brecha in brechas:
+        nodo_brecha = Nodo(
+            id=f"brecha:{email}:{nombre_brecha}", tipo="brecha", valor=nombre_brecha, confianza="expuesto"
+        )
+        dossier.nodos.append(nodo_brecha)
+        dossier.aristas.append(
+            Arista(origen=nodo_pivote.id, destino=nodo_brecha.id, tipo_enlace="expuesto_en", fuente="xposedornot")
+        )
+
+    get_huella().guardar_dossier(dossier)
+    return dossier
+
+
+# --- Pivote TELÉFONO: phonenumbers + ignorant ---------------------------------
+
+
+def buscar_telefono(numero: str) -> Dossier:
+    """Pivote TELÉFONO: `phonenumbers` (país/operadora/tipo, offline) + `ignorant`
+    (apps donde el número está registrado)."""
+    dossier = Dossier(pivote=numero, tipo="telefono")
+
+    meta = _analizar_telefono(numero)
+    if meta is None:
+        dossier.errores.append(f"'{numero}' no parece un número de teléfono válido.")
+        nodo_pivote = Nodo(id=f"telefono:{numero}", tipo="telefono", valor=numero, confianza="confirmado")
+        dossier.nodos.append(nodo_pivote)
+        get_huella().guardar_dossier(dossier)
+        return dossier
+
+    detalle = f"País: {meta['pais']} · Operadora: {meta['operadora']} · Tipo: {meta['tipo']} · Válido: {'sí' if meta['valido'] else 'no'}"
+    nodo_pivote = Nodo(
+        id=f"telefono:{meta['e164']}", tipo="telefono", valor=meta["e164"], confianza="confirmado", detalle=detalle
+    )
+    dossier.nodos.append(nodo_pivote)
+
+    ok_ig, err_ig, hallazgos_ig = _correr_ignorant(meta["e164"])
+    if not ok_ig:
+        dossier.errores.append(f"ignorant: {err_ig}")
+    _cruzar_hallazgos(dossier, nodo_pivote, {"ignorant": hallazgos_ig})
 
     get_huella().guardar_dossier(dossier)
     return dossier
