@@ -50,12 +50,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from io import BytesIO
@@ -84,7 +87,9 @@ from cristopher.config import (
     HUELLA_MAX_PIVOTES_POR_NIVEL,
     HUELLA_PHASH_UMBRAL,
     HUELLA_PROFUNDIDAD_MAX,
+    HUELLA_TIEMPO_MAX_SEGUNDOS,
     HUELLA_TIMEOUT,
+    HUELLA_VENTANA_SIN_NOVEDAD,
 )
 from cristopher.episodica import get_episodica
 from cristopher.vision import preguntar_sobre_imagen
@@ -128,6 +133,12 @@ class Nodo:
     # URL del avatar de esta cuenta, si la fuente lo dio (Maigret/Gravatar). Alimenta la
     # correlación por pHash (Tanda D) — vacío si no se conoce.
     avatar_url: str = ""
+    # Pivotes nuevos (tipo, valor) que el propio colector ya extrajo estructuralmente
+    # al construir este nodo (p. ej. GHunt: email/teléfono de su JSON) — atajo del
+    # bucle de pivote (Tanda F) que evita depender solo de re-fetchear una URL cuando
+    # el dato ya vino estructurado. NO se persiste (fuera de `to_dict`): es una pista
+    # efímera para la pasada de `investigar()`, no un dato del dossier en sí.
+    pivotes: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -321,6 +332,51 @@ def _ejecutar_herramienta(nombre_binario: str, cmd: list[str], timeout: int) -> 
     return True, (proc.stdout or "")
 
 
+# --- Disyuntor (circuit breaker) por fuente — Tanda F ------------------------
+#
+# "Gratis" no es "impune": Maigret/Socialscan/user-scanner/GHunt/ignorant corren
+# contra servicios reales y un uso intensivo dentro de UNA MISMA investigación
+# (hasta HUELLA_MAX_NODOS_TOTAL pivotes, cada uno relanzando estas mismas tools)
+# puede acabar en bloqueo de IP o, en el caso de GHunt, en marcar como sospechosa
+# la cuenta de Google real tras la que corre — verificado como riesgo real, no
+# hipotético (crítica externa revisada y confirmada por el usuario). El disyuntor
+# desactiva una fuente para el RESTO de esa investigación (nunca de forma global/
+# persistente entre llamadas: una `huella_buscar` suelta siempre prueba todas las
+# fuentes) tras fallos repetidos, o de inmediato si el error tiene pinta de
+# bloqueo/rate-limit.
+
+_PATRON_BLOQUEO = re.compile(
+    r"429|rate.?limit|too many requests|blocked|banned|forbidden|\b403\b", re.IGNORECASE
+)
+
+
+class DisyuntorFuente:
+    """Tolerancia a fallos por fuente, con alcance de UNA sola investigación."""
+
+    UMBRAL_FALLOS_SEGUIDOS = 2
+
+    def __init__(self) -> None:
+        self._fallos_seguidos: dict[str, int] = {}
+        self._desactivadas: set[str] = set()
+
+    def activa(self, fuente: str) -> bool:
+        return fuente not in self._desactivadas
+
+    def registrar(self, fuente: str, ok: bool, detalle_error: str = "") -> None:
+        if ok:
+            self._fallos_seguidos[fuente] = 0
+            return
+        if _PATRON_BLOQUEO.search(detalle_error or ""):
+            self._desactivadas.add(fuente)  # señal fuerte: no esperamos a un segundo fallo
+            return
+        self._fallos_seguidos[fuente] = self._fallos_seguidos.get(fuente, 0) + 1
+        if self._fallos_seguidos[fuente] >= self.UMBRAL_FALLOS_SEGUIDOS:
+            self._desactivadas.add(fuente)
+
+    def degradadas(self) -> list[str]:
+        return sorted(self._desactivadas)
+
+
 # --- Pivote USERNAME: Maigret + Socialscan ------------------------------------
 
 
@@ -502,24 +558,46 @@ def _cruzar_hallazgos(
             )
 
 
-def buscar_username(alias: str) -> Dossier:
-    """Pivote USERNAME: lanza Maigret + Socialscan y cruza resultados (puntuados vía
-    `_cruzar_hallazgos`/`_puntuar`). Cada fallo de herramienta se guarda en
-    `dossier.errores` (nunca se oculta), y el dossier se persiste siempre, aunque una
-    de las dos falle.
+def buscar_username(alias: str, disyuntor: Optional["DisyuntorFuente"] = None) -> Dossier:
+    """Pivote USERNAME: lanza Maigret + Socialscan EN PARALELO (2 workers como
+    mucho — "gratis" no es "impune": más concurrencia de la necesaria hacia los
+    mismos sitios de destino aumenta el riesgo de bloqueo, no solo la velocidad) y
+    cruza resultados (puntuados vía `_cruzar_hallazgos`/`_puntuar`). Cada fallo de
+    herramienta se guarda en `dossier.errores` (nunca se oculta), y el dossier se
+    persiste siempre, aunque una de las dos falle. Si `disyuntor` viene informado
+    (siempre lo pasa `investigar()`, nunca `huella_buscar` suelto) y una fuente ya
+    está degradada por fallos repetidos en ESTA investigación, se omite sin
+    intentarla — Tanda F.
     """
     dossier = Dossier(pivote=alias, tipo="alias")
+    hallazgos_m: list[dict] = []
+    hallazgos_s: list[dict] = []
 
     with tempfile.TemporaryDirectory(prefix="huella_") as tmp:
         tmp_path = Path(tmp)
+        tareas = {}
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            if disyuntor is None or disyuntor.activa("maigret"):
+                tareas["maigret"] = pool.submit(_correr_maigret, alias, tmp_path / "maigret")
+            elif disyuntor is not None:
+                dossier.errores.append("Maigret: fuente degradada en esta investigación (fallos repetidos), omitida.")
+            if disyuntor is None or disyuntor.activa("socialscan"):
+                tareas["socialscan"] = pool.submit(_correr_socialscan, alias, tmp_path / "socialscan.json")
+            elif disyuntor is not None:
+                dossier.errores.append("Socialscan: fuente degradada en esta investigación (fallos repetidos), omitida.")
 
-        ok_m, err_m, hallazgos_m = _correr_maigret(alias, tmp_path / "maigret")
-        if not ok_m:
-            dossier.errores.append(f"Maigret: {err_m}")
-
-        ok_s, err_s, hallazgos_s = _correr_socialscan(alias, tmp_path / "socialscan.json")
-        if not ok_s:
-            dossier.errores.append(f"Socialscan: {err_s}")
+            if "maigret" in tareas:
+                ok_m, err_m, hallazgos_m = tareas["maigret"].result()
+                if disyuntor is not None:
+                    disyuntor.registrar("maigret", ok_m, err_m)
+                if not ok_m:
+                    dossier.errores.append(f"Maigret: {err_m}")
+            if "socialscan" in tareas:
+                ok_s, err_s, hallazgos_s = tareas["socialscan"].result()
+                if disyuntor is not None:
+                    disyuntor.registrar("socialscan", ok_s, err_s)
+                if not ok_s:
+                    dossier.errores.append(f"Socialscan: {err_s}")
 
     nodo_pivote = Nodo(id=f"alias:{alias}", tipo="alias", valor=alias, confianza="confirmado")
     dossier.nodos.append(nodo_pivote)
@@ -577,33 +655,84 @@ def _ghunt_configurado() -> bool:
     return creds.exists()
 
 
-def _correr_ghunt(email: str) -> tuple[bool, str, str]:
-    """Devuelve (ok, mensaje_error_o_vacio, texto_de_salida).
+def _correr_ghunt(email: str) -> tuple[bool, str, dict]:
+    """Devuelve (ok, mensaje_error_o_vacio, datos_json).
 
     Usa `--json` (confirmado real: `ghunt email --help` lo expone) en vez de
-    parsear el stdout con colores/ASCII-art de la CLI.
+    parsear el stdout con colores/ASCII-art de la CLI. Devuelve el dict YA
+    parseado (antes se devolvía como texto truncado, perdiendo la estructura que
+    necesita `_minar_pivotes_ghunt` para sacar pivotes nuevos del bucle — Tanda F).
     """
     if not _ghunt_configurado():
         return (
             False,
             "GHunt no está instalado/configurado (opcional: instálalo aislado con "
             "'pipx install ghunt' y ejecuta 'ghunt login' una vez; ver requirements.txt).",
-            "",
+            {},
         )
     with tempfile.TemporaryDirectory(prefix="huella_ghunt_") as tmp:
         out_file = Path(tmp) / "ghunt.json"
         cmd = ["ghunt", "email", email, "--json", str(out_file)]
         ok, salida = _ejecutar_herramienta("ghunt", cmd, HUELLA_TIMEOUT)
         if not ok:
-            return False, salida, ""
+            return False, salida, {}
         if not out_file.exists():
-            return False, "ERROR: GHunt no generó el reporte esperado.", ""
+            return False, "ERROR: GHunt no generó el reporte esperado.", {}
         try:
             datos = json.loads(out_file.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            return False, f"ERROR: no pude parsear la salida de GHunt: {exc}", ""
+            return False, f"ERROR: no pude parsear la salida de GHunt: {exc}", {}
 
-    return True, "", json.dumps(datos, ensure_ascii=False, indent=2)[:2000]
+    return True, "", datos
+
+
+def _minar_pivotes_ghunt(datos: dict, email_semilla: str) -> list[tuple[str, str]]:
+    """Recorre recursivamente el JSON de GHunt buscando campos de email/teléfono
+    para alimentarlos de vuelta al bucle de pivote (Tanda F). Antes ese dato se
+    volcaba entero como texto en `Nodo.detalle` y nunca se reutilizaba (verificado:
+    `investigar()` solo minaba nodos `url_perfil` con URL http, así que el email/
+    teléfono asociado que da GHunt moría ahí sin generar ningún pivote nuevo).
+
+    Escanea por NOMBRE DE CLAVE (no por un schema fijo): la estructura del JSON de
+    GHunt no es un contrato estable entre versiones, y un cambio de forma no debe
+    romper el minado, solo dejar de encontrar campos con esos nombres.
+    """
+    candidatos: list[tuple[str, str]] = []
+
+    def recorrer(obj):
+        if isinstance(obj, dict):
+            for clave, valor in obj.items():
+                clave_l = clave.lower()
+                if isinstance(valor, str) and valor.strip():
+                    if "email" in clave_l and "@" in valor:
+                        # Igual que en `_extraer_pivotes`: un campo con varios
+                        # emails separados por coma no debe perder todos menos
+                        # el primero.
+                        for correo in valor.split(","):
+                            correo = correo.strip()
+                            if "@" in correo:
+                                candidatos.append(("email", correo))
+                    elif "phone" in clave_l or "telefono" in clave_l:
+                        candidatos.append(("telefono", valor.strip()))
+                else:
+                    recorrer(valor)
+        elif isinstance(obj, list):
+            for item in obj:
+                recorrer(item)
+
+    recorrer(datos)
+    semilla_l = email_semilla.strip().lower()
+    # Dedup preservando orden, y nunca "descubrir" el propio email semilla como si
+    # fuera un pivote nuevo (GHunt lo repite en varios campos de su JSON).
+    vistos: set[tuple[str, str]] = set()
+    resultado: list[tuple[str, str]] = []
+    for tipo, valor in candidatos:
+        clave = (tipo, valor.strip().lower())
+        if clave in vistos or clave == ("email", semilla_l):
+            continue
+        vistos.add(clave)
+        resultado.append((tipo, valor))
+    return resultado
 
 
 def _consultar_gravatar(email: str) -> Optional[dict]:
@@ -663,6 +792,21 @@ def _analizar_telefono(numero: str) -> Optional[dict]:
     }
 
 
+def _normalizar_telefono(valor: str) -> str:
+    """Normaliza un teléfono a E.164 para que el dedup del bucle de pivote (Tanda F)
+    no trate '+34 600 123 456', '34600123456' y '0034600123456' como pivotes
+    DISTINTOS — verificado real: sin esto, el mismo teléfono descubierto en
+    formatos distintos por GHunt/socid_extractor generaba dos nodos y relanzaba
+    `ignorant` dos veces sobre el mismo número. Si no parsea como número válido,
+    devuelve el valor tal cual (nunca lanza, mismo criterio que el resto del
+    módulo) — el dedup cae de vuelta a comparar el string crudo."""
+    try:
+        p = phonenumbers.parse(valor, None if valor.strip().startswith("+") else "ES")
+        return phonenumbers.format_number(p, phonenumbers.PhoneNumberFormat.E164)
+    except phonenumbers.NumberParseException:
+        return valor
+
+
 async def _lanzar_ignorant(numero_nacional: str, codigo_pais: str) -> list[dict]:
     from ignorant.core import get_functions, import_submodules, launch_module
 
@@ -702,22 +846,48 @@ def _correr_ignorant(numero_e164: str) -> tuple[bool, str, list[dict]]:
     return True, "", hallazgos
 
 
-def buscar_email(email: str) -> Dossier:
+def buscar_email(email: str, disyuntor: Optional["DisyuntorFuente"] = None) -> Dossier:
     """Pivote EMAIL: user-scanner (servicios registrados) + GHunt (si Gmail y está
-    configurado) + Gravatar (perfil público) + XposedOrNot (brechas).
+    configurado) — EN PARALELO, máx. 2 workers (Tanda F) — + Gravatar (perfil
+    público) + XposedOrNot (brechas).
 
     Los nodos `url_perfil` pasan por la misma puntuación fina que `buscar_username`
     (`_cruzar_hallazgos`). Los nodos `brecha` se marcan `confianza="expuesto"` (hecho
     directo de base de datos, no corroboración de identidad — no pasa por `_puntuar`).
+    `disyuntor`: igual que en `buscar_username`, solo lo pasa `investigar()`.
     """
     dossier = Dossier(pivote=email, tipo="email")
     nodo_pivote = Nodo(id=f"email:{email}", tipo="email", valor=email, confianza="confirmado")
     dossier.nodos.append(nodo_pivote)
 
+    es_gmail = email.strip().lower().endswith(("@gmail.com", "@googlemail.com"))
+    hallazgos_us: list[dict] = []
+    datos_gh: dict = {}
+
     with tempfile.TemporaryDirectory(prefix="huella_") as tmp:
-        ok_us, err_us, hallazgos_us = _correr_user_scanner(email, Path(tmp) / "user_scanner.json")
-    if not ok_us:
-        dossier.errores.append(f"user-scanner: {err_us}")
+        tareas = {}
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            if disyuntor is None or disyuntor.activa("user-scanner"):
+                tareas["user-scanner"] = pool.submit(_correr_user_scanner, email, Path(tmp) / "user_scanner.json")
+            elif disyuntor is not None:
+                dossier.errores.append("user-scanner: fuente degradada en esta investigación (fallos repetidos), omitida.")
+            if es_gmail and (disyuntor is None or disyuntor.activa("ghunt")):
+                tareas["ghunt"] = pool.submit(_correr_ghunt, email)
+            elif es_gmail and disyuntor is not None:
+                dossier.errores.append("GHunt: fuente degradada en esta investigación (fallos repetidos), omitida.")
+
+            if "user-scanner" in tareas:
+                ok_us, err_us, hallazgos_us = tareas["user-scanner"].result()
+                if disyuntor is not None:
+                    disyuntor.registrar("user-scanner", ok_us, err_us)
+                if not ok_us:
+                    dossier.errores.append(f"user-scanner: {err_us}")
+            if "ghunt" in tareas:
+                ok_gh, err_gh, datos_gh = tareas["ghunt"].result()
+                if disyuntor is not None:
+                    disyuntor.registrar("ghunt", ok_gh, err_gh)
+                if not ok_gh:
+                    dossier.errores.append(f"GHunt: {err_gh}")
 
     hallazgos_gravatar: list[dict] = []
     perfil_gravatar = _consultar_gravatar(email)
@@ -729,26 +899,32 @@ def buscar_email(email: str) -> Dossier:
                 "avatar": perfil_gravatar.get("avatar_url", ""),
             }
         ]
+        # Cuentas verificadas que el propio perfil de Gravatar enlaza (otras redes
+        # sociales) — antes se ignoraban por completo; son url_perfil normales, así
+        # que entran por el mismo `_cruzar_hallazgos` y de ahí al bucle de pivote
+        # (Tanda F) igual que cualquier otro hallazgo con URL.
+        for cuenta in perfil_gravatar.get("verified_accounts", []) or []:
+            url_cuenta = (cuenta or {}).get("url", "")
+            if url_cuenta:
+                servicio = cuenta.get("service_label") or cuenta.get("service_type") or "?"
+                hallazgos_gravatar.append({"sitio": servicio, "url": url_cuenta})
 
     _cruzar_hallazgos(dossier, nodo_pivote, {"user-scanner": hallazgos_us, "gravatar": hallazgos_gravatar})
 
-    if email.strip().lower().endswith(("@gmail.com", "@googlemail.com")):
-        ok_gh, err_gh, salida_gh = _correr_ghunt(email)
-        if not ok_gh:
-            dossier.errores.append(f"GHunt: {err_gh}")
-        elif salida_gh.strip():
-            dossier.nodos.append(
-                Nodo(
-                    id=f"ghunt:{email}",
-                    tipo="nombre",
-                    valor="(ver detalle)",
-                    confianza="tentativo",
-                    detalle=salida_gh.strip()[:2000],
-                )
+    if datos_gh:
+        dossier.nodos.append(
+            Nodo(
+                id=f"ghunt:{email}",
+                tipo="nombre",
+                valor="(ver detalle)",
+                confianza="tentativo",
+                detalle=json.dumps(datos_gh, ensure_ascii=False, indent=2)[:2000],
+                pivotes=_minar_pivotes_ghunt(datos_gh, email),
             )
-            dossier.aristas.append(
-                Arista(origen=nodo_pivote.id, destino=f"ghunt:{email}", tipo_enlace="perfil_google", fuente="ghunt")
-            )
+        )
+        dossier.aristas.append(
+            Arista(origen=nodo_pivote.id, destino=f"ghunt:{email}", tipo_enlace="perfil_google", fuente="ghunt")
+        )
 
     ok_xon, err_xon, brechas = _consultar_xposedornot(email)
     if not ok_xon:
@@ -769,9 +945,10 @@ def buscar_email(email: str) -> Dossier:
 # --- Pivote TELÉFONO: phonenumbers + ignorant ---------------------------------
 
 
-def buscar_telefono(numero: str) -> Dossier:
+def buscar_telefono(numero: str, disyuntor: Optional["DisyuntorFuente"] = None) -> Dossier:
     """Pivote TELÉFONO: `phonenumbers` (país/operadora/tipo, offline) + `ignorant`
-    (apps donde el número está registrado)."""
+    (apps donde el número está registrado). `disyuntor`: igual que en
+    `buscar_username` (Tanda F), solo lo pasa `investigar()`."""
     dossier = Dossier(pivote=numero, tipo="telefono")
 
     meta = _analizar_telefono(numero)
@@ -788,9 +965,15 @@ def buscar_telefono(numero: str) -> Dossier:
     )
     dossier.nodos.append(nodo_pivote)
 
-    ok_ig, err_ig, hallazgos_ig = _correr_ignorant(meta["e164"])
-    if not ok_ig:
-        dossier.errores.append(f"ignorant: {err_ig}")
+    hallazgos_ig: list[dict] = []
+    if disyuntor is None or disyuntor.activa("ignorant"):
+        ok_ig, err_ig, hallazgos_ig = _correr_ignorant(meta["e164"])
+        if disyuntor is not None:
+            disyuntor.registrar("ignorant", ok_ig, err_ig)
+        if not ok_ig:
+            dossier.errores.append(f"ignorant: {err_ig}")
+    elif disyuntor is not None:
+        dossier.errores.append("ignorant: fuente degradada en esta investigación (fallos repetidos), omitida.")
     _cruzar_hallazgos(dossier, nodo_pivote, {"ignorant": hallazgos_ig})
 
     get_huella().guardar_dossier(dossier)
@@ -843,14 +1026,15 @@ def _dorking_nombre(nombre_completo: str, ciudad: str) -> list[dict]:
     return resultados
 
 
-def buscar_nombre(nombre_completo: str, ciudad: str = "") -> Dossier:
+def buscar_nombre(nombre_completo: str, ciudad: str = "", disyuntor: Optional["DisyuntorFuente"] = None) -> Dossier:
     """Pivote NOMBRE (el más débil en solitario — §1): genera permutaciones de alias
     y solo promueve una a pivote real si `buscar_username` la corrobora con algún
     sitio "confirmado" (≥2 fuentes independientes, la misma regla dura de §5 — no se
     relaja para este pivote). Cribado barato con Socialscan antes de pagar el coste
     de Maigret en cada permutación. Además, dorking (`_dorking_nombre`) por si hay
     perfiles públicos indexados (LinkedIn, prensa...) — resultados de búsqueda, no
-    cuentas verificadas, siempre `tentativo`.
+    cuentas verificadas, siempre `tentativo`. `disyuntor`: igual que en
+    `buscar_username` (Tanda F), solo lo pasa `investigar()`.
     """
     dossier = Dossier(pivote=nombre_completo, tipo="nombre")
     nodo_pivote = Nodo(id=f"nombre:{nombre_completo}", tipo="nombre", valor=nombre_completo, confianza="confirmado")
@@ -861,12 +1045,16 @@ def buscar_nombre(nombre_completo: str, ciudad: str = "") -> Dossier:
         dossier.errores.append("Nombre incompleto: hace falta al menos nombre y apellido para permutar.")
 
     for candidato in permutaciones:
+        if disyuntor is not None and not disyuntor.activa("socialscan"):
+            break  # sin cribado posible (fuente degradada), seguir generaría solo ruido de Maigret sin filtrar
         with tempfile.TemporaryDirectory(prefix="huella_nombre_") as tmp:
-            ok_s, _, hallazgos_s = _correr_socialscan(candidato, Path(tmp) / "ss.json")
+            ok_s, err_s, hallazgos_s = _correr_socialscan(candidato, Path(tmp) / "ss.json")
+        if disyuntor is not None:
+            disyuntor.registrar("socialscan", ok_s, err_s)
         if not ok_s or not hallazgos_s:
             continue  # cribado: nada en Socialscan, no merece el coste de Maigret
 
-        sub_dossier = buscar_username(candidato)  # reutiliza la Tanda A tal cual
+        sub_dossier = buscar_username(candidato, disyuntor=disyuntor)  # reutiliza la Tanda A tal cual
         confirmados = [n for n in sub_dossier.nodos if n.tipo == "url_perfil" and n.confianza == "confirmado"]
         if not confirmados:
             continue
@@ -1022,7 +1210,14 @@ def _extraer_pivotes(url: str) -> list[tuple[str, str]]:
             continue
         campo_l = campo.lower()
         if campo_l in _CAMPOS_EMAIL and "@" in valor:
-            candidatos.append(("email", valor.split(",")[0].strip()))
+            # Antes solo se tomaba `valor.split(",")[0]` — un campo con VARIOS
+            # emails separados por coma perdía en silencio todos menos el primero.
+            # Verificado real: algunos sitios devuelven "email_secundario, ..." en
+            # un solo campo de texto.
+            for correo in valor.split(","):
+                correo = correo.strip()
+                if "@" in correo:
+                    candidatos.append(("email", correo))
         elif campo_l in _CAMPOS_TELEFONO:
             candidatos.append(("telefono", valor.strip()))
         elif campo_l.endswith("_username") or campo_l in ("username", "nickname"):
@@ -1056,6 +1251,12 @@ class Investigacion:
     # definición conectan cuentas de búsquedas/pivotes diferentes.
     aristas_correlacion: list[Arista] = field(default_factory=list)
     creado: str = field(default_factory=_now)
+    # Tanda F: fuentes que el disyuntor desactivó por fallos repetidos/bloqueo
+    # DURANTE esta investigación (no persistente entre investigaciones distintas).
+    fuentes_degradadas: list[str] = field(default_factory=list)
+    # Motivo de corte si el BFS terminó antes de vaciar la cola: "tope_nodos" |
+    # "rendimientos_decrecientes" | "presupuesto_tiempo" | "" (cola vacía, corte natural).
+    motivo_corte: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -1066,6 +1267,8 @@ class Investigacion:
             "profundidad_alcanzada": self.profundidad_alcanzada,
             "aristas_correlacion": [a.to_dict() for a in self.aristas_correlacion],
             "creado": self.creado,
+            "fuentes_degradadas": self.fuentes_degradadas,
+            "motivo_corte": self.motivo_corte,
         }
 
 
@@ -1124,12 +1327,25 @@ _BUSCADORES = {
 }
 
 
+def _clave_pivote(tipo: str, valor: str) -> tuple[str, str]:
+    """Clave de dedup normalizada para el BFS: strip+lower siempre, y además E.164
+    para teléfonos (Tanda F) — sin esto, '+34 600 123 456' y '0034600123456'
+    contaban como dos pivotes DISTINTOS y el mismo número se investigaba dos veces."""
+    valor = valor.strip()
+    if tipo == "telefono":
+        valor = _normalizar_telefono(valor)
+    return (tipo, valor.lower())
+
+
 def investigar(pivote: str, tipo: str, profundidad: int = HUELLA_PROFUNDIDAD_MAX) -> Investigacion:
     """Bucle de pivote (BFS): resuelve `pivote` con el colector de su tipo (Tanda
     A/B, sin tocar su firma), extrae nuevos identificadores (`_extraer_pivotes`) de
     las cuentas que encuentra y los encola para el siguiente nivel — hasta
-    `profundidad` niveles, deduplicados, con topes duros de nodos por nivel y en
-    total para que el bucle nunca explote ni entre en ciclo.
+    `profundidad` niveles, deduplicados (en cola Y en visitados, Tanda F — antes
+    solo se deduplicaba al desencolar, dejando encolar el mismo pivote varias
+    veces si dos rutas distintas lo descubrían en el mismo nivel), con topes duros
+    de nodos y de TIEMPO totales para que el bucle nunca explote, entre en ciclo,
+    ni se quede corriendo horas.
 
     Explora primero las cuentas de mayor puntuación (confirmadas/probables), pero
     NO se limita a ellas en solitario: verificado con datos reales que muchas cuentas
@@ -1137,46 +1353,86 @@ def investigar(pivote: str, tipo: str, profundidad: int = HUELLA_PROFUNDIDAD_MAX
     identificadores nuevos genuinos (p. ej. redes sociales enlazadas en GitHub) — la
     disciplina de "no afirmar sin corroborar" vive en la PUNTUACIÓN de cada hallazgo,
     no en qué cuentas se exploran para seguir tirando del hilo.
+
+    Tanda F — sostenibilidad frente a bloqueos: un `DisyuntorFuente` propio de esta
+    investigación desactiva una fuente (Maigret, Socialscan, user-scanner, GHunt,
+    ignorant) tras fallos repetidos o un error con pinta de rate-limit/bloqueo, para
+    no seguir insistiendo con el resto de pivotes. Y una parada por rendimientos
+    decrecientes corta el BFS si varios pivotes seguidos no aportan NADA nuevo,
+    aunque queden nodos en cola y presupuesto de nodos/tiempo sin agotar.
     """
     inv = Investigacion(pivote_semilla=pivote, tipo_semilla=tipo)
+    disyuntor = DisyuntorFuente()
+    clave_semilla = _clave_pivote(tipo, pivote)
     visitados: set[tuple[str, str]] = set()
+    en_cola: set[tuple[str, str]] = {clave_semilla}
     cola: list[tuple[str, str, int]] = [(pivote, tipo, 0)]
+    sin_novedad_seguidos = 0
+    inicio = time.monotonic()
+
+    def _encolar(tipo_nuevo: str, valor_nuevo: str, nivel_nuevo: int, clave_actual: tuple[str, str]) -> bool:
+        clave_nuevo = _clave_pivote(tipo_nuevo, valor_nuevo)
+        if clave_nuevo in visitados or clave_nuevo in en_cola or clave_nuevo == clave_actual:
+            return False
+        en_cola.add(clave_nuevo)
+        inv.pivotes_nuevos.append((tipo_nuevo, valor_nuevo))
+        cola.append((valor_nuevo, tipo_nuevo, nivel_nuevo))
+        return True
 
     while cola:
         if len(visitados) >= HUELLA_MAX_NODOS_TOTAL:
+            inv.motivo_corte = "tope_nodos"
             break
+        if time.monotonic() - inicio >= HUELLA_TIEMPO_MAX_SEGUNDOS:
+            inv.motivo_corte = "presupuesto_tiempo"
+            break
+
         pivote_actual, tipo_actual, nivel = cola.pop(0)
-        clave = (tipo_actual, pivote_actual.strip().lower())
+        clave = _clave_pivote(tipo_actual, pivote_actual)
+        en_cola.discard(clave)
         if clave in visitados or tipo_actual not in _BUSCADORES:
             continue
         visitados.add(clave)
 
-        dossier = _BUSCADORES[tipo_actual](pivote_actual)
+        dossier = _BUSCADORES[tipo_actual](pivote_actual, disyuntor=disyuntor)
         inv.dossiers.append(dossier)
         inv.profundidad_alcanzada = max(inv.profundidad_alcanzada, nivel)
 
-        if nivel >= profundidad:
-            continue
+        nuevos_esta_iteracion = 0
 
-        # Prioriza primero los sitios que `socid_extractor` sabe extraer de verdad
-        # (tiene una mutación de URL registrada): con decenas de perfiles "tentativo"
-        # empatados a la misma puntuación (un solo Maigret), ordenar solo por
-        # puntuación gastaba el tope de exploración en sitios sin scheme conocido
-        # (bit.ly, blogspot...) en vez de en los que sí revelan datos (GitHub,
-        # GitLab...) — verificado con datos reales (alias 'gaearon').
-        candidatos_nodo = sorted(
-            (n for n in dossier.nodos if n.tipo == "url_perfil" and n.valor.startswith("http")),
-            key=lambda n: (bool(mutate_url(n.valor)), n.puntuacion),
-            reverse=True,
-        )
-        for nodo in candidatos_nodo[:HUELLA_MAX_PIVOTES_POR_NIVEL]:
-            for tipo_nuevo, valor_nuevo in _extraer_pivotes(nodo.valor):
-                clave_nuevo = (tipo_nuevo, valor_nuevo.strip().lower())
-                if clave_nuevo in visitados or clave_nuevo == clave:
-                    continue
-                inv.pivotes_nuevos.append((tipo_nuevo, valor_nuevo))
-                cola.append((valor_nuevo, tipo_nuevo, nivel + 1))
+        if nivel < profundidad:
+            # Pivotes YA estructurados por el propio colector (p. ej. GHunt: email/
+            # teléfono de su JSON, Tanda F) — coste cero, sin fetch de red de por
+            # medio, así que no cuentan contra HUELLA_MAX_PIVOTES_POR_NIVEL (ese tope
+            # existe para acotar fetches http, no datos que ya se tenían en mano).
+            for nodo in dossier.nodos:
+                for tipo_nuevo, valor_nuevo in nodo.pivotes:
+                    if _encolar(tipo_nuevo, valor_nuevo, nivel + 1, clave):
+                        nuevos_esta_iteracion += 1
 
+            # Prioriza primero los sitios que `socid_extractor` sabe extraer de
+            # verdad (tiene una mutación de URL registrada): con decenas de
+            # perfiles "tentativo" empatados a la misma puntuación (un solo
+            # Maigret), ordenar solo por puntuación gastaba el tope de
+            # exploración en sitios sin scheme conocido (bit.ly, blogspot...) en
+            # vez de en los que sí revelan datos (GitHub, GitLab...) — verificado
+            # con datos reales (alias 'gaearon').
+            candidatos_nodo = sorted(
+                (n for n in dossier.nodos if n.tipo == "url_perfil" and n.valor.startswith("http")),
+                key=lambda n: (bool(mutate_url(n.valor)), n.puntuacion),
+                reverse=True,
+            )
+            for nodo in candidatos_nodo[:HUELLA_MAX_PIVOTES_POR_NIVEL]:
+                for tipo_nuevo, valor_nuevo in _extraer_pivotes(nodo.valor):
+                    if _encolar(tipo_nuevo, valor_nuevo, nivel + 1, clave):
+                        nuevos_esta_iteracion += 1
+
+        sin_novedad_seguidos = 0 if nuevos_esta_iteracion else sin_novedad_seguidos + 1
+        if sin_novedad_seguidos >= HUELLA_VENTANA_SIN_NOVEDAD and cola:
+            inv.motivo_corte = "rendimientos_decrecientes"
+            break
+
+    inv.fuentes_degradadas = disyuntor.degradadas()
     inv.aristas_correlacion = _correlacionar_avatares(inv)
     get_huella().guardar_investigacion(inv)
     return inv

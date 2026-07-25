@@ -137,6 +137,20 @@ def _formatear_investigacion(inv: Investigacion) -> str:
             for t, v in sin_investigar:
                 partes.append(f"  · {v} (tipo: {t})")
 
+    _MOTIVOS_CORTE = {
+        "tope_nodos": "se alcanzó el tope máximo de pivotes a investigar.",
+        "presupuesto_tiempo": "se agotó el tiempo máximo asignado a esta investigación.",
+        "rendimientos_decrecientes": "varios pivotes seguidos no aportaron ningún dato nuevo (rendimientos decrecientes).",
+    }
+    if inv.motivo_corte in _MOTIVOS_CORTE:
+        partes.append(f"\n⏹ Investigación cortada antes de agotar la cola: {_MOTIVOS_CORTE[inv.motivo_corte]}")
+
+    if inv.fuentes_degradadas:
+        partes.append(
+            "\n⚠ Fuentes degradadas durante esta investigación (fallos repetidos o bloqueo, "
+            "omitidas para el resto): " + ", ".join(inv.fuentes_degradadas)
+        )
+
     return "\n".join(partes)
 
 

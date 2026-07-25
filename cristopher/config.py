@@ -71,6 +71,12 @@ SESION_CHAT_PERMISSION_MODE = "dontAsk"
 # (modelUsage.<modelo>.contextWindow), que la API ya reporta con exactitud.
 SESION_CONTEXTO_AVISO_PCT = 0.75
 
+# --- Fase 4b: modo discusión entre sesiones ----------------------------------
+# Tope de espera de GestorSesiones.discutir() por cada turno bloqueante (sesión
+# crítica respondiendo, o sesión A revisando la crítica). Mismo orden de magnitud
+# que SUBAGENT_TIMEOUT: si se agota, es un fallo explícito (§1), no un cuelgue.
+SESION_DISCUSION_TIMEOUT = 300
+
 # --- Fase 4: integraciones Google + búsqueda de élite ------------------------
 # Credenciales OAuth y token persistente (bajo data/, gitignored; §9).
 GOOGLE_DIR = DATA / "google"
@@ -169,6 +175,15 @@ HUELLA_PROFUNDIDAD_MAX = int(os.getenv("CRISTOPHER_HUELLA_PROFUNDIDAD", "2"))
 HUELLA_MAX_PIVOTES_POR_NIVEL = 10
 HUELLA_MAX_NODOS_TOTAL = 40        # tope duro de pivotes visitados en toda la investigación
 HUELLA_EXTRACCION_TIMEOUT = 8      # s por fetch de socid_extractor.parse (una URL de perfil)
+
+# --- Motor de huella digital: disyuntor + parada temprana (huella.py, Tanda F) --
+# Presupuesto de tiempo TOTAL de una `investigar()` — cinturón adicional al tope de
+# nodos: con Maigret pudiendo tardar hasta HUELLA_TIMEOUT por pivote, 40 nodos
+# secuenciales podrían tardar horas en el peor caso. 20 min por defecto.
+HUELLA_TIEMPO_MAX_SEGUNDOS = int(os.getenv("CRISTOPHER_HUELLA_TIEMPO_MAX", "1200"))
+# Pivotes seguidos sin aportar NINGÚN identificador nuevo antes de cortar el BFS
+# por rendimientos decrecientes (aunque queden nodos en cola y tope sin agotar).
+HUELLA_VENTANA_SIN_NOVEDAD = 5
 
 # --- Motor de huella digital: correlación avanzada (huella.py, Tanda D) ------
 # Distancia de Hamming (hash de 64 bits) para enlazar dos avatares como "el mismo".
