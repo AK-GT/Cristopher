@@ -60,7 +60,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
@@ -80,6 +80,7 @@ from cristopher.browser import get_browser
 from cristopher.config import (
     HUELLA_AVATAR_TIMEOUT,
     HUELLA_DIR,
+    HUELLA_DISYUNTOR_COOLDOWN_SEGUNDOS,
     HUELLA_DORK_RESULTADOS_MAX,
     HUELLA_EXTRACCION_TIMEOUT,
     HUELLA_MAIGRET_TOP_SITES,
@@ -238,6 +239,16 @@ class Huella:
                     creado TEXT NOT NULL
                 )"""
             )
+            # Tanda G: cooldown de fuente que sobrevive entre `DisyuntorFuente`
+            # distintos (una por cada `investigar()`) — sin esto, una fuente ya
+            # bloqueada en una investigación se reintentaba de inmediato en la
+            # siguiente, en vez de respetar el enfriamiento.
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS huella_disyuntor (
+                    fuente TEXT PRIMARY KEY,
+                    hasta TEXT NOT NULL
+                )"""
+            )
 
     def agregar_vigilancia(self, tipo: str, valor: str) -> int:
         with self._lock, self._conn:
@@ -289,6 +300,25 @@ class Huella:
                 (pivote,),
             ).fetchone()
             return json.loads(row[0]) if row else None
+
+    def marcar_cooldown(self, fuente: str, hasta: str) -> None:
+        """Tanda G: registra/actualiza hasta cuándo debe evitarse `fuente` (fecha ISO,
+        comparable como string por ser el mismo formato que `_now()`)."""
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO huella_disyuntor (fuente, hasta) VALUES (?, ?) "
+                "ON CONFLICT(fuente) DO UPDATE SET hasta=excluded.hasta",
+                (fuente, hasta),
+            )
+
+    def fuentes_en_cooldown(self) -> list[str]:
+        """Tanda G: fuentes con un cooldown TODAVÍA vigente (hasta > ahora). No borra
+        las filas vencidas (barato conservarlas, sirven de historial si hace falta
+        depurar bloqueos futuros)."""
+        with self._lock:
+            filas = self._conn.execute("SELECT fuente, hasta FROM huella_disyuntor").fetchall()
+        ahora = _now()
+        return [fuente for fuente, hasta in filas if hasta > ahora]
 
 
 _HUELLA: Optional[Huella] = None
@@ -351,27 +381,43 @@ _PATRON_BLOQUEO = re.compile(
 
 
 class DisyuntorFuente:
-    """Tolerancia a fallos por fuente, con alcance de UNA sola investigación."""
+    """Tolerancia a fallos por fuente. El desactivado en memoria (`_desactivadas`)
+    nace fresco en cada instancia (una por `investigar()`), pero se precarga desde
+    `huella.db` (Tanda G): si una fuente quedó en cooldown en una investigación
+    anterior, esta instancia arranca ya sabiéndolo, en vez de tener que volver a
+    fallar 2 veces para descubrirlo de nuevo.
+
+    `huella`: inyectable para tests (evita que pruebas unitarias lean/escriban la
+    `huella.db` real de producción); por defecto usa el singleton (`get_huella()`),
+    igual que el resto del módulo."""
 
     UMBRAL_FALLOS_SEGUIDOS = 2
 
-    def __init__(self) -> None:
+    def __init__(self, huella: Optional["Huella"] = None) -> None:
+        self._huella = huella if huella is not None else get_huella()
         self._fallos_seguidos: dict[str, int] = {}
-        self._desactivadas: set[str] = set()
+        self._desactivadas: set[str] = set(self._huella.fuentes_en_cooldown())
 
     def activa(self, fuente: str) -> bool:
         return fuente not in self._desactivadas
+
+    def _desactivar(self, fuente: str) -> None:
+        self._desactivadas.add(fuente)
+        hasta = (datetime.now() + timedelta(seconds=HUELLA_DISYUNTOR_COOLDOWN_SEGUNDOS)).isoformat(
+            timespec="seconds"
+        )
+        self._huella.marcar_cooldown(fuente, hasta)
 
     def registrar(self, fuente: str, ok: bool, detalle_error: str = "") -> None:
         if ok:
             self._fallos_seguidos[fuente] = 0
             return
         if _PATRON_BLOQUEO.search(detalle_error or ""):
-            self._desactivadas.add(fuente)  # señal fuerte: no esperamos a un segundo fallo
+            self._desactivar(fuente)  # señal fuerte: no esperamos a un segundo fallo
             return
         self._fallos_seguidos[fuente] = self._fallos_seguidos.get(fuente, 0) + 1
         if self._fallos_seguidos[fuente] >= self.UMBRAL_FALLOS_SEGUIDOS:
-            self._desactivadas.add(fuente)
+            self._desactivar(fuente)
 
     def degradadas(self) -> list[str]:
         return sorted(self._desactivadas)

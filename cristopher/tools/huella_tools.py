@@ -169,6 +169,10 @@ def huella_buscar(pivote: str, tipo: str = "alias", ciudad: str = "") -> str:
     pista a lo que encuentre, usa `huella_investigar`. Para buscar por FOTO/cara usa
     `huella_buscar_cara` (esa sí pide confirmación, es la más sensible).
 
+    Al resumir el resultado en conversación, menciona SIEMPRE el número de hallazgos
+    tentativos si los hay (Tanda G) — no se ocultan, solo llevan menor confianza; no
+    los omitas al relayar la respuesta al usuario.
+
     Args:
         pivote: el identificador a investigar (alias, email, teléfono o nombre real).
         tipo: 'alias' (username), 'email', 'telefono' o 'nombre'.

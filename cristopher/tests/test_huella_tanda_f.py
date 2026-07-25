@@ -15,6 +15,7 @@ import unittest
 
 from cristopher.huella import (
     DisyuntorFuente,
+    Huella,
     _clave_pivote,
     _minar_pivotes_ghunt,
     _normalizar_telefono,
@@ -22,19 +23,27 @@ from cristopher.huella import (
 
 
 class TestDisyuntorFuente(unittest.TestCase):
+    def setUp(self):
+        # Huella.db propia en memoria (Tanda G: DisyuntorFuente ahora persiste
+        # cooldowns) — nunca la `huella.db` real de producción. Fresca en cada test.
+        self._huella = Huella(db_path=":memory:")
+
+    def _disyuntor(self) -> DisyuntorFuente:
+        return DisyuntorFuente(huella=self._huella)
+
     def test_activa_por_defecto(self):
-        d = DisyuntorFuente()
+        d = self._disyuntor()
         self.assertTrue(d.activa("maigret"))
         self.assertEqual(d.degradadas(), [])
 
     def test_exito_no_desactiva(self):
-        d = DisyuntorFuente()
+        d = self._disyuntor()
         d.registrar("maigret", ok=True)
         d.registrar("maigret", ok=True)
         self.assertTrue(d.activa("maigret"))
 
     def test_fallos_seguidos_desactivan(self):
-        d = DisyuntorFuente()
+        d = self._disyuntor()
         d.registrar("maigret", ok=False, detalle_error="ERROR: timeout")
         self.assertTrue(d.activa("maigret"), "un solo fallo genérico no debe desactivar")
         d.registrar("maigret", ok=False, detalle_error="ERROR: timeout")
@@ -42,28 +51,45 @@ class TestDisyuntorFuente(unittest.TestCase):
         self.assertIn("maigret", d.degradadas())
 
     def test_exito_intermedio_resetea_la_racha(self):
-        d = DisyuntorFuente()
+        d = self._disyuntor()
         d.registrar("socialscan", ok=False, detalle_error="ERROR: timeout")
         d.registrar("socialscan", ok=True)
         d.registrar("socialscan", ok=False, detalle_error="ERROR: timeout")
         self.assertTrue(d.activa("socialscan"), "un éxito en medio debe cortar la racha de fallos")
 
     def test_patron_de_bloqueo_desactiva_de_inmediato(self):
-        d = DisyuntorFuente()
+        d = self._disyuntor()
         d.registrar("ghunt", ok=False, detalle_error="HTTP 429 Too Many Requests")
         self.assertFalse(d.activa("ghunt"), "un error de rate-limit debe cortar la fuente sin esperar un segundo fallo")
 
     def test_fuentes_independientes(self):
-        d = DisyuntorFuente()
+        d = self._disyuntor()
         d.registrar("maigret", ok=False, detalle_error="bloqueado (403 Forbidden)")
         self.assertFalse(d.activa("maigret"))
         self.assertTrue(d.activa("socialscan"), "desactivar una fuente no debe afectar a otras")
 
     def test_desactivacion_es_permanente_en_la_investigacion(self):
-        d = DisyuntorFuente()
+        d = self._disyuntor()
         d.registrar("maigret", ok=False, detalle_error="banned")
         d.registrar("maigret", ok=True)  # un éxito posterior no debe "reactivar" la fuente
         self.assertFalse(d.activa("maigret"))
+
+    def test_cooldown_persiste_entre_instancias_distintas(self):
+        # Tanda G: una fuente desactivada en un DisyuntorFuente debe salir ya
+        # pre-desactivada en el SIGUIENTE (misma Huella = misma "investigar()" futura).
+        d1 = self._disyuntor()
+        d1.registrar("maigret", ok=False, detalle_error="banned")
+        d1.registrar("maigret", ok=False, detalle_error="banned")
+        self.assertFalse(d1.activa("maigret"))
+
+        d2 = self._disyuntor()
+        self.assertFalse(d2.activa("maigret"), "el cooldown debe sobrevivir a una instancia nueva")
+        self.assertTrue(d2.activa("socialscan"), "el cooldown es por fuente, no global")
+
+    def test_huella_sin_cooldowns_previos_no_desactiva_nada(self):
+        otra_huella = Huella(db_path=":memory:")
+        d = DisyuntorFuente(huella=otra_huella)
+        self.assertTrue(d.activa("maigret"))
 
 
 class TestNormalizarTelefono(unittest.TestCase):

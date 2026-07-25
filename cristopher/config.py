@@ -196,6 +196,12 @@ HUELLA_AVATAR_TIMEOUT = 8          # s por descarga de avatar para pHash
 # verificado real (no hipotético) al probar el dorking por Playwright headless.
 HUELLA_DORK_RESULTADOS_MAX = 5
 
+# --- Motor de huella digital: disyuntor persistente (huella.py, Tanda G) -----
+# Cuánto dura el enfriamiento de una fuente bloqueada/con fallos repetidos MÁS ALLÁ
+# de la investigación en curso (persistido en huella.db) — evita que la siguiente
+# `investigar()` reintente de inmediato una fuente que ya se sabe bloqueada.
+HUELLA_DISYUNTOR_COOLDOWN_SEGUNDOS = int(os.getenv("CRISTOPHER_HUELLA_COOLDOWN", "600"))
+
 # --- Integración de WhatsApp (Baileys, Node.js) -------------------------------
 # Baileys es una librería NO OFICIAL que reimplementa el protocolo de WhatsApp Web;
 # usarla conlleva riesgo de que Meta limite o banee el número. Decisión ya tomada por
