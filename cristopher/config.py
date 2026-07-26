@@ -231,6 +231,15 @@ HUELLA_WAYBACK_TIMEOUT = int(os.getenv("CRISTOPHER_HUELLA_WAYBACK_TIMEOUT", "15"
 # el CDX completo.
 HUELLA_WAYBACK_LIMITE = int(os.getenv("CRISTOPHER_HUELLA_WAYBACK_LIMITE", "20"))
 
+# --- Motor de huella digital: síntesis narrativa (huella.py, Tanda P) --------
+# Resumen narrativo corto (3-4 frases) antepuesto al detalle estructurado de un
+# dossier/investigación, vía una llamada suelta a Gemini (mismo patrón que
+# proactivo.py::_resumir_sesion_terminada). Activable/desactivable: cada
+# búsqueda pasaría a hacer una llamada extra a Gemini, y el usuario puede
+# preferir desactivarlo si le preocupa la cuota gratuita.
+HUELLA_NARRATIVA_ACTIVA = os.getenv("CRISTOPHER_HUELLA_NARRATIVA", "1") == "1"
+HUELLA_NARRATIVA_TIMEOUT = int(os.getenv("CRISTOPHER_HUELLA_NARRATIVA_TIMEOUT", "15"))
+
 # --- Integración de WhatsApp (Baileys, Node.js) -------------------------------
 # Baileys es una librería NO OFICIAL que reimplementa el protocolo de WhatsApp Web;
 # usarla conlleva riesgo de que Meta limite o banee el número. Decisión ya tomada por
