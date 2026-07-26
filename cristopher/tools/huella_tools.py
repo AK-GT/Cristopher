@@ -164,8 +164,9 @@ def huella_buscar(pivote: str, tipo: str = "alias", ciudad: str = "") -> str:
     """Audita la huella digital de UN pivote: username, email, teléfono o nombre
     real. Rápida: un solo salto, sin seguir los hallazgos.
 
-    Username: lanza Maigret (miles de sitios) y Socialscan (verificación de alta
-    confianza) y cruza resultados. Email: user-scanner (servicios registrados) +
+    Username: lanza Maigret (miles de sitios), Sherlock (lista curada, ~400
+    sitios) y Socialscan (verificación de alta confianza) y cruza resultados.
+    Email: user-scanner (servicios registrados) +
     GHunt (si es Gmail y está configurado) + Gravatar + XposedOrNot (brechas
     filtradas de datos, con su procedencia). Teléfono: país/operadora/tipo de línea
     (offline) + apps donde está registrado + búsqueda dirigida (dorking) del número

@@ -47,6 +47,7 @@ resolución DNS normal por socket funciona bien).
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import os
@@ -506,6 +507,59 @@ def _correr_socialscan(alias: str, out_file: Path) -> tuple[bool, str, list[dict
     return True, "", hallazgos
 
 
+def _parsear_csv_sherlock(ruta: Path) -> list[dict]:
+    """Extrae {sitio, url} de las filas 'Claimed' del CSV de Sherlock. Aislado de
+    `_correr_sherlock` para poder testear el parseo sin lanzar el subproceso real."""
+    hallazgos = []
+    with ruta.open(encoding="utf-8", newline="") as f:
+        for fila in csv.DictReader(f):
+            if fila.get("exists") == "Claimed":
+                hallazgos.append({"sitio": fila.get("name", "?"), "url": fila.get("url_user", "")})
+    return hallazgos
+
+
+def _correr_sherlock(alias: str, out_dir: Path) -> tuple[bool, str, list[dict]]:
+    """Devuelve (ok, mensaje_error_o_vacio, hallazgos). hallazgos: [{sitio, url}].
+
+    Tanda J: tercera fuente independiente para el pivote username. Verificado a
+    mano antes de integrarlo ("verifica, no asumas"): `sherlock-project` en PyPI
+    instala limpio y NO depende de httpx/aiohttp/aiodns (usa `requests`), así que
+    no puede repetir el conflicto de GHunt con `google-genai`/`ddgs`. Se descartó
+    el paquete "blackbird" de PyPI (namespace package roto, no es la herramienta
+    OSINT real) y WhatsMyName (sin paquete instalable, solo clonable de GitHub).
+
+    `--json` de Sherlock es para CARGAR un fichero de sitios alternativo, NO para
+    exportar resultados (gotcha verificado a mano) — el formato exportable es CSV
+    (`--csv`), con columna `exists` en "Claimed"/"Available"/etc."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable,
+        "-m",
+        "sherlock_project",
+        alias,
+        "--csv",
+        "--no-txt",
+        "--no-color",
+        "--timeout",
+        "15",
+        "--folderoutput",
+        str(out_dir),
+    ]
+    ok, salida = _ejecutar_herramienta("sherlock", cmd, HUELLA_TIMEOUT)
+    if not ok:
+        return False, salida, []
+
+    reporte = out_dir / f"{alias}.csv"
+    if not reporte.exists():
+        return False, "ERROR: Sherlock no generó el reporte esperado.", []
+
+    try:
+        hallazgos = _parsear_csv_sherlock(reporte)
+    except Exception as exc:
+        return False, f"ERROR al parsear la salida de Sherlock: {exc}", []
+    return True, "", hallazgos
+
+
 def _clave_sitio(sitio: str) -> str:
     """Normaliza el nombre de sitio para cruzar resultados entre herramientas
     (p. ej. 'GitHub' de Socialscan vs 'GitHub' de Maigret; distinta capitalización
@@ -515,14 +569,18 @@ def _clave_sitio(sitio: str) -> str:
 
 # Peso por fuente según su fuerza real (§5: "enlaces fuertes... pesan más que débiles").
 # Endpoint de registro confirmado (Socialscan/user-scanner) > dato de cuenta real (GHunt) >
-# perfil público verificable (Gravatar) > check de login/registro (ignorant) > presencia
-# por patrón de texto (Maigret, más falsos positivos). Fuentes futuras no listadas: 0.3.
+# perfil público verificable (Gravatar) > check de login/registro (ignorant) > verificación
+# de URL de perfil real con lista curada (Sherlock, Tanda J: mismo método que Maigret pero
+# ~400 sitios activamente mantenidos en vez de 3000+ con más ruido, de ahí el peso
+# intermedio) > presencia por patrón de texto (Maigret, más falsos positivos). Fuentes
+# futuras no listadas: 0.3.
 PESO_FUENTE = {
     "socialscan": 0.6,
     "user-scanner": 0.6,
     "ghunt": 0.6,
     "gravatar": 0.5,
     "ignorant": 0.45,
+    "sherlock": 0.4,
     "maigret": 0.35,
 }
 _PESO_FUENTE_DEFECTO = 0.3
@@ -605,24 +663,27 @@ def _cruzar_hallazgos(
 
 
 def buscar_username(alias: str, disyuntor: Optional["DisyuntorFuente"] = None) -> Dossier:
-    """Pivote USERNAME: lanza Maigret + Socialscan EN PARALELO (2 workers como
-    mucho — "gratis" no es "impune": más concurrencia de la necesaria hacia los
-    mismos sitios de destino aumenta el riesgo de bloqueo, no solo la velocidad) y
-    cruza resultados (puntuados vía `_cruzar_hallazgos`/`_puntuar`). Cada fallo de
-    herramienta se guarda en `dossier.errores` (nunca se oculta), y el dossier se
-    persiste siempre, aunque una de las dos falle. Si `disyuntor` viene informado
-    (siempre lo pasa `investigar()`, nunca `huella_buscar` suelto) y una fuente ya
-    está degradada por fallos repetidos en ESTA investigación, se omite sin
-    intentarla — Tanda F.
+    """Pivote USERNAME: lanza Maigret + Socialscan + Sherlock (Tanda J) EN PARALELO
+    (3 workers como mucho — "gratis" no es "impune": más concurrencia de la
+    necesaria hacia los mismos sitios de destino aumenta el riesgo de bloqueo, no
+    solo la velocidad) y cruza resultados (puntuados vía `_cruzar_hallazgos`/
+    `_puntuar`). Tres fuentes en vez de dos: sube la frecuencia con la que un
+    hallazgo llega a "confirmado" (antes tope en 2 grupos de independencia
+    posibles). Cada fallo de herramienta se guarda en `dossier.errores` (nunca se
+    oculta), y el dossier se persiste siempre, aunque alguna falle. Si `disyuntor`
+    viene informado (siempre lo pasa `investigar()`, nunca `huella_buscar` suelto)
+    y una fuente ya está degradada por fallos repetidos en ESTA investigación, se
+    omite sin intentarla — Tanda F.
     """
     dossier = Dossier(pivote=alias, tipo="alias")
     hallazgos_m: list[dict] = []
     hallazgos_s: list[dict] = []
+    hallazgos_sh: list[dict] = []
 
     with tempfile.TemporaryDirectory(prefix="huella_") as tmp:
         tmp_path = Path(tmp)
         tareas = {}
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        with ThreadPoolExecutor(max_workers=3) as pool:
             if disyuntor is None or disyuntor.activa("maigret"):
                 tareas["maigret"] = pool.submit(_correr_maigret, alias, tmp_path / "maigret")
             elif disyuntor is not None:
@@ -631,6 +692,10 @@ def buscar_username(alias: str, disyuntor: Optional["DisyuntorFuente"] = None) -
                 tareas["socialscan"] = pool.submit(_correr_socialscan, alias, tmp_path / "socialscan.json")
             elif disyuntor is not None:
                 dossier.errores.append("Socialscan: fuente degradada en esta investigación (fallos repetidos), omitida.")
+            if disyuntor is None or disyuntor.activa("sherlock"):
+                tareas["sherlock"] = pool.submit(_correr_sherlock, alias, tmp_path / "sherlock")
+            elif disyuntor is not None:
+                dossier.errores.append("Sherlock: fuente degradada en esta investigación (fallos repetidos), omitida.")
 
             if "maigret" in tareas:
                 ok_m, err_m, hallazgos_m = tareas["maigret"].result()
@@ -644,10 +709,18 @@ def buscar_username(alias: str, disyuntor: Optional["DisyuntorFuente"] = None) -
                     disyuntor.registrar("socialscan", ok_s, err_s)
                 if not ok_s:
                     dossier.errores.append(f"Socialscan: {err_s}")
+            if "sherlock" in tareas:
+                ok_sh, err_sh, hallazgos_sh = tareas["sherlock"].result()
+                if disyuntor is not None:
+                    disyuntor.registrar("sherlock", ok_sh, err_sh)
+                if not ok_sh:
+                    dossier.errores.append(f"Sherlock: {err_sh}")
 
     nodo_pivote = Nodo(id=f"alias:{alias}", tipo="alias", valor=alias, confianza="confirmado")
     dossier.nodos.append(nodo_pivote)
-    _cruzar_hallazgos(dossier, nodo_pivote, {"maigret": hallazgos_m, "socialscan": hallazgos_s})
+    _cruzar_hallazgos(
+        dossier, nodo_pivote, {"maigret": hallazgos_m, "socialscan": hallazgos_s, "sherlock": hallazgos_sh}
+    )
 
     get_huella().guardar_dossier(dossier)
     return dossier

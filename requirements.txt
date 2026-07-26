@@ -58,6 +58,14 @@ comtypes>=1.2.0         # dependencia de pycaw (COM en Windows)
 maigret>=0.6.3
 socialscan>=2.0.1
 
+# Motor de huella digital (Tanda J) — 3ª fuente independiente para username.
+# Verificado a mano antes de añadirlo: instala limpio en un venv aislado y NO toca
+# httpx/aiohttp/aiodns (usa `requests`), así que no puede repetir el conflicto de
+# httpx<0.28 de GHunt con google-genai/ddgs. Se descartó el paquete "blackbird" de
+# PyPI (namespace package roto, no es la herramienta OSINT real de ese nombre) y
+# WhatsMyName (sin paquete instalable, solo clonable de GitHub).
+sherlock-project>=0.16.0
+
 # Motor de huella digital (Tanda B) — pivotes email, brechas y teléfono.
 # `ignorant` no sufre el bug de aiodns/pycares (usa httpx/trio, no aiohttp) — no necesita
 # la mitigación de la Tanda A. Se invoca en proceso (sus funciones internas), no por CLI:

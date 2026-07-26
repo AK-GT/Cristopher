@@ -1900,6 +1900,7 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Audita la huella digital de UN pivote (rápida, un solo salto): username, "
             "email, teléfono o nombre real. Para username: Maigret (miles de sitios) + "
+            "Sherlock (lista curada, ~400 sitios) + "
             "Socialscan (alta confianza) cruzados. Para email: user-scanner (servicios "
             "registrados) + GHunt (si es Gmail y está configurado) + Gravatar + "
             "XposedOrNot (brechas de datos, con su fuente). Para teléfono: "
