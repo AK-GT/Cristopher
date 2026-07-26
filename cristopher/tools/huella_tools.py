@@ -127,11 +127,27 @@ def _formatear_investigacion(inv: Investigacion) -> str:
 
     if inv.aristas_correlacion:
         valor_por_id = {n.id: n.valor for d in inv.dossiers for n in d.nodos}
-        partes.append(f"\nMISMO AVATAR ({len(inv.aristas_correlacion)}, posible misma persona aunque cambie el alias):")
-        for a in inv.aristas_correlacion:
-            o = valor_por_id.get(a.origen, a.origen)
-            dest = valor_por_id.get(a.destino, a.destino)
-            partes.append(f"  🖼 {o}  ⇄  {dest}  (similitud {a.peso:.2f})")
+        avatares = [a for a in inv.aristas_correlacion if a.tipo_enlace == "mismo_avatar"]
+        enlaces = [a for a in inv.aristas_correlacion if a.tipo_enlace == "correlacion_enlace"]
+        bios = [a for a in inv.aristas_correlacion if a.tipo_enlace == "correlacion_bio"]
+        if avatares:
+            partes.append(f"\nMISMO AVATAR ({len(avatares)}, posible misma persona aunque cambie el alias):")
+            for a in avatares:
+                o = valor_por_id.get(a.origen, a.origen)
+                dest = valor_por_id.get(a.destino, a.destino)
+                partes.append(f"  🖼 {o}  ⇄  {dest}  (similitud {a.peso:.2f})")
+        if enlaces:
+            partes.append(f"\nMISMO ENLACE EXTERNO ({len(enlaces)}, señal fuerte — misma web/perfil enlazado, Tanda K):")
+            for a in enlaces:
+                o = valor_por_id.get(a.origen, a.origen)
+                dest = valor_por_id.get(a.destino, a.destino)
+                partes.append(f"  🔗 {o}  ⇄  {dest}")
+        if bios:
+            partes.append(f"\nBIO CASI IDÉNTICA ({len(bios)}, señal más débil que enlace/avatar, Tanda K):")
+            for a in bios:
+                o = valor_por_id.get(a.origen, a.origen)
+                dest = valor_por_id.get(a.destino, a.destino)
+                partes.append(f"  📝 {o}  ⇄  {dest}  (similitud {a.peso:.2f})")
 
     if inv.pivotes_nuevos:
         investigados = {d.pivote.strip().lower() for d in inv.dossiers}

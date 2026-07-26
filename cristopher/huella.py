@@ -62,6 +62,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
@@ -80,6 +81,7 @@ from socid_extractor import extract, mutate_url, parse as socid_parse
 from cristopher.browser import get_browser
 from cristopher.config import (
     HUELLA_AVATAR_TIMEOUT,
+    HUELLA_BIO_SIMILITUD_UMBRAL,
     HUELLA_DIR,
     HUELLA_DISYUNTOR_COOLDOWN_SEGUNDOS,
     HUELLA_DORK_RESULTADOS_MAX,
@@ -141,6 +143,12 @@ class Nodo:
     # el dato ya vino estructurado. NO se persiste (fuera de `to_dict`): es una pista
     # efímera para la pasada de `investigar()`, no un dato del dossier en sí.
     pivotes: list = field(default_factory=list)
+    # Campos de texto (bio/enlace externo) que `_extraer_pivotes` ya sacó de esta
+    # cuenta al minar pivotes nuevos (Tanda K) — reutilizados por
+    # `_correlacionar_texto()` para enlazar cuentas de avatares DISTINTOS que
+    # comparten el mismo enlace o una bio casi idéntica. NO se persiste (mismo
+    # criterio que `pivotes`): efímero para la pasada de `investigar()`.
+    campos_correlacion: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -1394,12 +1402,24 @@ def buscar_termino(texto: str) -> Dossier:
 # ignora a propósito.
 _CAMPOS_EMAIL = {"email", "emails", "your_emails", "business_email"}
 _CAMPOS_TELEFONO = {"phone", "your_phone"}
+# Campos de texto que sirven para CORRELACIONAR cuentas dentro de una misma
+# investigación (Tanda K: enlace externo idéntico o bio casi igual), no como
+# pivotes nuevos que perseguir — antes `_extraer_pivotes` los descartaba tras
+# minar solo email/teléfono/username. Best-effort: `socid_extractor` no garantiza
+# estos nombres de campo en todos los sitios (300+ posibles, sin schema fijo) —
+# aditivo, no rompe nada si un sitio no trae ninguno.
+_CAMPOS_BIO = {"bio", "about", "description"}
+_CAMPOS_ENLACE = {"blog", "website", "homepage", "external_url"}
 
 
-def _extraer_pivotes(url: str) -> list[tuple[str, str]]:
-    """Extrae candidatos a pivote nuevo (tipo, valor) de una página de perfil vía
-    `socid_extractor`. Muchos "schemes" apuntan a un endpoint de API, no a la URL
-    canónica del perfil (p. ej. github.com/<user> -> api.github.com/users/<user>) —
+def _extraer_pivotes(url: str) -> tuple[list[tuple[str, str]], dict]:
+    """Extrae de una página de perfil vía `socid_extractor`: (a) candidatos a
+    pivote nuevo (tipo, valor), igual que siempre (Tanda F); y (b) campos de
+    texto para correlación (Tanda K: `bio`/`enlace_externo`) — UN SOLO fetch de
+    red sirve para ambos usos, no se repite la petición solo por el segundo.
+
+    Muchos "schemes" apuntan a un endpoint de API, no a la URL canónica del
+    perfil (p. ej. github.com/<user> -> api.github.com/users/<user>) —
     `mutate_url()` da esas variantes. Un mismo sitio puede tener VARIAS mutaciones
     útiles a la vez (p. ej. GitHub: perfil + social_accounts, cada uno con campos
     distintos) — se prueban TODAS (más la URL original) y se fusionan los campos,
@@ -1422,6 +1442,7 @@ def _extraer_pivotes(url: str) -> list[tuple[str, str]]:
             continue
 
     candidatos: list[tuple[str, str]] = []
+    texto_correlacion: dict = {}
     for campo, valor in datos.items():
         if not valor or not isinstance(valor, str):
             continue
@@ -1439,7 +1460,11 @@ def _extraer_pivotes(url: str) -> list[tuple[str, str]]:
             candidatos.append(("telefono", valor.strip()))
         elif campo_l.endswith("_username") or campo_l in ("username", "nickname"):
             candidatos.append(("alias", valor.strip()))
-    return candidatos
+        elif campo_l in _CAMPOS_BIO and "bio" not in texto_correlacion:
+            texto_correlacion["bio"] = valor.strip()
+        elif campo_l in _CAMPOS_ENLACE and "enlace_externo" not in texto_correlacion:
+            texto_correlacion["enlace_externo"] = valor.strip()
+    return candidatos, texto_correlacion
 
 
 def _clasificar_pivote(valor: str) -> str:
@@ -1533,6 +1558,54 @@ def _correlacionar_avatares(inv: Investigacion) -> list[Arista]:
                 aristas.append(
                     Arista(origen=n1.id, destino=n2.id, tipo_enlace="mismo_avatar", fuente="phash", peso=peso)
                 )
+    return aristas
+
+
+def _correlacionar_texto(inv: Investigacion) -> list[Arista]:
+    """Enlaza cuentas de DISTINTOS pivotes/dossiers que comparten el mismo enlace
+    externo exacto (señal FUERTE, peso 1.0) o una bio casi idéntica (señal más
+    débil, ponderada por similitud — Tanda K). Complementa `_correlacionar_avatares`:
+    dos cuentas con avatares DISTINTOS pueden seguir siendo la misma persona si
+    enlazan la misma web personal o repiten la misma bio.
+
+    Compara por `d.pivote` (identidad de la búsqueda), no por URL como
+    `_correlacionar_avatares`: a diferencia del avatar (raro que coincida por
+    azar), una bio suele repetirse IDÉNTICA en todas las cuentas de una misma
+    búsqueda de alias — comparar ahí generaría solo ruido esperado ("sus propios
+    perfiles tienen la misma bio"), no una correlación nueva entre búsquedas.
+    """
+    candidatos = [
+        (n, d.pivote)
+        for d in inv.dossiers
+        for n in d.nodos
+        if n.tipo == "url_perfil" and n.campos_correlacion
+    ]
+
+    aristas: list[Arista] = []
+    for i in range(len(candidatos)):
+        n1, pivote1 = candidatos[i]
+        for j in range(i + 1, len(candidatos)):
+            n2, pivote2 = candidatos[j]
+            if pivote1 == pivote2:
+                continue
+            enlace1 = n1.campos_correlacion.get("enlace_externo")
+            enlace2 = n2.campos_correlacion.get("enlace_externo")
+            if enlace1 and enlace2 and enlace1 == enlace2:
+                aristas.append(
+                    Arista(origen=n1.id, destino=n2.id, tipo_enlace="correlacion_enlace", fuente="socid_extractor", peso=1.0)
+                )
+                continue
+            bio1 = n1.campos_correlacion.get("bio")
+            bio2 = n2.campos_correlacion.get("bio")
+            if bio1 and bio2:
+                ratio = SequenceMatcher(None, bio1, bio2).ratio()
+                if ratio >= HUELLA_BIO_SIMILITUD_UMBRAL:
+                    aristas.append(
+                        Arista(
+                            origen=n1.id, destino=n2.id, tipo_enlace="correlacion_bio",
+                            fuente="socid_extractor", peso=round(ratio, 2),
+                        )
+                    )
     return aristas
 
 
@@ -1640,7 +1713,9 @@ def investigar(pivote: str, tipo: str, profundidad: int = HUELLA_PROFUNDIDAD_MAX
                 reverse=True,
             )
             for nodo in candidatos_nodo[:HUELLA_MAX_PIVOTES_POR_NIVEL]:
-                for tipo_nuevo, valor_nuevo in _extraer_pivotes(nodo.valor):
+                pivotes_nodo, texto_correlacion = _extraer_pivotes(nodo.valor)
+                nodo.campos_correlacion = texto_correlacion  # Tanda K: para _correlacionar_texto()
+                for tipo_nuevo, valor_nuevo in pivotes_nodo:
                     if _encolar(tipo_nuevo, valor_nuevo, nivel + 1, clave):
                         nuevos_esta_iteracion += 1
 
@@ -1650,7 +1725,7 @@ def investigar(pivote: str, tipo: str, profundidad: int = HUELLA_PROFUNDIDAD_MAX
             break
 
     inv.fuentes_degradadas = disyuntor.degradadas()
-    inv.aristas_correlacion = _correlacionar_avatares(inv)
+    inv.aristas_correlacion = _correlacionar_avatares(inv) + _correlacionar_texto(inv)
     get_huella().guardar_investigacion(inv)
     return inv
 

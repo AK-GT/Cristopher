@@ -202,6 +202,14 @@ HUELLA_DORK_RESULTADOS_MAX = 5
 # `investigar()` reintente de inmediato una fuente que ya se sabe bloqueada.
 HUELLA_DISYUNTOR_COOLDOWN_SEGUNDOS = int(os.getenv("CRISTOPHER_HUELLA_COOLDOWN", "600"))
 
+# --- Motor de huella digital: correlación por texto/bio (huella.py, Tanda K) --
+# Umbral de similitud (SequenceMatcher.ratio(), 0-1) para dar por buena una bio
+# casi idéntica entre cuentas de dossiers distintos. Alto a propósito: bios
+# genéricas ("amante de la música, viajera") no deben correlacionar por azar —
+# solo texto CASI literal cuenta como señal (más débil que un enlace exacto,
+# que no depende de este umbral).
+HUELLA_BIO_SIMILITUD_UMBRAL = float(os.getenv("CRISTOPHER_HUELLA_BIO_UMBRAL", "0.85"))
+
 # --- Integración de WhatsApp (Baileys, Node.js) -------------------------------
 # Baileys es una librería NO OFICIAL que reimplementa el protocolo de WhatsApp Web;
 # usarla conlleva riesgo de que Meta limite o banee el número. Decisión ya tomada por
