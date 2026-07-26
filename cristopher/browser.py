@@ -14,8 +14,12 @@ credenciales en formularios: eso lo hace el usuario.
 
 from __future__ import annotations
 
+import os
+import tempfile
 import threading
 from typing import Optional
+
+import requests
 
 from cristopher.config import DATA, WORKSPACE
 
@@ -118,7 +122,7 @@ class _Browser:
                     page.keyboard.press("Enter")
                 else:
                     page.locator("input.CbirCore-FileInput").set_input_files(imagen)
-                page.wait_for_url("**/images/search*", timeout=15_000)
+                page.wait_for_url("**/images/search*", timeout=NAV_TIMEOUT)
                 page.wait_for_timeout(1500)  # deja asentar los resultados tras la navegación
                 resultados = page.evaluate(
                     """() => {
@@ -135,6 +139,80 @@ class _Browser:
                 raise BrowserError(f"No pude buscar por imagen en Yandex: {exc}") from exc
             finally:
                 page.close()
+        return resultados or [], captura
+
+    def buscar_por_imagen_baidu(self, imagen: str) -> tuple[list[dict], Optional[bytes]]:
+        """Búsqueda inversa por imagen en Baidu Images (`image.baidu.com`) — segunda
+        fuente de cara además de Yandex (motor de huella digital, Tanda S). `imagen`
+        es una URL (http/https) o una ruta local.
+
+        Devuelve (resultados, captura): misma forma que `buscar_por_imagen`.
+
+        Verificado en vivo antes de integrar (gotcha documentado, el DOM de Baidu
+        puede cambiar con el tiempo igual que el de Yandex):
+        - El botón de subir imagen en la portada es `#ci-image-upload-btn`, pero
+          NO abre un `<input type=file>` visible en el DOM — dispara el selector de
+          archivo NATIVO del sistema operativo. Por eso se usa
+          `page.expect_file_chooser()` de Playwright (que intercepta ese diálogo
+          nativo) en vez de `set_input_files` sobre un input, patrón distinto al
+          de Yandex.
+        - Pegar una URL de imagen como texto en el buscador de la portada NO
+          dispara una búsqueda inversa — Baidu lo trata como texto normal
+          (verificado real: devolvió herramientas de edición de imagen genéricas,
+          no resultados de "dónde aparece esta cara"). Por eso, si `imagen` es una
+          URL, se descarga primero a un archivo temporal y se sube igual que un
+          archivo local.
+        - Los resultados están en la sección "图片来源" (fuentes de la imagen) de
+          la página `graph.baidu.com/s?...`, como enlaces `<a href="http...">`
+          normales — a diferencia de Yandex, no hace falta una clase CSS concreta.
+          Baidu además puede devolver una identificación directa de la persona
+          (verificado real: "图中可能是林纳斯·托瓦兹" para una foto de Linus
+          Torvalds) dentro del propio texto de la página, aunque este método solo
+          extrae los enlaces — la identificación queda en el texto que
+          `page.screenshot()`/lectura posterior podría capturar si hiciera falta.
+        """
+        archivo_temporal: Optional[str] = None
+        with self._lock:
+            if self._headless is None:
+                self._headless = self._launch(headless=True)
+            page = self._headless.new_page()
+            try:
+                page.goto("https://image.baidu.com/", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+                ruta_local = imagen
+                if imagen.strip().lower().startswith(("http://", "https://")):
+                    r = requests.get(imagen, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+                    r.raise_for_status()
+                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+                        f.write(r.content)
+                        archivo_temporal = f.name
+                    ruta_local = archivo_temporal
+                with page.expect_file_chooser(timeout=10_000) as fc_info:
+                    page.click("#ci-image-upload-btn", timeout=10_000)
+                fc_info.value.set_files(ruta_local)
+                page.wait_for_timeout(6000)
+                resultados = page.eval_on_selector_all(
+                    'a[href^="http"]',
+                    "els => els.map(e => ({title: e.innerText.trim(), url: e.href})).filter(r => r.title)",
+                )
+                captura = None
+                if not resultados:
+                    # Tope corto y propio: verificado real que la captura de Baidu puede
+                    # colgarse esperando fuentes web varios segundos cuando la página no
+                    # dio resultados — sin resultados de por sí, un fallo de captura no
+                    # debe convertir un "no encontró nada" legítimo en un error duro.
+                    try:
+                        captura = page.screenshot(timeout=8_000)
+                    except Exception:
+                        captura = None
+            except Exception as exc:
+                raise BrowserError(f"No pude buscar por imagen en Baidu: {exc}") from exc
+            finally:
+                page.close()
+                if archivo_temporal:
+                    try:
+                        os.remove(archivo_temporal)
+                    except OSError:
+                        pass
         return resultados or [], captura
 
     # --- Sesión interactiva visible -------------------------------------------

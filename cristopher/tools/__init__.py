@@ -1951,8 +1951,9 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "huella_buscar_cara",
         "description": (
-            "Busca dónde más aparece una foto en internet (Yandex Images, búsqueda "
-            "inversa visual/facial sobre datos públicos), y si es un archivo LOCAL (no "
+            "Busca dónde más aparece una foto en internet (Yandex Images + Baidu Images, "
+            "búsqueda inversa visual/facial sobre datos públicos — cuantas más fuentes, "
+            "más oportunidades, aunque una no encuentre nada), y si es un archivo LOCAL (no "
             "una URL) lee además sus metadatos EXIF (cámara, fecha, GPS si no se limpió "
             "al guardarla). Es el pivote MÁS POTENTE Y MÁS SENSIBLE del motor de huella "
             "digital — SIEMPRE pide confirmación explícita "

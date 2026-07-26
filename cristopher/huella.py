@@ -83,6 +83,7 @@ from cristopher.config import (
     HUELLA_AVATAR_TIMEOUT,
     HUELLA_BFS_WORKERS_POR_NIVEL,
     HUELLA_BIO_SIMILITUD_UMBRAL,
+    HUELLA_CARA_BAIDU_ACTIVO,
     HUELLA_CRTSH_TIMEOUT,
     HUELLA_DIR,
     HUELLA_DISYUNTOR_COOLDOWN_SEGUNDOS,
@@ -1375,13 +1376,28 @@ def _extraer_exif(ruta_imagen: str) -> Optional[dict]:
         return None
 
 
+def _anadir_hallazgo_cara(dossier: Dossier, nodo_pivote: Nodo, url: str, fuente: str) -> None:
+    """Añade un hallazgo de búsqueda por cara al dossier (Tanda S: varios motores
+    pueden encontrar la MISMA url) — si el nodo ya existe (otro motor ya la
+    encontró), no duplica el nodo, solo añade una arista nueva con la fuente
+    nueva; así dos motores independientes citando la misma URL queda visible
+    como corroboración, sin colisión de id."""
+    nodo_id = f"url_perfil:{url}"
+    if not any(n.id == nodo_id for n in dossier.nodos):
+        dossier.nodos.append(Nodo(id=nodo_id, tipo="url_perfil", valor=url, confianza="tentativo"))
+    dossier.aristas.append(Arista(origen=nodo_pivote.id, destino=nodo_id, tipo_enlace="aparece_en", fuente=fuente, peso=0.4))
+
+
 def buscar_cara(imagen: str) -> Dossier:
-    """Pivote CARA: dónde más aparece una foto, vía búsqueda inversa en Yandex
-    Images (`browser.buscar_por_imagen`). El pivote más potente y más sensible del
-    sistema (reconocimiento facial sobre datos públicos) — SIN gate aquí dentro: el
-    gate vive en la tool (`huella_tools.huella_buscar_cara`), `huella.py` no importa
-    `confirmar_accion` (mismo criterio de capas que el resto del módulo: el motor
-    ejecuta, la capa de tool decide permisos).
+    """Pivote CARA: dónde más aparece una foto, vía búsqueda inversa en varios
+    motores (Tanda D: Yandex; Tanda S: + Baidu Images) — "cuantas más fuentes
+    mejor" (decisión explícita del usuario): cada motor es independiente y
+    aislado en su propio try/except, un fallo de uno NUNCA impide que los demás
+    corran. El pivote más potente y más sensible del sistema (reconocimiento
+    facial sobre datos públicos) — SIN gate aquí dentro: el gate vive en la tool
+    (`huella_tools.huella_buscar_cara`), `huella.py` no importa `confirmar_accion`
+    (mismo criterio de capas que el resto del módulo: el motor ejecuta, la capa
+    de tool decide permisos).
 
     `imagen`: URL (http/https) o ruta local a la foto.
     """
@@ -1389,7 +1405,7 @@ def buscar_cara(imagen: str) -> Dossier:
     nodo_pivote = Nodo(id=f"foto:{imagen}", tipo="foto", valor=imagen, confianza="confirmado")
     dossier.nodos.append(nodo_pivote)
 
-    # Tanda I: offline, antes de tocar red — corre siempre, aunque Yandex falle abajo.
+    # Tanda I: offline, antes de tocar red — corre siempre, pase lo que pase con los motores de abajo.
     exif = _extraer_exif(imagen)
     if exif:
         detalle_exif = " · ".join(f"{clave}: {valor}" for clave, valor in exif.items())
@@ -1405,27 +1421,24 @@ def buscar_cara(imagen: str) -> Dossier:
             Arista(origen=nodo_pivote.id, destino=nodo_exif.id, tipo_enlace="metadato", fuente="exif")
         )
 
+    # --- Motor 1: Yandex Images (Tanda D) ---
+    resultados_yandex: list[dict] = []
+    captura_yandex = None
     try:
-        resultados, captura = get_browser().buscar_por_imagen(imagen)
+        resultados_yandex, captura_yandex = get_browser().buscar_por_imagen(imagen)
     except Exception as exc:
         dossier.errores.append(f"Yandex: {exc}")
-        get_huella().guardar_dossier(dossier)
-        return dossier
 
-    for r in resultados:
-        nodo_url = Nodo(id=f"url_perfil:{r['url']}", tipo="url_perfil", valor=r["url"], confianza="tentativo")
-        dossier.nodos.append(nodo_url)
-        dossier.aristas.append(
-            Arista(origen=nodo_pivote.id, destino=nodo_url.id, tipo_enlace="aparece_en", fuente="yandex_cara", peso=0.4)
-        )
+    for r in resultados_yandex:
+        _anadir_hallazgo_cara(dossier, nodo_pivote, r["url"], "yandex_cara")
 
     # Red de seguridad: el DOM de Yandex cambia con frecuencia (gotcha conocido). Si
     # no dio resultados estructurados pero sí una captura, la visión lee la pantalla
     # (mismo patrón que `navegador_captura`).
-    if not resultados and captura:
+    if not resultados_yandex and captura_yandex:
         try:
             resumen = preguntar_sobre_imagen(
-                captura,
+                captura_yandex,
                 "Esta es una captura de resultados de búsqueda inversa por imagen en "
                 "Yandex Images. Lista los sitios o páginas donde aparece la foto "
                 "buscada, con su URL si es legible en la captura.",
@@ -1444,6 +1457,16 @@ def buscar_cara(imagen: str) -> Dossier:
             )
         except Exception as exc:
             dossier.errores.append(f"Visión sobre captura de Yandex: {exc}")
+
+    # --- Motor 2: Baidu Images (Tanda S) ---
+    if HUELLA_CARA_BAIDU_ACTIVO:
+        try:
+            resultados_baidu, _captura_baidu = get_browser().buscar_por_imagen_baidu(imagen)
+        except Exception as exc:
+            dossier.errores.append(f"Baidu: {exc}")
+            resultados_baidu = []
+        for r in resultados_baidu:
+            _anadir_hallazgo_cara(dossier, nodo_pivote, r["url"], "baidu_images")
 
     get_huella().guardar_dossier(dossier)
     return dossier

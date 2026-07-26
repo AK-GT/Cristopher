@@ -240,6 +240,12 @@ HUELLA_WAYBACK_LIMITE = int(os.getenv("CRISTOPHER_HUELLA_WAYBACK_LIMITE", "20"))
 HUELLA_NARRATIVA_ACTIVA = os.getenv("CRISTOPHER_HUELLA_NARRATIVA", "1") == "1"
 HUELLA_NARRATIVA_TIMEOUT = int(os.getenv("CRISTOPHER_HUELLA_NARRATIVA_TIMEOUT", "15"))
 
+# --- Motor de huella digital: búsqueda por cara, 2º motor (huella.py, Tanda S) --
+# Baidu Images además de Yandex — "cuantas más fuentes mejor" (decisión explícita
+# del usuario), aunque la mitad no encuentren nada. Desactivable sin tocar código
+# si algún día empieza a bloquear (mismo espíritu que HUELLA_NARRATIVA_ACTIVA).
+HUELLA_CARA_BAIDU_ACTIVO = os.getenv("CRISTOPHER_HUELLA_CARA_BAIDU", "1") == "1"
+
 # --- Integración de WhatsApp (Baileys, Node.js) -------------------------------
 # Baileys es una librería NO OFICIAL que reimplementa el protocolo de WhatsApp Web;
 # usarla conlleva riesgo de que Meta limite o banee el número. Decisión ya tomada por
@@ -253,6 +259,14 @@ WHATSAPP_LOG = WHATSAPP_DATA / "server.log"       # stdout/stderr del proceso No
 WHATSAPP_PORT = int(os.getenv("CRISTOPHER_WHATSAPP_PORT", "8766"))
 WHATSAPP_START_TIMEOUT = 20   # s: esperando a que /health responda tras lanzar el proceso Node
 WHATSAPP_HTTP_TIMEOUT = 15    # s: timeout por request a la API del servicio Node
+
+# Control remoto por WhatsApp (chat "Note to self"): un mensaje con este prefijo en
+# el chat contigo mismo se ejecuta como una orden normal al agente (ver
+# whatsapp_comandos.py); el resto del chat sigue siendo notas sueltas, se ignora.
+# Poll dedicado y más rápido que POLL_SEGUNDOS porque aquí sí importa la sensación
+# de estar "chateando en vivo" desde el móvil.
+WHATSAPP_COMANDO_PREFIJO = "/cristopher"
+POLL_WHATSAPP_COMANDOS = int(os.getenv("CRISTOPHER_POLL_WHATSAPP", "7"))
 
 
 class ConfigError(RuntimeError):

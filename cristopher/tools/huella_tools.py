@@ -397,13 +397,15 @@ def huella_ampliar(investigacion_id: int, nuevo_pivote: str, nuevo_tipo: str = "
 
 def huella_buscar_cara(imagen: str) -> str:
     """Busca dónde más aparece una foto en internet (reconocimiento facial/visual
-    vía Yandex Images sobre datos públicos), y si la foto es un archivo LOCAL (no
-    una URL), lee además sus metadatos EXIF (cámara, fecha, y ubicación GPS si no
-    se limpió al guardarla). Es el pivote MÁS POTENTE Y MÁS SENSIBLE del motor de
-    huella digital — SIEMPRE pide confirmación explícita antes de ejecutar nada (a
-    diferencia del resto de herramientas de huella digital, que no la piden). Úsala
-    solo cuando el usuario pida explícitamente buscar/rastrear una foto o cara
-    concreta, nunca por iniciativa propia dentro de otra investigación.
+    vía Yandex Images + Baidu Images sobre datos públicos — cuantas más fuentes,
+    más oportunidades, aunque una de las dos no encuentre nada), y si la foto es
+    un archivo LOCAL (no una URL), lee además sus metadatos EXIF (cámara, fecha, y
+    ubicación GPS si no se limpió al guardarla). Es el pivote MÁS POTENTE Y MÁS
+    SENSIBLE del motor de huella digital — SIEMPRE pide confirmación explícita
+    antes de ejecutar nada (a diferencia del resto de herramientas de huella
+    digital, que no la piden). Úsala solo cuando el usuario pida explícitamente
+    buscar/rastrear una foto o cara concreta, nunca por iniciativa propia dentro
+    de otra investigación.
 
     Args:
         imagen: URL (http/https) o ruta local del archivo de la foto a buscar.
