@@ -495,16 +495,20 @@ class DisyuntorFuente:
 # --- Pivote USERNAME: Maigret + Socialscan ------------------------------------
 
 
-def _correr_maigret(alias: str, out_dir: Path) -> tuple[bool, str, list[dict]]:
-    """Devuelve (ok, mensaje_error_o_vacio, hallazgos). hallazgos: [{sitio, url}]."""
+def _correr_maigret(alias: str, out_dir: Path, sitio: Optional[str] = None) -> tuple[bool, str, list[dict]]:
+    """Devuelve (ok, mensaje_error_o_vacio, hallazgos). hallazgos: [{sitio, url}].
+
+    `sitio`: si se da (Tanda M, `_resolver_plataforma_sin_url`), acota Maigret a
+    UN sitio concreto vía `--site` en vez de escanear `HUELLA_MAIGRET_TOP_SITES`
+    — mucho más barato para probar una sola permutación de alias contra una
+    plataforma ya identificada, en vez de repetir un Maigret completo por
+    candidato."""
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable,
         "-m",
         "maigret",
         alias,
-        "--top-sites",
-        str(HUELLA_MAIGRET_TOP_SITES),
         "--dns-resolver",
         "threaded",  # ver docstring del módulo: workaround del bug de aiodns/pycares en Windows
         "-J",
@@ -515,9 +519,11 @@ def _correr_maigret(alias: str, out_dir: Path) -> tuple[bool, str, list[dict]]:
         "--no-progressbar",
         "--timeout",
         "15",
-        "-n",
-        "30",
     ]
+    if sitio:
+        cmd += ["--site", sitio]
+    else:
+        cmd += ["--top-sites", str(HUELLA_MAIGRET_TOP_SITES), "-n", "30"]
     ok, salida = _ejecutar_herramienta("maigret", cmd, HUELLA_TIMEOUT)
     if not ok:
         return False, salida, []
@@ -1685,6 +1691,86 @@ def _correlacionar_texto(inv: Investigacion) -> list[Arista]:
     return aristas
 
 
+# --- Rescate de "plataforma confirmada, sin URL" (Tanda M) --------------------
+
+
+def _intentar_resolver_en_plataforma(plataforma: str, nombre_completo: str) -> Optional[str]:
+    """Prueba las permutaciones de alias de un nombre real (`_permutar_nombre`,
+    Tanda D) contra UNA plataforma concreta vía Maigret acotado (`--site`,
+    Tanda M) — mucho más barato que un Maigret completo (miles de sitios) por
+    cada candidato. Devuelve la URL resuelta en el primer acierto, o `None` si
+    ninguna permutación coincide (nunca lanza)."""
+    for candidato in _permutar_nombre(nombre_completo):
+        with tempfile.TemporaryDirectory(prefix="huella_rescate_") as tmp:
+            ok, _err, hallazgos = _correr_maigret(candidato, Path(tmp), sitio=plataforma)
+        if ok and hallazgos:
+            return hallazgos[0]["url"]
+    return None
+
+
+def _resolver_plataforma_sin_url(inv: Investigacion) -> None:
+    """Tanda M: rescata hallazgos de "plataforma confirmada, sin URL" — el caso
+    real de `ignorant` (pivote teléfono): confirma que un número está registrado
+    en, p. ej., Instagram, pero el endpoint de recuperación de contraseña que usa
+    nunca da la URL del perfil. Es un callejón sin salida estructural para el BFS
+    (`n.valor.startswith("http")` nunca lo recoge, así que `_extraer_pivotes`
+    jamás se llama sobre él). Si la MISMA investigación tiene un pivote `nombre`,
+    prueba sus permutaciones de alias contra ESA plataforma en concreto — mucho
+    más barato que un Maigret completo — y si acierta, añade el hallazgo como un
+    nodo NUEVO (nunca sobrescribe el nodo original de `ignorant`, que sigue
+    documentando el hecho tal cual se encontró).
+
+    Límite real, documentado a propósito (no un descuido): `_clasificar_pivote`
+    nunca produce `"nombre"` por extracción automática de una URL — este rescate
+    SOLO se activa si la investigación arrancó con `tipo="nombre"`, o si el
+    usuario añadió un nombre real vía `ampliar_investigacion` (Tanda L). Sin
+    ningún dossier `tipo="nombre"` en la investigación, sale de inmediato sin
+    gastar nada (coste cero en el caso común).
+
+    No relaja la regla de ≥2 fuentes (§5, sagrada): un acierto de Maigret en
+    solitario es UNA fuente, así que entra como tentativo (`_puntuar`), igual
+    que cualquier otro hallazgo de una sola fuente — nunca se fuerza a
+    confirmado por conveniencia.
+    """
+    nombres = [d.pivote for d in inv.dossiers if d.tipo == "nombre"]
+    if not nombres:
+        return  # sin nombre real en la investigación: nada que intentar, coste cero
+
+    for dossier in inv.dossiers:
+        pendientes = [
+            n for n in dossier.nodos
+            if n.tipo == "url_perfil"
+            and not n.valor.startswith("http")
+            and any(a.destino == n.id and a.fuente == "ignorant" for a in dossier.aristas)
+        ]
+        for nodo_sin_url in pendientes:
+            plataforma = nodo_sin_url.valor
+            for nombre_completo in nombres:
+                url_resuelta = _intentar_resolver_en_plataforma(plataforma, nombre_completo)
+                if not url_resuelta:
+                    continue
+                clave = _clave_sitio(plataforma)
+                puntuacion, etiqueta = _puntuar({"maigret"}, clave)
+                nodo_resuelto = Nodo(
+                    id=f"url_perfil:{url_resuelta}",
+                    tipo="url_perfil",
+                    valor=url_resuelta,
+                    confianza=etiqueta,
+                    puntuacion=puntuacion,
+                )
+                dossier.nodos.append(nodo_resuelto)
+                dossier.aristas.append(
+                    Arista(
+                        origen=nodo_sin_url.id,
+                        destino=nodo_resuelto.id,
+                        tipo_enlace="plataforma_resuelta",
+                        fuente="maigret_rescate",
+                        peso=PESO_FUENTE.get("maigret", _PESO_FUENTE_DEFECTO),
+                    )
+                )
+                break  # ya resuelto para este nodo, no seguir probando más nombres
+
+
 _BUSCADORES = {
     "alias": buscar_username,
     "email": buscar_email,
@@ -1807,6 +1893,7 @@ def _procesar_bfs(
             break
 
     inv.fuentes_degradadas = disyuntor.degradadas()
+    _resolver_plataforma_sin_url(inv)  # Tanda M: antes de correlacionar, por si el rescate aporta un nodo nuevo
     inv.aristas_correlacion = _correlacionar_avatares(inv) + _correlacionar_texto(inv)
     get_huella().guardar_investigacion(inv)
     return inv
