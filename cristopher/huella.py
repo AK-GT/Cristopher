@@ -993,7 +993,9 @@ def buscar_email(email: str, disyuntor: Optional["DisyuntorFuente"] = None) -> D
 
 def buscar_telefono(numero: str, disyuntor: Optional["DisyuntorFuente"] = None) -> Dossier:
     """Pivote TELÉFONO: `phonenumbers` (país/operadora/tipo, offline) + `ignorant`
-    (apps donde el número está registrado). `disyuntor`: igual que en
+    (apps donde el número está registrado) + dorking del número exacto (Tanda H,
+    mismo patrón que `buscar_nombre`/`buscar_termino` — resultados siempre
+    tentativos, no cuentas verificadas). `disyuntor`: igual que en
     `buscar_username` (Tanda F), solo lo pasa `investigar()`."""
     dossier = Dossier(pivote=numero, tipo="telefono")
 
@@ -1021,6 +1023,13 @@ def buscar_telefono(numero: str, disyuntor: Optional["DisyuntorFuente"] = None) 
     elif disyuntor is not None:
         dossier.errores.append("ignorant: fuente degradada en esta investigación (fallos repetidos), omitida.")
     _cruzar_hallazgos(dossier, nodo_pivote, {"ignorant": hallazgos_ig})
+
+    for hallazgo in _dorking_telefono(meta["e164"])[:HUELLA_DORK_RESULTADOS_MAX]:
+        nodo_url = Nodo(id=f"url_perfil:{hallazgo['url']}", tipo="url_perfil", valor=hallazgo["url"], confianza="tentativo")
+        dossier.nodos.append(nodo_url)
+        dossier.aristas.append(
+            Arista(origen=nodo_pivote.id, destino=nodo_url.id, tipo_enlace="dorking", fuente="google_dork", peso=0.3)
+        )
 
     get_huella().guardar_dossier(dossier)
     return dossier
@@ -1050,15 +1059,19 @@ def _permutar_nombre(nombre_completo: str) -> list[str]:
     return sorted(c.lower() for c in candidatos)
 
 
-def _dorking_nombre(nombre_completo: str, ciudad: str) -> list[dict]:
-    """Consultas dirigidas ('dorks') vía DuckDuckGo (`ddgs`) — sin navegador: Google
-    bloquea el Chromium headless sin perfil persistente con un muro anti-bot
-    ("unusual traffic"), verificado real al intentarlo por Playwright. `ddgs` ya es
-    dependencia del proyecto (`web_search.py`, fallback de la búsqueda de élite).
-    Nunca lanza: fallo de red/rate-limit = lista vacía."""
+def _dorking(consultas: list[str]) -> list[dict]:
+    """Motor de dorking compartido (Tanda D: nombre/término; Tanda H: teléfono) vía
+    DuckDuckGo (`ddgs`) — sin navegador. Se probó (Tanda H) usar el Chromium headless
+    como segundo motor de respaldo (Bing, Yandex texto, Mojeek): los tres bloquean el
+    headless con CAPTCHA/muro anti-bot, igual que ya le pasaba a Google (motivo
+    original de este diseño). La sesión de Chrome visible SÍ los pasa, pero abrirla
+    para un dorking de fondo sorprendería al usuario con una ventana inesperada en
+    medio de una búsqueda que se supone silenciosa — descartado a propósito, no un
+    descuido. `ddgs` ya es dependencia del proyecto (`web_search.py`, fallback de la
+    búsqueda de élite). Nunca lanza: fallo de red/rate-limit en una consulta = esa
+    consulta no aporta nada, se sigue con las demás."""
     from ddgs import DDGS
 
-    consultas = [f'"{nombre_completo}" {ciudad}'.strip(), f'site:linkedin.com "{nombre_completo}"']
     resultados: list[dict] = []
     for consulta in consultas:
         try:
@@ -1070,6 +1083,22 @@ def _dorking_nombre(nombre_completo: str, ciudad: str) -> list[dict]:
         except Exception:
             continue
     return resultados
+
+
+def _dorking_nombre(nombre_completo: str, ciudad: str) -> list[dict]:
+    """Consultas dirigidas ('dorks') para el pivote nombre/término: nombre+ciudad y
+    perfil de LinkedIn. Ver `_dorking()` para el motor compartido."""
+    consultas = [f'"{nombre_completo}" {ciudad}'.strip(), f'site:linkedin.com "{nombre_completo}"']
+    return _dorking(consultas)
+
+
+def _dorking_telefono(numero_e164: str) -> list[dict]:
+    """Consulta dirigida para el pivote teléfono (Tanda H): el número exacto entre
+    comillas — clasificados, foros, listados de empresa que lo mencionen tal cual.
+    Hueco que tenía el motor desde su diseño original (`HERRAMIENTA_BUSQUEDA.md`
+    marcaba PhoneInfoga como pieza clave para esto, nunca implementada): a
+    diferencia de nombre/término, teléfono no tenía NINGÚN paso de huella-web."""
+    return _dorking([f'"{numero_e164}"'])
 
 
 def buscar_nombre(nombre_completo: str, ciudad: str = "", disyuntor: Optional["DisyuntorFuente"] = None) -> Dossier:

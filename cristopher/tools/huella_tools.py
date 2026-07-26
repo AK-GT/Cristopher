@@ -162,7 +162,8 @@ def huella_buscar(pivote: str, tipo: str = "alias", ciudad: str = "") -> str:
     confianza) y cruza resultados. Email: user-scanner (servicios registrados) +
     GHunt (si es Gmail y está configurado) + Gravatar + XposedOrNot (brechas
     filtradas de datos, con su procedencia). Teléfono: país/operadora/tipo de línea
-    (offline) + apps donde está registrado. Nombre real: genera variantes de alias
+    (offline) + apps donde está registrado + búsqueda dirigida (dorking) del número
+    exacto en la web. Nombre real: genera variantes de alias
     (nombre.apellido, inicial+apellido...) y solo las da por buenas si se confirman
     con ≥2 fuentes independientes (nunca por una suposición sola), más búsqueda
     dirigida (dorking) en la web. Úsala para una consulta rápida — para seguir la
