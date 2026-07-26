@@ -81,6 +81,7 @@ from socid_extractor import extract, mutate_url, parse as socid_parse
 from cristopher.browser import get_browser
 from cristopher.config import (
     HUELLA_AVATAR_TIMEOUT,
+    HUELLA_BFS_WORKERS_POR_NIVEL,
     HUELLA_BIO_SIMILITUD_UMBRAL,
     HUELLA_DIR,
     HUELLA_DISYUNTOR_COOLDOWN_SEGUNDOS,
@@ -458,7 +459,15 @@ class DisyuntorFuente:
 
     `huella`: inyectable para tests (evita que pruebas unitarias lean/escriban la
     `huella.db` real de producción); por defecto usa el singleton (`get_huella()`),
-    igual que el resto del módulo."""
+    igual que el resto del módulo.
+
+    Ya se compartía entre hilos DENTRO de un mismo pivote desde la Tanda F
+    (Maigret+Socialscan+Sherlock en paralelo, todos registrando en el mismo
+    disyuntor); desde la Tanda N también se comparte ENTRE pivotes del mismo lote
+    del BFS (dos alias nuevos del mismo nivel pueden correr `buscar_username` a la
+    vez, cada uno llamando a `registrar()` para las mismas fuentes) — `_lock`
+    protege el read-modify-write de `_fallos_seguidos`, que si no podría perder
+    un incremento entre dos hilos concurrentes."""
 
     UMBRAL_FALLOS_SEGUIDOS = 2
 
@@ -466,6 +475,7 @@ class DisyuntorFuente:
         self._huella = huella if huella is not None else get_huella()
         self._fallos_seguidos: dict[str, int] = {}
         self._desactivadas: set[str] = set(self._huella.fuentes_en_cooldown())
+        self._lock = threading.Lock()
 
     def activa(self, fuente: str) -> bool:
         return fuente not in self._desactivadas
@@ -478,15 +488,16 @@ class DisyuntorFuente:
         self._huella.marcar_cooldown(fuente, hasta)
 
     def registrar(self, fuente: str, ok: bool, detalle_error: str = "") -> None:
-        if ok:
-            self._fallos_seguidos[fuente] = 0
-            return
-        if _PATRON_BLOQUEO.search(detalle_error or ""):
-            self._desactivar(fuente)  # señal fuerte: no esperamos a un segundo fallo
-            return
-        self._fallos_seguidos[fuente] = self._fallos_seguidos.get(fuente, 0) + 1
-        if self._fallos_seguidos[fuente] >= self.UMBRAL_FALLOS_SEGUIDOS:
-            self._desactivar(fuente)
+        with self._lock:
+            if ok:
+                self._fallos_seguidos[fuente] = 0
+                return
+            if _PATRON_BLOQUEO.search(detalle_error or ""):
+                self._desactivar(fuente)  # señal fuerte: no esperamos a un segundo fallo
+                return
+            self._fallos_seguidos[fuente] = self._fallos_seguidos.get(fuente, 0) + 1
+            if self._fallos_seguidos[fuente] >= self.UMBRAL_FALLOS_SEGUIDOS:
+                self._desactivar(fuente)
 
     def degradadas(self) -> list[str]:
         return sorted(self._desactivadas)
@@ -1821,8 +1832,19 @@ def _procesar_bfs(
     (Maigret, Socialscan, Sherlock, user-scanner, GHunt, ignorant) tras fallos
     repetidos o un error con pinta de rate-limit/bloqueo, para no seguir
     insistiendo con el resto de pivotes. Y una parada por rendimientos
-    decrecientes corta el BFS si varios pivotes seguidos no aportan NADA nuevo,
-    aunque queden nodos en cola y presupuesto de nodos/tiempo sin agotar.
+    decrecientes corta el BFS si varios LOTES seguidos no aportan NADA nuevo
+    (Tanda N: por lote, no por pivote individual — ver más abajo), aunque
+    queden nodos en cola y presupuesto de nodos/tiempo sin agotar.
+
+    Tanda N — paralelización por nivel: pivotes de tipos DISTINTOS (alias/email/
+    teléfono/nombre) del mismo nivel golpean conjuntos casi disjuntos de sitios
+    externos, así que se procesan en lotes de hasta `HUELLA_BFS_WORKERS_POR_NIVEL`
+    a la vez en vez de uno a uno — corta el tiempo de reloj sin aumentar el
+    riesgo de bloqueo por sitio. Solo la llamada a `_BUSCADORES[tipo](...)` corre
+    en los hilos del pool; `_encolar`/`_extraer_pivotes`/el resto de mutaciones de
+    `cola`/`en_cola`/`inv` se procesan después, de vuelta en el hilo principal,
+    así que no hace falta lock ahí (`DisyuntorFuente.registrar` sí lo tiene,
+    porque ESE sí se llama desde los hilos del pool).
     """
     inv.motivo_corte = ""  # de esta pasada, no de una anterior (relevante al reabrir un expediente, Tanda L)
     sin_novedad_seguidos = 0
@@ -1837,60 +1859,85 @@ def _procesar_bfs(
         cola.append((valor_nuevo, tipo_nuevo, nivel_nuevo))
         return True
 
-    while cola:
-        if len(visitados) >= HUELLA_MAX_NODOS_TOTAL:
-            inv.motivo_corte = "tope_nodos"
-            break
-        if time.monotonic() - inicio >= HUELLA_TIEMPO_MAX_SEGUNDOS:
-            inv.motivo_corte = "presupuesto_tiempo"
-            break
-
-        pivote_actual, tipo_actual, nivel = cola.pop(0)
-        clave = _clave_pivote(tipo_actual, pivote_actual)
-        en_cola.discard(clave)
-        if clave in visitados or tipo_actual not in _BUSCADORES:
-            continue
-        visitados.add(clave)
-
-        dossier = _BUSCADORES[tipo_actual](pivote_actual, disyuntor=disyuntor)
+    def _procesar_dossier(dossier: Dossier, nivel: int, clave: tuple[str, str]) -> int:
+        """Mina pivotes nuevos de UN dossier ya resuelto — misma lógica de
+        siempre, factorizada para poder llamarla por cada dossier de un lote."""
         inv.dossiers.append(dossier)
         inv.profundidad_alcanzada = max(inv.profundidad_alcanzada, nivel)
+        nuevos = 0
+        if nivel >= profundidad:
+            return nuevos
 
-        nuevos_esta_iteracion = 0
+        # Pivotes YA estructurados por el propio colector (p. ej. GHunt: email/
+        # teléfono de su JSON, Tanda F) — coste cero, sin fetch de red de por
+        # medio, así que no cuentan contra HUELLA_MAX_PIVOTES_POR_NIVEL (ese tope
+        # existe para acotar fetches http, no datos que ya se tenían en mano).
+        for nodo in dossier.nodos:
+            for tipo_nuevo, valor_nuevo in nodo.pivotes:
+                if _encolar(tipo_nuevo, valor_nuevo, nivel + 1, clave):
+                    nuevos += 1
 
-        if nivel < profundidad:
-            # Pivotes YA estructurados por el propio colector (p. ej. GHunt: email/
-            # teléfono de su JSON, Tanda F) — coste cero, sin fetch de red de por
-            # medio, así que no cuentan contra HUELLA_MAX_PIVOTES_POR_NIVEL (ese tope
-            # existe para acotar fetches http, no datos que ya se tenían en mano).
-            for nodo in dossier.nodos:
-                for tipo_nuevo, valor_nuevo in nodo.pivotes:
-                    if _encolar(tipo_nuevo, valor_nuevo, nivel + 1, clave):
-                        nuevos_esta_iteracion += 1
+        # Prioriza primero los sitios que `socid_extractor` sabe extraer de
+        # verdad (tiene una mutación de URL registrada): con decenas de
+        # perfiles "tentativo" empatados a la misma puntuación (un solo
+        # Maigret), ordenar solo por puntuación gastaba el tope de
+        # exploración en sitios sin scheme conocido (bit.ly, blogspot...) en
+        # vez de en los que sí revelan datos (GitHub, GitLab...) — verificado
+        # con datos reales (alias 'gaearon').
+        candidatos_nodo = sorted(
+            (n for n in dossier.nodos if n.tipo == "url_perfil" and n.valor.startswith("http")),
+            key=lambda n: (bool(mutate_url(n.valor)), n.puntuacion),
+            reverse=True,
+        )
+        for nodo in candidatos_nodo[:HUELLA_MAX_PIVOTES_POR_NIVEL]:
+            pivotes_nodo, texto_correlacion = _extraer_pivotes(nodo.valor)
+            nodo.campos_correlacion = texto_correlacion  # Tanda K: para _correlacionar_texto()
+            for tipo_nuevo, valor_nuevo in pivotes_nodo:
+                if _encolar(tipo_nuevo, valor_nuevo, nivel + 1, clave):
+                    nuevos += 1
+        return nuevos
 
-            # Prioriza primero los sitios que `socid_extractor` sabe extraer de
-            # verdad (tiene una mutación de URL registrada): con decenas de
-            # perfiles "tentativo" empatados a la misma puntuación (un solo
-            # Maigret), ordenar solo por puntuación gastaba el tope de
-            # exploración en sitios sin scheme conocido (bit.ly, blogspot...) en
-            # vez de en los que sí revelan datos (GitHub, GitLab...) — verificado
-            # con datos reales (alias 'gaearon').
-            candidatos_nodo = sorted(
-                (n for n in dossier.nodos if n.tipo == "url_perfil" and n.valor.startswith("http")),
-                key=lambda n: (bool(mutate_url(n.valor)), n.puntuacion),
-                reverse=True,
-            )
-            for nodo in candidatos_nodo[:HUELLA_MAX_PIVOTES_POR_NIVEL]:
-                pivotes_nodo, texto_correlacion = _extraer_pivotes(nodo.valor)
-                nodo.campos_correlacion = texto_correlacion  # Tanda K: para _correlacionar_texto()
-                for tipo_nuevo, valor_nuevo in pivotes_nodo:
-                    if _encolar(tipo_nuevo, valor_nuevo, nivel + 1, clave):
-                        nuevos_esta_iteracion += 1
+    with ThreadPoolExecutor(max_workers=HUELLA_BFS_WORKERS_POR_NIVEL) as pool:
+        while cola:
+            if len(visitados) >= HUELLA_MAX_NODOS_TOTAL:
+                inv.motivo_corte = "tope_nodos"
+                break
+            if time.monotonic() - inicio >= HUELLA_TIEMPO_MAX_SEGUNDOS:
+                inv.motivo_corte = "presupuesto_tiempo"
+                break
 
-        sin_novedad_seguidos = 0 if nuevos_esta_iteracion else sin_novedad_seguidos + 1
-        if sin_novedad_seguidos >= HUELLA_VENTANA_SIN_NOVEDAD and cola:
-            inv.motivo_corte = "rendimientos_decrecientes"
-            break
+            # Forma un lote con los pivotes del MISMO nivel al frente de la cola
+            # (hasta HUELLA_BFS_WORKERS_POR_NIVEL), descartando duplicados/tipos
+            # no soportados igual que antes se hacía uno a uno.
+            nivel_lote = cola[0][2]
+            lote: list[tuple[str, str, int, tuple[str, str]]] = []
+            while (
+                cola
+                and len(lote) < HUELLA_BFS_WORKERS_POR_NIVEL
+                and cola[0][2] == nivel_lote
+                and len(visitados) < HUELLA_MAX_NODOS_TOTAL
+            ):
+                pivote_actual, tipo_actual, nivel = cola.pop(0)
+                clave = _clave_pivote(tipo_actual, pivote_actual)
+                en_cola.discard(clave)
+                if clave in visitados or tipo_actual not in _BUSCADORES:
+                    continue
+                visitados.add(clave)
+                lote.append((pivote_actual, tipo_actual, nivel, clave))
+
+            if not lote:
+                continue  # todo el lote formado eran duplicados/tipos no soportados
+
+            futuros = {
+                pool.submit(_BUSCADORES[tipo_actual], pivote_actual, disyuntor=disyuntor): (nivel, clave)
+                for pivote_actual, tipo_actual, nivel, clave in lote
+            }
+            nuevos_del_lote = sum(_procesar_dossier(futuro.result(), nivel, clave) for futuro, (nivel, clave) in futuros.items())
+
+            sin_novedad_seguidos = 0 if nuevos_del_lote else sin_novedad_seguidos + 1
+            if sin_novedad_seguidos >= HUELLA_VENTANA_SIN_NOVEDAD and cola:
+                inv.motivo_corte = "rendimientos_decrecientes"
+                break
 
     inv.fuentes_degradadas = disyuntor.degradadas()
     _resolver_plataforma_sin_url(inv)  # Tanda M: antes de correlacionar, por si el rescate aporta un nodo nuevo

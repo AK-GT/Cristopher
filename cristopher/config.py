@@ -202,6 +202,15 @@ HUELLA_DORK_RESULTADOS_MAX = 5
 # `investigar()` reintente de inmediato una fuente que ya se sabe bloqueada.
 HUELLA_DISYUNTOR_COOLDOWN_SEGUNDOS = int(os.getenv("CRISTOPHER_HUELLA_COOLDOWN", "600"))
 
+# --- Motor de huella digital: paralelización del BFS por nivel (huella.py, Tanda N) --
+# Pivotes de tipos DISTINTOS (alias/email/teléfono/nombre) del MISMO nivel del BFS
+# golpean conjuntos casi disjuntos de sitios externos -- procesarlos en paralelo no
+# aumenta el riesgo de bloqueo por sitio, solo corta el tiempo de reloj. Tope
+# prudente (no "cuantos más mejor"): cada pivote YA lanza sus propias fuentes en
+# paralelo por dentro (hasta 3 workers en buscar_username), así que un tope bajo
+# aquí evita multiplicar la concurrencia total sin necesidad.
+HUELLA_BFS_WORKERS_POR_NIVEL = int(os.getenv("CRISTOPHER_HUELLA_BFS_WORKERS", "3"))
+
 # --- Motor de huella digital: correlación por texto/bio (huella.py, Tanda K) --
 # Umbral de similitud (SequenceMatcher.ratio(), 0-1) para dar por buena una bio
 # casi idéntica entre cuentas de dossiers distintos. Alto a propósito: bios
