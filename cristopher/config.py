@@ -219,6 +219,18 @@ HUELLA_BFS_WORKERS_POR_NIVEL = int(os.getenv("CRISTOPHER_HUELLA_BFS_WORKERS", "3
 # que no depende de este umbral).
 HUELLA_BIO_SIMILITUD_UMBRAL = float(os.getenv("CRISTOPHER_HUELLA_BIO_UMBRAL", "0.85"))
 
+# --- Motor de huella digital: pivote dominio (huella.py, Tanda O) ------------
+# crt.sh (certificate transparency) es lento/intermitente sin SLA propio --
+# verificado real (timeout de 15s agotado contra un dominio grande). 20s de
+# margen antes de darlo por caído para esa investigación (cubierto por el
+# disyuntor de fuente, igual que Maigret).
+HUELLA_CRTSH_TIMEOUT = int(os.getenv("CRISTOPHER_HUELLA_CRTSH_TIMEOUT", "20"))
+HUELLA_WAYBACK_TIMEOUT = int(os.getenv("CRISTOPHER_HUELLA_WAYBACK_TIMEOUT", "15"))
+# Tope de snapshots históricos a traer por dominio -- un dominio con mucho
+# historial puede tener miles, y aquí solo interesa una muestra reciente, no
+# el CDX completo.
+HUELLA_WAYBACK_LIMITE = int(os.getenv("CRISTOPHER_HUELLA_WAYBACK_LIMITE", "20"))
+
 # --- Integración de WhatsApp (Baileys, Node.js) -------------------------------
 # Baileys es una librería NO OFICIAL que reimplementa el protocolo de WhatsApp Web;
 # usarla conlleva riesgo de que Meta limite o banee el número. Decisión ya tomada por

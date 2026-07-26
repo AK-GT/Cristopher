@@ -83,6 +83,7 @@ from cristopher.config import (
     HUELLA_AVATAR_TIMEOUT,
     HUELLA_BFS_WORKERS_POR_NIVEL,
     HUELLA_BIO_SIMILITUD_UMBRAL,
+    HUELLA_CRTSH_TIMEOUT,
     HUELLA_DIR,
     HUELLA_DISYUNTOR_COOLDOWN_SEGUNDOS,
     HUELLA_DORK_RESULTADOS_MAX,
@@ -95,6 +96,8 @@ from cristopher.config import (
     HUELLA_TIEMPO_MAX_SEGUNDOS,
     HUELLA_TIMEOUT,
     HUELLA_VENTANA_SIN_NOVEDAD,
+    HUELLA_WAYBACK_LIMITE,
+    HUELLA_WAYBACK_TIMEOUT,
 )
 from cristopher.episodica import get_episodica
 from cristopher.vision import preguntar_sobre_imagen
@@ -1472,6 +1475,130 @@ def buscar_termino(texto: str) -> Dossier:
     return dossier
 
 
+# --- Pivote DOMINIO: certificate transparency + Wayback Machine (Tanda O) ----
+
+
+def _consultar_crtsh(dominio: str) -> tuple[bool, str, list[str]]:
+    """Certificate Transparency (crt.sh, sin key) — subdominios que aparecen en
+    certificados emitidos para `dominio`. Devuelve (ok, mensaje_error_o_vacio,
+    subdominios). crt.sh es lento/intermitente sin SLA propio (verificado real:
+    timeouts frecuentes contra dominios grandes) — nunca lanza, un fallo se
+    reporta como cualquier otra fuente externa.
+
+    Nota (verificado real, no lo asumido originalmente): el campo `name_value`
+    no siempre trae solo nombres DNS limpios — certificados de prueba/CA
+    intermedias pueden dejar descripciones con espacios, y algunas entradas
+    traen literalmente un email en vez de un hostname. Se descartan valores con
+    espacios o "@" (no son hostnames válidos); no se intenta extraer email de
+    aquí a propósito, solo subdominios."""
+    try:
+        r = requests.get(f"https://crt.sh/?q={dominio}&output=json", timeout=HUELLA_CRTSH_TIMEOUT)
+    except requests.RequestException as exc:
+        return False, f"ERROR: crt.sh no respondió: {exc}", []
+    if r.status_code != 200:
+        return False, f"ERROR: crt.sh devolvió {r.status_code}", []
+    try:
+        entradas = r.json()
+    except ValueError as exc:
+        return False, f"ERROR: no pude parsear la salida de crt.sh: {exc}", []
+
+    subdominios: set[str] = set()
+    for entrada in entradas:
+        for nombre in (entrada.get("name_value") or "").split("\n"):
+            nombre = nombre.strip().lstrip("*.").lower()
+            if nombre and " " not in nombre and "@" not in nombre:
+                subdominios.add(nombre)
+    return True, "", sorted(subdominios)
+
+
+def _consultar_wayback_cdx(dominio: str) -> tuple[bool, str, list[dict]]:
+    """Wayback Machine CDX API (web.archive.org, sin key) — snapshots
+    históricos conocidos de `dominio`. Devuelve (ok, mensaje_error_o_vacio,
+    snapshots: [{url, timestamp}]). Útil tanto para investigar un dominio
+    personal como para `huella_remediar` ("esto que borraste sigue en la
+    Wayback Machine"). Nunca lanza fuera de este wrapper."""
+    try:
+        r = requests.get(
+            "http://web.archive.org/cdx/search/cdx",
+            params={"url": dominio, "output": "json", "limit": HUELLA_WAYBACK_LIMITE, "collapse": "urlkey"},
+            timeout=HUELLA_WAYBACK_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        return False, f"ERROR: Wayback Machine no respondió: {exc}", []
+    if r.status_code != 200:
+        return False, f"ERROR: Wayback Machine devolvió {r.status_code}", []
+    try:
+        filas = r.json()
+    except ValueError as exc:
+        return False, f"ERROR: no pude parsear la salida de Wayback: {exc}", []
+
+    if not filas:
+        return True, "", []
+    # Primera fila es la cabecera (urlkey, timestamp, original, mimetype, ...), no un dato.
+    snapshots = [{"url": fila[2], "timestamp": fila[1]} for fila in filas[1:]]
+    return True, "", snapshots
+
+
+def buscar_dominio(dominio: str, disyuntor: Optional["DisyuntorFuente"] = None) -> Dossier:
+    """Pivote DOMINIO (Tanda O): certificate transparency (crt.sh) para
+    subdominios + Wayback Machine (CDX) para snapshots históricos — ambos sin
+    key. `disyuntor`: igual que el resto de pivotes, solo lo pasa `investigar()`.
+
+    Límite de alcance a propósito (no un descuido): los subdominios hallados
+    quedan como nodos informativos (`tipo="dominio"`, tentativo) pero NO se
+    re-encolan automáticamente como pivotes nuevos del BFS — un certificado
+    wildcard puede traer cientos de subdominios, y perseguirlos todos
+    explotaría el presupuesto de una investigación sin que el usuario lo haya
+    pedido. Si uno en concreto interesa, se investiga aparte con
+    `huella_buscar(subdominio, tipo="dominio")` o `huella_ampliar`.
+    """
+    dominio = dominio.strip().lower().lstrip("*.")
+    dossier = Dossier(pivote=dominio, tipo="dominio")
+    nodo_pivote = Nodo(id=f"dominio:{dominio}", tipo="dominio", valor=dominio, confianza="confirmado")
+    dossier.nodos.append(nodo_pivote)
+
+    if disyuntor is None or disyuntor.activa("crtsh"):
+        ok_ct, err_ct, subdominios = _consultar_crtsh(dominio)
+        if disyuntor is not None:
+            disyuntor.registrar("crtsh", ok_ct, err_ct)
+        if not ok_ct:
+            dossier.errores.append(f"crt.sh: {err_ct}")
+        for sub in subdominios:
+            if sub == dominio:
+                continue  # el propio dominio, no un subdominio nuevo
+            nodo_sub = Nodo(id=f"dominio:{sub}", tipo="dominio", valor=sub, confianza="tentativo")
+            dossier.nodos.append(nodo_sub)
+            dossier.aristas.append(
+                Arista(origen=nodo_pivote.id, destino=nodo_sub.id, tipo_enlace="subdominio", fuente="crtsh", peso=0.3)
+            )
+    elif disyuntor is not None:
+        dossier.errores.append("crt.sh: fuente degradada en esta investigación (fallos repetidos), omitida.")
+
+    if disyuntor is None or disyuntor.activa("wayback"):
+        ok_wb, err_wb, snapshots = _consultar_wayback_cdx(dominio)
+        if disyuntor is not None:
+            disyuntor.registrar("wayback", ok_wb, err_wb)
+        if not ok_wb:
+            dossier.errores.append(f"Wayback Machine: {err_wb}")
+        for snap in snapshots:
+            nodo_snap = Nodo(
+                id=f"url_perfil:{snap['url']}#{snap['timestamp']}",
+                tipo="url_perfil",
+                valor=snap["url"],
+                confianza="tentativo",
+                detalle=f"snapshot histórico: {snap['timestamp']}",
+            )
+            dossier.nodos.append(nodo_snap)
+            dossier.aristas.append(
+                Arista(origen=nodo_pivote.id, destino=nodo_snap.id, tipo_enlace="snapshot_historico", fuente="wayback", peso=0.3)
+            )
+    elif disyuntor is not None:
+        dossier.errores.append("Wayback Machine: fuente degradada en esta investigación (fallos repetidos), omitida.")
+
+    get_huella().guardar_dossier(dossier)
+    return dossier
+
+
 # --- Bucle de pivote (BFS) + motor de extracción (socid-extractor) -----------
 
 # Campos que socid_extractor puede devolver y que son pivotes nuevos, no metadata
@@ -1787,6 +1914,7 @@ _BUSCADORES = {
     "email": buscar_email,
     "telefono": buscar_telefono,
     "nombre": buscar_nombre,
+    "dominio": buscar_dominio,
 }
 
 

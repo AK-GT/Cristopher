@@ -1910,7 +1910,9 @@ TOOLS: list[dict[str, Any]] = [
             "búsqueda dirigida (dorking) del número exacto en la web. Para "
             "nombre real (el pivote más débil): genera variantes de alias y solo las da "
             "por buenas si se confirman con ≥2 fuentes independientes, más búsqueda "
-            "dirigida en la web. Cada cuenta hallada se puntúa por independencia de "
+            "dirigida en la web. Para dominio: subdominios vía certificate transparency "
+            "(crt.sh) + snapshots históricos vía Wayback Machine (CDX), ambos sin key — "
+            "los subdominios no se persiguen automáticamente. Cada cuenta hallada se puntúa por independencia de "
             "fuentes y sale CONFIRMADA (>0.7), PROBABLE (0.4-0.7) o TENTATIVA (<0.4). "
             "Úsala para una consulta rápida — si el usuario pide seguir la pista a lo "
             "que encuentre (investigación a fondo), usa `huella_investigar`; para buscar "
@@ -1926,15 +1928,16 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "pivote": {
                     "type": "string",
-                    "description": "El identificador a investigar (un username/alias, un email, un teléfono o un nombre real).",
+                    "description": "El identificador a investigar (un username/alias, un email, un teléfono, un nombre real o un dominio).",
                 },
                 "tipo": {
                     "type": "string",
                     "description": (
-                        "Tipo de pivote: 'alias' (username), 'email', 'telefono', 'nombre' o "
+                        "Tipo de pivote: 'alias' (username), 'email', 'telefono', 'nombre', "
+                        "'dominio' (subdominios vía certificate transparency + Wayback Machine) o "
                         "'termino' (frase libre, solo dorking, sin permutar)."
                     ),
-                    "enum": ["alias", "email", "telefono", "nombre", "termino"],
+                    "enum": ["alias", "email", "telefono", "nombre", "termino", "dominio"],
                 },
                 "ciudad": {
                     "type": "string",
@@ -1988,8 +1991,8 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "tipo": {
                     "type": "string",
-                    "description": "'alias', 'email', 'telefono', 'nombre' o 'termino' (frase libre).",
-                    "enum": ["alias", "email", "telefono", "nombre", "termino"],
+                    "description": "'alias', 'email', 'telefono', 'nombre', 'dominio' o 'termino' (frase libre).",
+                    "enum": ["alias", "email", "telefono", "nombre", "termino", "dominio"],
                 },
             },
             "required": ["pivote"],
@@ -2032,8 +2035,8 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "tipo": {
                     "type": "string",
-                    "description": "'alias', 'email', 'telefono', 'nombre' o 'termino'.",
-                    "enum": ["alias", "email", "telefono", "nombre", "termino"],
+                    "description": "'alias', 'email', 'telefono', 'nombre', 'dominio' o 'termino'.",
+                    "enum": ["alias", "email", "telefono", "nombre", "termino", "dominio"],
                 },
             },
             "required": ["pivote"],
@@ -2106,12 +2109,12 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "pivote": {
                     "type": "string",
-                    "description": "El identificador semilla a investigar (un username/alias, un email o un teléfono).",
+                    "description": "El identificador semilla a investigar (un username/alias, un email, un teléfono o un dominio).",
                 },
                 "tipo": {
                     "type": "string",
-                    "description": "Tipo de pivote: 'alias' (username), 'email' o 'telefono'.",
-                    "enum": ["alias", "email", "telefono"],
+                    "description": "Tipo de pivote: 'alias' (username), 'email', 'telefono' o 'dominio'.",
+                    "enum": ["alias", "email", "telefono", "dominio"],
                 },
                 "profundidad": {
                     "type": "integer",
@@ -2157,12 +2160,12 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "nuevo_pivote": {
                     "type": "string",
-                    "description": "El dato nuevo a añadir (alias, email, teléfono o nombre real).",
+                    "description": "El dato nuevo a añadir (alias, email, teléfono, nombre real o dominio).",
                 },
                 "nuevo_tipo": {
                     "type": "string",
-                    "description": "Tipo del pivote nuevo: 'alias' (username), 'email', 'telefono' o 'nombre'.",
-                    "enum": ["alias", "email", "telefono", "nombre"],
+                    "description": "Tipo del pivote nuevo: 'alias' (username), 'email', 'telefono', 'nombre' o 'dominio'.",
+                    "enum": ["alias", "email", "telefono", "nombre", "dominio"],
                 },
             },
             "required": ["investigacion_id", "nuevo_pivote", "nuevo_tipo"],

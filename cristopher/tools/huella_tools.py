@@ -25,6 +25,7 @@ from cristopher.huella import (
     ampliar_investigacion,
     auditar_pivote,
     buscar_cara,
+    buscar_dominio,
     buscar_email,
     buscar_nombre,
     buscar_telefono,
@@ -35,7 +36,7 @@ from cristopher.huella import (
 )
 from cristopher.tools.google_tools import confirmar_accion
 
-_TIPOS_SOPORTADOS = ("alias", "email", "telefono", "nombre", "termino")
+_TIPOS_SOPORTADOS = ("alias", "email", "telefono", "nombre", "termino", "dominio")
 
 
 def _formatear_dossier(d: Dossier, encabezado: bool = True) -> str:
@@ -56,6 +57,8 @@ def _formatear_dossier(d: Dossier, encabezado: bool = True) -> str:
     ids_permutacion = {a.destino for a in d.aristas if a.tipo_enlace == "permutacion_validada"}
     permutaciones = [n for n in d.nodos if n.id in ids_permutacion]
     metadatos_exif = [n for n in d.nodos if n.tipo == "metadato_exif"]
+    ids_subdominio = {a.destino for a in d.aristas if a.tipo_enlace == "subdominio"}
+    subdominios = [n for n in d.nodos if n.id in ids_subdominio]
 
     fuentes_por_nodo = {
         n.id: sorted(a.fuente for a in d.aristas if a.destino == n.id) for n in d.nodos
@@ -81,8 +84,13 @@ def _formatear_dossier(d: Dossier, encabezado: bool = True) -> str:
             for n in tentativos:
                 fuentes = ", ".join(fuentes_por_nodo.get(n.id, []))
                 partes.append(f"  ? {n.valor} ({n.puntuacion:.2f}) [{fuentes}]")
-    elif not brechas and not nombres_ghunt and not permutaciones and not metadatos_exif:
+    elif not brechas and not nombres_ghunt and not permutaciones and not metadatos_exif and not subdominios:
         partes.append("\nNo se encontraron cuentas.")
+
+    if subdominios:
+        partes.append(f"\nSUBDOMINIOS (certificate transparency, {len(subdominios)}, tentativo — no perseguidos automáticamente):")
+        for n in subdominios:
+            partes.append(f"  🌐 {n.valor}")
 
     if metadatos_exif:
         partes.append(f"\nMETADATOS EXIF DE LA FOTO ({len(metadatos_exif)}, leídos del archivo, no de internet):")
@@ -196,13 +204,19 @@ def huella_buscar(pivote: str, tipo: str = "alias", ciudad: str = "") -> str:
     pista a lo que encuentre, usa `huella_investigar`. Para buscar por FOTO/cara usa
     `huella_buscar_cara` (esa sí pide confirmación, es la más sensible).
 
+    Dominio (Tanda O): certificate transparency (crt.sh) para subdominios que
+    aparecen en certificados emitidos, y Wayback Machine (CDX) para snapshots
+    históricos conocidos — ambos sin key. Los subdominios hallados quedan como
+    dato informativo, no se persiguen automáticamente (un wildcard puede traer
+    cientos).
+
     Al resumir el resultado en conversación, menciona SIEMPRE el número de hallazgos
     tentativos si los hay (Tanda G) — no se ocultan, solo llevan menor confianza; no
     los omitas al relayar la respuesta al usuario.
 
     Args:
-        pivote: el identificador a investigar (alias, email, teléfono o nombre real).
-        tipo: 'alias' (username), 'email', 'telefono' o 'nombre'.
+        pivote: el identificador a investigar (alias, email, teléfono, nombre real o dominio).
+        tipo: 'alias' (username), 'email', 'telefono', 'nombre' o 'dominio'.
         ciudad: opcional, solo para tipo='nombre' (afina el dorking).
     """
     pivote = (pivote or "").strip()
@@ -222,6 +236,8 @@ def huella_buscar(pivote: str, tipo: str = "alias", ciudad: str = "") -> str:
         dossier = buscar_telefono(pivote)
     elif tipo == "nombre":
         dossier = buscar_nombre(pivote, ciudad)
+    elif tipo == "dominio":
+        dossier = buscar_dominio(pivote)
     else:
         dossier = buscar_termino(pivote)
     return _formatear_dossier(dossier)
@@ -238,8 +254,8 @@ def huella_investigar(pivote: str, tipo: str = "alias", profundidad: int = 2) ->
     de un solo dato (para eso está `huella_buscar`).
 
     Args:
-        pivote: el identificador semilla (alias, email o teléfono).
-        tipo: 'alias' (username), 'email' o 'telefono'.
+        pivote: el identificador semilla (alias, email, teléfono o dominio).
+        tipo: 'alias' (username), 'email', 'telefono' o 'dominio'.
         profundidad: cuántos saltos de pivote seguir (1-2). Por defecto 2.
     """
     pivote = (pivote or "").strip()
@@ -293,10 +309,10 @@ def huella_ampliar(investigacion_id: int, nuevo_pivote: str, nuevo_tipo: str = "
     if not nuevo_pivote:
         return "ERROR: falta el pivote nuevo a añadir."
     nuevo_tipo = (nuevo_tipo or "alias").strip().lower()
-    if nuevo_tipo not in ("alias", "email", "telefono", "nombre"):
+    if nuevo_tipo not in ("alias", "email", "telefono", "nombre", "dominio"):
         return (
             f"ERROR: tipo de pivote {nuevo_tipo!r} no soportado para ampliar. Usa uno de: "
-            "alias, email, telefono, nombre."
+            "alias, email, telefono, nombre, dominio."
         )
     try:
         investigacion_id = int(investigacion_id)
