@@ -52,6 +52,7 @@ def _formatear_dossier(d: Dossier, encabezado: bool = True) -> str:
     brechas = [n for n in d.nodos if n.confianza == "expuesto"]
     ids_permutacion = {a.destino for a in d.aristas if a.tipo_enlace == "permutacion_validada"}
     permutaciones = [n for n in d.nodos if n.id in ids_permutacion]
+    metadatos_exif = [n for n in d.nodos if n.tipo == "metadato_exif"]
 
     fuentes_por_nodo = {
         n.id: sorted(a.fuente for a in d.aristas if a.destino == n.id) for n in d.nodos
@@ -77,8 +78,13 @@ def _formatear_dossier(d: Dossier, encabezado: bool = True) -> str:
             for n in tentativos:
                 fuentes = ", ".join(fuentes_por_nodo.get(n.id, []))
                 partes.append(f"  ? {n.valor} ({n.puntuacion:.2f}) [{fuentes}]")
-    elif not brechas and not nombres_ghunt and not permutaciones:
+    elif not brechas and not nombres_ghunt and not permutaciones and not metadatos_exif:
         partes.append("\nNo se encontraron cuentas.")
+
+    if metadatos_exif:
+        partes.append(f"\nMETADATOS EXIF DE LA FOTO ({len(metadatos_exif)}, leídos del archivo, no de internet):")
+        for n in metadatos_exif:
+            partes.append(f"  📷 {n.detalle}")
 
     if permutaciones:
         partes.append(
@@ -234,11 +240,13 @@ def huella_investigar(pivote: str, tipo: str = "alias", profundidad: int = 2) ->
 
 def huella_buscar_cara(imagen: str) -> str:
     """Busca dónde más aparece una foto en internet (reconocimiento facial/visual
-    vía Yandex Images sobre datos públicos). Es el pivote MÁS POTENTE Y MÁS SENSIBLE
-    del motor de huella digital — SIEMPRE pide confirmación explícita antes de
-    ejecutar nada (a diferencia del resto de herramientas de huella digital, que no
-    la piden). Úsala solo cuando el usuario pida explícitamente buscar/rastrear una
-    foto o cara concreta, nunca por iniciativa propia dentro de otra investigación.
+    vía Yandex Images sobre datos públicos), y si la foto es un archivo LOCAL (no
+    una URL), lee además sus metadatos EXIF (cámara, fecha, y ubicación GPS si no
+    se limpió al guardarla). Es el pivote MÁS POTENTE Y MÁS SENSIBLE del motor de
+    huella digital — SIEMPRE pide confirmación explícita antes de ejecutar nada (a
+    diferencia del resto de herramientas de huella digital, que no la piden). Úsala
+    solo cuando el usuario pida explícitamente buscar/rastrear una foto o cara
+    concreta, nunca por iniciativa propia dentro de otra investigación.
 
     Args:
         imagen: URL (http/https) o ruta local del archivo de la foto a buscar.

@@ -1159,6 +1159,59 @@ def buscar_nombre(nombre_completo: str, ciudad: str = "", disyuntor: Optional["D
 
 
 # --- Pivote CARA: búsqueda inversa por imagen (Yandex) — Tanda D -------------
+# Metadatos EXIF de la foto — Tanda I -----------------------------------------
+
+_EXIF_CAMPOS_UTILES = {"Make", "Model", "DateTime", "DateTimeOriginal", "Software"}
+_EXIF_GPS_IFD = 0x8825  # tag "GPSInfo" del IFD principal — Pillow lo expone vía get_ifd()
+
+
+def _gps_a_decimal(valores, ref) -> Optional[float]:
+    """(grados, minutos, segundos) + referencia N/S/E/W -> grados decimales.
+    `None` si `valores`/`ref` no tienen la forma esperada — nunca lanza."""
+    try:
+        grados, minutos, segundos = valores
+        decimal = float(grados) + float(minutos) / 60 + float(segundos) / 3600
+        if ref in ("S", "W"):
+            decimal = -decimal
+        return round(decimal, 6)
+    except Exception:
+        return None
+
+
+def _extraer_exif(ruta_imagen: str) -> Optional[dict]:
+    """Metadatos EXIF de una foto LOCAL (cámara, fecha, y GPS si no se limpió al
+    subirla) — offline, sin red, gratis (Pillow ya lo cubre, no hace falta
+    `exifread`). Solo aplica a rutas locales: una URL es una imagen ajena servida
+    por un tercero (casi siempre limpiada de EXIF por la propia plataforma), y
+    descargarla solo para leer metadatos sería un fetch de red que este dato no
+    justifica. Nunca lanza: sin EXIF, corrupta, o formato no soportado -> `None`,
+    en silencio (mismo contrato que `_consultar_gravatar` y similares)."""
+    if ruta_imagen.strip().lower().startswith(("http://", "https://")):
+        return None
+    try:
+        from PIL import ExifTags, Image
+
+        with Image.open(ruta_imagen) as img:
+            exif = img.getexif()
+            if not exif:
+                return None
+            datos: dict = {}
+            for tag_id, valor in exif.items():
+                nombre = ExifTags.TAGS.get(tag_id, tag_id)
+                if nombre in _EXIF_CAMPOS_UTILES and str(valor).strip():
+                    datos[nombre] = str(valor).strip()
+
+            gps_ifd = exif.get_ifd(_EXIF_GPS_IFD)
+            if gps_ifd:
+                gps = {ExifTags.GPSTAGS.get(k, k): v for k, v in gps_ifd.items()}
+                lat = _gps_a_decimal(gps.get("GPSLatitude"), gps.get("GPSLatitudeRef"))
+                lon = _gps_a_decimal(gps.get("GPSLongitude"), gps.get("GPSLongitudeRef"))
+                if lat is not None and lon is not None:
+                    datos["GPS"] = f"{lat}, {lon} (https://www.google.com/maps?q={lat},{lon})"
+
+            return datos or None
+    except Exception:
+        return None
 
 
 def buscar_cara(imagen: str) -> Dossier:
@@ -1174,6 +1227,22 @@ def buscar_cara(imagen: str) -> Dossier:
     dossier = Dossier(pivote=imagen, tipo="foto")
     nodo_pivote = Nodo(id=f"foto:{imagen}", tipo="foto", valor=imagen, confianza="confirmado")
     dossier.nodos.append(nodo_pivote)
+
+    # Tanda I: offline, antes de tocar red — corre siempre, aunque Yandex falle abajo.
+    exif = _extraer_exif(imagen)
+    if exif:
+        detalle_exif = " · ".join(f"{clave}: {valor}" for clave, valor in exif.items())
+        nodo_exif = Nodo(
+            id=f"exif:{imagen}",
+            tipo="metadato_exif",
+            valor="(ver detalle)",
+            confianza="confirmado",  # hecho leído del propio archivo, no una corroboración externa
+            detalle=detalle_exif,
+        )
+        dossier.nodos.append(nodo_exif)
+        dossier.aristas.append(
+            Arista(origen=nodo_pivote.id, destino=nodo_exif.id, tipo_enlace="metadato", fuente="exif")
+        )
 
     try:
         resultados, captura = get_browser().buscar_por_imagen(imagen)
