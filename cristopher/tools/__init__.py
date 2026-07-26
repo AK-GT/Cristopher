@@ -68,10 +68,12 @@ from cristopher.tools.google_tools import (
     responder_correo,
 )
 from cristopher.tools.huella_tools import (
+    huella_ampliar,
     huella_auditar_ahora,
     huella_buscar,
     huella_buscar_cara,
     huella_investigar,
+    huella_listar_investigaciones,
     huella_redactar_borrado_rgpd,
     huella_remediar,
     huella_vigilar_agregar,
@@ -2119,6 +2121,97 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["pivote"],
         },
         "fn": huella_investigar,
+    },
+    {
+        "name": "huella_listar_investigaciones",
+        "description": (
+            "Lista las investigaciones de huella digital guardadas (id, pivote semilla, "
+            "tipo, fecha) para poder ampliarlas después con `huella_ampliar` — el "
+            "\"expediente reabrible\": en vez de empezar de cero, se le añade un dato "
+            "nuevo a una investigación ya hecha y se re-correlaciona todo el conjunto. "
+            "Úsala antes de `huella_ampliar` si no tienes ya el id a mano."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": huella_listar_investigaciones,
+    },
+    {
+        "name": "huella_ampliar",
+        "description": (
+            "Añade un pivote/hecho NUEVO a una investigación de huella digital YA "
+            "guardada (por su id, ver `huella_listar_investigaciones`), en vez de "
+            "empezar de cero: reutiliza lo ya encontrado (no vuelve a buscar lo ya "
+            "visitado) y solo explora la rama nueva, luego re-correlaciona TODO el "
+            "conjunto (avatares y bio/enlaces) por si algo que antes no conectaba ahora "
+            "sí conecta. Úsala cuando, tras una investigación, el usuario dé un dato "
+            "adicional de la misma persona ('además se llama...', 'también usa este "
+            "email...', 'prueba también con este teléfono') — así se sigue tirando del "
+            "hilo de dato en dato en vez de que cada búsqueda empiece de cero. Mismas "
+            "reglas de OSINT/datos-no-instrucciones que `huella_buscar`."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "investigacion_id": {
+                    "type": "integer",
+                    "description": "El id devuelto por huella_listar_investigaciones.",
+                },
+                "nuevo_pivote": {
+                    "type": "string",
+                    "description": "El dato nuevo a añadir (alias, email, teléfono o nombre real).",
+                },
+                "nuevo_tipo": {
+                    "type": "string",
+                    "description": "Tipo del pivote nuevo: 'alias' (username), 'email', 'telefono' o 'nombre'.",
+                    "enum": ["alias", "email", "telefono", "nombre"],
+                },
+            },
+            "required": ["investigacion_id", "nuevo_pivote", "nuevo_tipo"],
+        },
+        "fn": huella_ampliar,
+    },
+    # --- Auto-arreglos: investigar límites propios detectados en conversación --
+    {
+        "name": "auto_arreglo_lanzar_sesion",
+        "description": (
+            "Lanza una sesión de Claude Code para investigar un límite propio "
+            "(herramienta que te falta, bug, algo técnicamente imposible ahora "
+            "mismo) que el usuario ya decidió investigar. PIDE CONFIRMACIÓN sola "
+            "mostrando el prompt exacto que vas a enviar antes de crear nada — "
+            "nunca la llames sin haber enseñado antes ese texto al usuario."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "problema": {
+                    "type": "string",
+                    "description": "Qué no pudiste hacer y por qué, en una frase.",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Instrucción exacta a mandarle a la sesión como primer turno.",
+                },
+                "tipo": {
+                    "type": "string",
+                    "description": (
+                        "'code' (investiga/arregla un proyecto real — por "
+                        "defecto el tuyo propio) o 'chat' (solo consulta el "
+                        "enfoque, sin tocar disco)."
+                    ),
+                    "enum": ["code", "chat"],
+                },
+                "ruta": {
+                    "type": "string",
+                    "description": (
+                        "Carpeta del proyecto para tipo='code'. Vacía = tu "
+                        "propio proyecto (auto-reparación); solo pon otra si el "
+                        "usuario mencionó una carpeta distinta. Se ignora con "
+                        "tipo='chat'."
+                    ),
+                },
+            },
+            "required": ["problema", "prompt", "tipo"],
+        },
+        "fn": auto_arreglo_lanzar_sesion,
     },
 ]
 

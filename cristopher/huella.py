@@ -161,6 +161,24 @@ class Nodo:
             "avatar_url": self.avatar_url,
         }
 
+    @classmethod
+    def from_dict(cls, datos: dict) -> "Nodo":
+        """Reconstruye desde `to_dict()` (Tanda L, expediente reabrible). Los
+        campos efímeros (`pivotes`, `campos_correlacion`) quedan vacíos a
+        propósito: ya hicieron su trabajo en la pasada de `investigar()` que los
+        generó — nunca se persistieron (fuera de `to_dict`) y no hace falta
+        recuperarlos para reabrir el expediente, solo para seguir explorando la
+        rama NUEVA que añada `ampliar_investigacion`."""
+        return cls(
+            id=datos["id"],
+            tipo=datos["tipo"],
+            valor=datos["valor"],
+            confianza=datos.get("confianza", "tentativo"),
+            puntuacion=datos.get("puntuacion", 0.0),
+            detalle=datos.get("detalle", ""),
+            avatar_url=datos.get("avatar_url", ""),
+        )
+
 
 @dataclass
 class Arista:
@@ -178,6 +196,16 @@ class Arista:
             "fuente": self.fuente,
             "peso": self.peso,
         }
+
+    @classmethod
+    def from_dict(cls, datos: dict) -> "Arista":
+        return cls(
+            origen=datos["origen"],
+            destino=datos["destino"],
+            tipo_enlace=datos["tipo_enlace"],
+            fuente=datos["fuente"],
+            peso=datos.get("peso", 1.0),
+        )
 
 
 @dataclass
@@ -198,6 +226,17 @@ class Dossier:
             "errores": self.errores,
             "creado": self.creado,
         }
+
+    @classmethod
+    def from_dict(cls, datos: dict) -> "Dossier":
+        return cls(
+            pivote=datos["pivote"],
+            tipo=datos["tipo"],
+            nodos=[Nodo.from_dict(n) for n in datos.get("nodos", [])],
+            aristas=[Arista.from_dict(a) for a in datos.get("aristas", [])],
+            errores=list(datos.get("errores", [])),
+            creado=datos.get("creado", _now()),
+        )
 
 
 # --- Persistencia (patrón de tareas.py/notas.py, base propia y aislada) ------
@@ -328,6 +367,27 @@ class Huella:
             filas = self._conn.execute("SELECT fuente, hasta FROM huella_disyuntor").fetchall()
         ahora = _now()
         return [fuente for fuente, hasta in filas if hasta > ahora]
+
+    def obtener_investigacion(self, investigacion_id: int) -> Optional[dict]:
+        """Tanda L: lee una investigación guardada por su id. `huella_investigaciones`
+        era hasta ahora WRITE-ONLY (solo `guardar_investigacion` insertaba, nada
+        volvía a leerla) — hueco que impedía reabrir un expediente para ampliarlo."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT datos FROM huella_investigaciones WHERE id=?", (investigacion_id,)
+            ).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def listar_investigaciones(self, limit: int = 20) -> list[tuple[int, str, str, str]]:
+        """(id, pivote_semilla, tipo_semilla, creado) de las investigaciones
+        guardadas, más recientes primero — para saber qué id pasarle a
+        `ampliar_investigacion` (Tanda L)."""
+        with self._lock:
+            return self._conn.execute(
+                "SELECT id, pivote_semilla, tipo_semilla, creado FROM huella_investigaciones "
+                "ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
 
 
 _HUELLA: Optional[Huella] = None
@@ -1513,6 +1573,22 @@ class Investigacion:
             "motivo_corte": self.motivo_corte,
         }
 
+    @classmethod
+    def from_dict(cls, datos: dict) -> "Investigacion":
+        """Reconstruye una `Investigacion` guardada (Tanda L) para reabrirla vía
+        `ampliar_investigacion` — simétrico con `to_dict()`."""
+        return cls(
+            pivote_semilla=datos["pivote_semilla"],
+            tipo_semilla=datos["tipo_semilla"],
+            dossiers=[Dossier.from_dict(d) for d in datos.get("dossiers", [])],
+            pivotes_nuevos=[tuple(p) for p in datos.get("pivotes_nuevos", [])],
+            profundidad_alcanzada=datos.get("profundidad_alcanzada", 0),
+            aristas_correlacion=[Arista.from_dict(a) for a in datos.get("aristas_correlacion", [])],
+            creado=datos.get("creado", _now()),
+            fuentes_degradadas=list(datos.get("fuentes_degradadas", [])),
+            motivo_corte=datos.get("motivo_corte", ""),
+        )
+
 
 # --- Correlación por avatar (pHash, Tanda D) ----------------------------------
 
@@ -1627,15 +1703,26 @@ def _clave_pivote(tipo: str, valor: str) -> tuple[str, str]:
     return (tipo, valor.lower())
 
 
-def investigar(pivote: str, tipo: str, profundidad: int = HUELLA_PROFUNDIDAD_MAX) -> Investigacion:
-    """Bucle de pivote (BFS): resuelve `pivote` con el colector de su tipo (Tanda
-    A/B, sin tocar su firma), extrae nuevos identificadores (`_extraer_pivotes`) de
-    las cuentas que encuentra y los encola para el siguiente nivel — hasta
-    `profundidad` niveles, deduplicados (en cola Y en visitados, Tanda F — antes
-    solo se deduplicaba al desencolar, dejando encolar el mismo pivote varias
-    veces si dos rutas distintas lo descubrían en el mismo nivel), con topes duros
-    de nodos y de TIEMPO totales para que el bucle nunca explote, entre en ciclo,
-    ni se quede corriendo horas.
+def _procesar_bfs(
+    inv: Investigacion,
+    cola: list[tuple[str, str, int]],
+    visitados: set[tuple[str, str]],
+    en_cola: set[tuple[str, str]],
+    disyuntor: "DisyuntorFuente",
+    profundidad: int,
+) -> Investigacion:
+    """Cuerpo del bucle de pivote (BFS) — extraído de `investigar()` en la Tanda L
+    para que `ampliar_investigacion()` lo reutilice EXACTO sobre una `Investigacion`
+    YA existente, en vez de duplicar esta lógica. Recibe el estado inicial ya
+    armado (semilla nueva desde `investigar()`, o un pivote añadido a un
+    expediente viejo desde `ampliar_investigacion()`) y hace todo lo demás:
+    explorar, extraer, correlacionar y persistir.
+
+    Deduplicados (en cola Y en visitados, Tanda F — antes solo se deduplicaba al
+    desencolar, dejando encolar el mismo pivote varias veces si dos rutas
+    distintas lo descubrían en el mismo nivel), con topes duros de nodos y de
+    TIEMPO totales para que el bucle nunca explote, entre en ciclo, ni se quede
+    corriendo horas.
 
     Explora primero las cuentas de mayor puntuación (confirmadas/probables), pero
     NO se limita a ellas en solitario: verificado con datos reales que muchas cuentas
@@ -1644,19 +1731,14 @@ def investigar(pivote: str, tipo: str, profundidad: int = HUELLA_PROFUNDIDAD_MAX
     disciplina de "no afirmar sin corroborar" vive en la PUNTUACIÓN de cada hallazgo,
     no en qué cuentas se exploran para seguir tirando del hilo.
 
-    Tanda F — sostenibilidad frente a bloqueos: un `DisyuntorFuente` propio de esta
-    investigación desactiva una fuente (Maigret, Socialscan, user-scanner, GHunt,
-    ignorant) tras fallos repetidos o un error con pinta de rate-limit/bloqueo, para
-    no seguir insistiendo con el resto de pivotes. Y una parada por rendimientos
+    Tanda F — sostenibilidad frente a bloqueos: `disyuntor` desactiva una fuente
+    (Maigret, Socialscan, Sherlock, user-scanner, GHunt, ignorant) tras fallos
+    repetidos o un error con pinta de rate-limit/bloqueo, para no seguir
+    insistiendo con el resto de pivotes. Y una parada por rendimientos
     decrecientes corta el BFS si varios pivotes seguidos no aportan NADA nuevo,
     aunque queden nodos en cola y presupuesto de nodos/tiempo sin agotar.
     """
-    inv = Investigacion(pivote_semilla=pivote, tipo_semilla=tipo)
-    disyuntor = DisyuntorFuente()
-    clave_semilla = _clave_pivote(tipo, pivote)
-    visitados: set[tuple[str, str]] = set()
-    en_cola: set[tuple[str, str]] = {clave_semilla}
-    cola: list[tuple[str, str, int]] = [(pivote, tipo, 0)]
+    inv.motivo_corte = ""  # de esta pasada, no de una anterior (relevante al reabrir un expediente, Tanda L)
     sin_novedad_seguidos = 0
     inicio = time.monotonic()
 
@@ -1728,6 +1810,62 @@ def investigar(pivote: str, tipo: str, profundidad: int = HUELLA_PROFUNDIDAD_MAX
     inv.aristas_correlacion = _correlacionar_avatares(inv) + _correlacionar_texto(inv)
     get_huella().guardar_investigacion(inv)
     return inv
+
+
+def investigar(pivote: str, tipo: str, profundidad: int = HUELLA_PROFUNDIDAD_MAX) -> Investigacion:
+    """Bucle de pivote (BFS) desde una semilla nueva: resuelve `pivote` con el
+    colector de su tipo (Tanda A/B, sin tocar su firma), extrae nuevos
+    identificadores (`_extraer_pivotes`) de las cuentas que encuentra y los
+    encola para el siguiente nivel — hasta `profundidad` niveles. El bucle en sí
+    vive en `_procesar_bfs()` (Tanda L); esta función solo arma el estado inicial
+    de una investigación DESDE CERO. Para añadir un pivote a una investigación YA
+    guardada, ver `ampliar_investigacion()`.
+    """
+    inv = Investigacion(pivote_semilla=pivote, tipo_semilla=tipo)
+    disyuntor = DisyuntorFuente()
+    clave_semilla = _clave_pivote(tipo, pivote)
+    visitados: set[tuple[str, str]] = set()
+    en_cola: set[tuple[str, str]] = {clave_semilla}
+    cola: list[tuple[str, str, int]] = [(pivote, tipo, 0)]
+    return _procesar_bfs(inv, cola, visitados, en_cola, disyuntor, profundidad)
+
+
+def ampliar_investigacion(
+    investigacion_id: int, nuevo_pivote: str, nuevo_tipo: str, profundidad: int = HUELLA_PROFUNDIDAD_MAX
+) -> Investigacion:
+    """Tanda L — "expediente reabrible": añade UN pivote nuevo a una investigación
+    YA guardada (por su id, ver `Huella.listar_investigaciones`) en vez de
+    empezar de cero. Reconstruye `visitados` a partir de los dossiers ya
+    presentes (no se re-busca nada ya resuelto) y arranca el BFS solo con el
+    pivote nuevo, sobre el MISMO objeto `Investigacion` — así lo viejo y lo nuevo
+    quedan en la misma lista de dossiers, y `_procesar_bfs` vuelve a correlacionar
+    (avatar + texto/bio, Tanda K) sobre el conjunto COMBINADO: una cuenta que
+    antes no encajaba con nada puede de repente enlazar con algo de la rama
+    recién añadida.
+
+    Se guarda como una fila NUEVA en `huella_investigaciones` (nunca un UPDATE
+    sobre la vieja) — mismo criterio que `huella_dossiers`, que tampoco
+    actualiza: se conserva el histórico completo de cómo creció el expediente.
+
+    Lanza `ValueError` (no "nunca lanza": esto es validación de entrada del
+    usuario, no una fuente externa que pueda fallar) si el id no existe o si el
+    pivote nuevo ya estaba investigado en ese expediente — la capa de tool
+    (`huella_tools.huella_ampliar`) lo convierte en un mensaje de error legible.
+    """
+    datos = get_huella().obtener_investigacion(investigacion_id)
+    if datos is None:
+        raise ValueError(f"no existe ninguna investigación guardada con id {investigacion_id}.")
+    inv = Investigacion.from_dict(datos)
+
+    visitados: set[tuple[str, str]] = {_clave_pivote(d.tipo, d.pivote) for d in inv.dossiers}
+    clave_nueva = _clave_pivote(nuevo_tipo, nuevo_pivote)
+    if clave_nueva in visitados:
+        raise ValueError(f"'{nuevo_pivote}' ({nuevo_tipo}) ya está investigado en este expediente.")
+
+    disyuntor = DisyuntorFuente()
+    en_cola: set[tuple[str, str]] = {clave_nueva}
+    cola: list[tuple[str, str, int]] = [(nuevo_pivote, nuevo_tipo, 0)]
+    return _procesar_bfs(inv, cola, visitados, en_cola, disyuntor, profundidad)
 
 
 # --- Protección continua: diff + auditoría periódica (Tanda E) ---------------

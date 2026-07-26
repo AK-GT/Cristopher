@@ -2,6 +2,8 @@
 Tanda B: pivotes email y teléfono. Tanda C: bucle de pivote (investigación profunda)
 + puntuación de confianza fina (tentativo/probable/confirmado). Tanda D: pivote
 nombre (permutación + dorking), correlación por avatar (pHash) y pivote cara.
+Tanda L: "expediente reabrible" (`huella_ampliar`/`huella_listar_investigaciones`) —
+añade un pivote nuevo a una investigación ya guardada en vez de empezar de cero.
 
 Envuelve `cristopher.huella` con funciones finas para el registro de tools.
 Devuelve texto legible (observación para el bucle ReAct); los fallos de una
@@ -20,6 +22,7 @@ from cristopher.config import HUELLA_PROFUNDIDAD_MAX
 from cristopher.huella import (
     Dossier,
     Investigacion,
+    ampliar_investigacion,
     auditar_pivote,
     buscar_cara,
     buscar_email,
@@ -252,6 +255,57 @@ def huella_investigar(pivote: str, tipo: str = "alias", profundidad: int = 2) ->
         )
     profundidad = max(1, min(int(profundidad or 2), HUELLA_PROFUNDIDAD_MAX))
     inv = investigar(pivote, tipo, profundidad)
+    return _formatear_investigacion(inv)
+
+
+def huella_listar_investigaciones() -> str:
+    """Lista las investigaciones de huella digital guardadas (id, pivote semilla,
+    tipo, fecha) para poder ampliarlas después con `huella_ampliar` — el
+    "expediente reabrible" (Tanda L): en vez de empezar de cero, se le añade un
+    dato nuevo a una investigación ya hecha y se re-correlaciona todo el
+    conjunto. Úsala antes de `huella_ampliar` si no tienes ya el id a mano."""
+    filas = get_huella().listar_investigaciones()
+    if not filas:
+        return "No hay ninguna investigación guardada todavía. Usa huella_investigar primero."
+    return "\n".join(
+        f"#{id_} — semilla '{pivote_semilla}' (tipo: {tipo_semilla}), {creado[:16].replace('T', ' ')}"
+        for id_, pivote_semilla, tipo_semilla, creado in filas
+    )
+
+
+def huella_ampliar(investigacion_id: int, nuevo_pivote: str, nuevo_tipo: str = "alias") -> str:
+    """Añade un pivote/hecho NUEVO a una investigación de huella digital YA
+    guardada (por su id, ver `huella_listar_investigaciones`), en vez de empezar
+    de cero: reutiliza lo ya encontrado (no vuelve a buscar lo ya visitado) y
+    solo explora la rama nueva, luego re-correlaciona TODO el conjunto (avatares
+    y bio/enlaces, Tanda K) por si algo que antes no conectaba ahora sí conecta.
+    Úsala cuando, tras una investigación, el usuario dé un dato adicional de la
+    misma persona ("además se llama...", "también usa este email...", "prueba
+    también con este teléfono") — así se sigue tirando del hilo de dato en dato
+    en vez de que cada búsqueda empiece de cero.
+
+    Args:
+        investigacion_id: el id devuelto por `huella_listar_investigaciones`.
+        nuevo_pivote: el dato nuevo a añadir (alias, email, teléfono o nombre real).
+        nuevo_tipo: 'alias' (username), 'email', 'telefono' o 'nombre'.
+    """
+    nuevo_pivote = (nuevo_pivote or "").strip()
+    if not nuevo_pivote:
+        return "ERROR: falta el pivote nuevo a añadir."
+    nuevo_tipo = (nuevo_tipo or "alias").strip().lower()
+    if nuevo_tipo not in ("alias", "email", "telefono", "nombre"):
+        return (
+            f"ERROR: tipo de pivote {nuevo_tipo!r} no soportado para ampliar. Usa uno de: "
+            "alias, email, telefono, nombre."
+        )
+    try:
+        investigacion_id = int(investigacion_id)
+    except (TypeError, ValueError):
+        return "ERROR: investigacion_id debe ser un número (ver huella_listar_investigaciones)."
+    try:
+        inv = ampliar_investigacion(investigacion_id, nuevo_pivote, nuevo_tipo)
+    except ValueError as exc:
+        return f"ERROR: {exc}"
     return _formatear_investigacion(inv)
 
 
