@@ -39,6 +39,7 @@ def _default_confirm(prompt: str) -> bool:
 
 
 _confirm: Callable[[str], bool] = _default_confirm
+_confirm_texto: "Callable[[str], tuple[bool, str]] | None" = None
 
 
 def set_confirmer(fn: Callable[[str], bool]) -> None:
@@ -52,6 +53,25 @@ def confirmar_accion(prompt: str) -> bool:
     enviar_correo/crear_evento (§9). Lo usa proactivo.py (Fase 3, capa cofounder)
     para pedir aprobación antes de responder por una sesión de Claude Code."""
     return _confirm(prompt)
+
+
+def set_confirmer_texto(fn: "Callable[[str], tuple[bool, str]]") -> None:
+    """Confirmador con texto libre: además de aceptar/rechazar el borrador,
+    permite que el usuario responda con un mensaje propio (p. ej. una elección A/B/C/D
+    o "indaga más" en vez del texto que CRISTOPHER propuso). Opcional — superficies que
+    no lo registren (CLI/voz) siguen funcionando vía confirmar_accion_con_texto."""
+    global _confirm_texto
+    _confirm_texto = fn
+
+
+def confirmar_accion_con_texto(prompt: str) -> "tuple[bool, str]":
+    """Como confirmar_accion, pero la aprobación puede venir acompañada de texto
+    libre del usuario que sustituye al borrador propuesto. Sin confirmador de texto
+    registrado, cae a confirmar_accion normal (texto vacío = usa el borrador tal
+    cual). Lo usa proactivo.py para el flujo de preguntas de sesión."""
+    if _confirm_texto is not None:
+        return _confirm_texto(prompt)
+    return _confirm(prompt), ""
 
 
 # --- Calendar (lectura) -------------------------------------------------------

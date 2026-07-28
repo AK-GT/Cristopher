@@ -147,12 +147,22 @@ def estado() -> dict:
 
 
 def check_new() -> dict:
-    """{"estado": ..., "chats": [{"chat_id","nombre","n_nuevos","ultimo_texto","ultimo_id"}]}."""
+    """{"estado": ..., "chats": [{"chat_id","nombre","n_nuevos","ultimo_texto","ultimo_id",
+    "tipo","media_path","mimetype"}]}. `tipo` es "texto"|"audio"|"imagen"; `media_path`/
+    `mimetype` solo vienen puestos si el último mensaje traía audio o imagen (ver
+    whatsapp/wa.js::detectarMedia) — el archivo ya está descargado en disco en esa ruta."""
     return _request("GET", "/check-new")
 
 
+def self_chat_id() -> Optional[str]:
+    """JID del chat "Note to self" (el propio número), o None si aún no hay sesión
+    vinculada. Lo usa whatsapp_comandos.py para detectar mensajes que el usuario se
+    manda a sí mismo con el prefijo de comando."""
+    return _request("GET", "/self").get("chat_id")
+
+
 def read(chat_id: str, n: int) -> dict:
-    """{"chat_id","nombre","mensajes":[{"from","texto","ts","fromMe"}]}."""
+    """{"chat_id","nombre","mensajes":[{"from","texto","ts","fromMe","tipo","mediaPath","mimetype"}]}."""
     return _request("GET", "/read", params={"chat_id": chat_id, "n": n})
 
 

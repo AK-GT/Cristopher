@@ -124,10 +124,12 @@ def add_sesion_entrada(nombre: str, entrada: dict) -> None:
     _emit("sesion_entrada", {"nombre": nombre, "entrada": entrada})
 
 
-def pedir_confirmacion(texto: str) -> None:
+def pedir_confirmacion(texto: str, permite_texto: bool = False) -> None:
     """Publica una solicitud de confirmación (p. ej. enviar un correo) para que el HUD
-    la muestre con botones Confirmar/Cancelar. No se guarda en el snapshot: es efímera."""
-    _emit("confirmacion", {"texto": texto})
+    la muestre con botones Confirmar/Cancelar. No se guarda en el snapshot: es efímera.
+    `permite_texto=True` (preguntas de sesión) añade además un campo libre
+    para responder con un mensaje propio en vez de solo aceptar/rechazar el borrador."""
+    _emit("confirmacion", {"texto": texto, "permite_texto": permite_texto})
 
 
 # --- Suscripción SSE ----------------------------------------------------------

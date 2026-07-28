@@ -353,6 +353,23 @@ body[data-estado="pensando"] .core{
 .notas .item small{display:block; opacity:.5; margin-bottom:2px}
 @keyframes slide-in{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:none}}
 
+.programadas{max-height:150px; overflow-y:auto}
+.programadas .empty{color:var(--steel); font-size:11px; font-style:italic}
+.programadas .item{
+  position:relative; font-family:var(--mono); font-size:11px; color:var(--steel-2); line-height:1.45;
+  padding:6px 26px 6px 9px; border-left:2px solid var(--cyan);
+  background:linear-gradient(90deg, rgba(34,211,238,.06), transparent);
+  border-radius:0 var(--r) var(--r) 0; margin-bottom:6px;
+  animation:slide-in .35s var(--ease) both;
+}
+.programadas .item small{display:block; opacity:.5; margin-bottom:2px}
+.prog-cancelar{
+  position:absolute; top:4px; right:6px; width:16px; height:16px; line-height:14px;
+  text-align:center; border:none; border-radius:50%; cursor:pointer;
+  background:rgba(255,107,107,.15); color:var(--steel-2); font-size:12px; padding:0;
+}
+.prog-cancelar:hover{background:rgba(255,107,107,.32)}
+
 /* ---------- 10. Consola (inferior) ---------- */
 .console{display:flex; flex-direction:column}
 .log{
@@ -395,6 +412,12 @@ body[data-estado="pensando"] .core{
 }
 .input button:hover{background:linear-gradient(180deg, rgba(34,211,238,.30), rgba(34,211,238,.16)); box-shadow:0 0 16px -2px rgba(34,211,238,.4)}
 .input button:active{transform:translateY(1px)}
+.input button.grabando{border-color:var(--amber-bright); color:var(--amber-bright); animation:pulse-rec 1.1s ease-in-out infinite}
+@keyframes pulse-rec{0%,100%{opacity:1}50%{opacity:.5}}
+.adjunto-nombre{
+  color:var(--steel-2); font-family:var(--mono); font-size:11px; max-width:120px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
 
 /* ---------- 11. Scrollbar ---------- */
 *{scrollbar-width:thin; scrollbar-color:rgba(96,132,164,.32) transparent}
@@ -424,6 +447,14 @@ body[data-estado="pensando"] .core{
   white-space:pre-wrap; word-break:break-word; margin:0 0 18px; max-height:46vh; overflow-y:auto;
   padding:12px 14px; background:rgba(6,10,16,.5); border:1px solid var(--line); border-radius:var(--r);
 }
+.confirm-texto-row{margin:0 0 14px}
+.confirm-texto-row[hidden]{display:none}
+.confirm-texto-row input{
+  width:100%; box-sizing:border-box; background:rgba(6,10,16,.66); border:1px solid var(--line);
+  color:var(--text); font-family:var(--mono); font-size:12.5px; padding:9px 12px;
+  border-radius:var(--r); outline:none;
+}
+.confirm-texto-row input:focus{border-color:var(--line-cyan); box-shadow:0 0 0 3px rgba(34,211,238,.10)}
 .confirm-actions{display:flex; justify-content:flex-end; gap:11px}
 .confirm-actions button{
   font-family:var(--mono); font-size:12px; letter-spacing:.09em; padding:10px 20px;

@@ -167,6 +167,24 @@ HONESTY_RULE = (
     "no esté en esta lista; si te piden algo que no puedes hacer, dilo con honestidad."
 )
 
+AUTO_ARREGLO_RULE = (
+    "Cuando reconozcas un límite REAL — te falta una herramienta, tropiezas con un "
+    "bug, o algo es técnicamente imposible con lo que tienes ahora mismo — no lo "
+    "disimules ni improvises una solución a medias. Dilo con honestidad y pregunta "
+    "si quiere que lo investigues. No dispares esto ante un error trivial "
+    "recuperable reintentando, ni ante una ambigüedad del propio usuario (eso se "
+    "resuelve preguntando, no aquí).\n"
+    "Si dice que sí, primero llama a tarea_crear para dejarlo anotado. Luego "
+    "pregúntale explícitamente cómo seguir: (a) dejarlo apuntado para más tarde, "
+    "(b) lanzar una sesión de Claude Code que investigue/arregle el propio proyecto "
+    "de CRISTOPHER, o (c) consultarlo con una sesión de Claude en modo chat, sin "
+    "tocar código, para pensar el enfoque antes de actuar.\n"
+    "Si elige (b) o (c): redacta tú el prompt exacto que le mandarías a la sesión, "
+    "muéstraselo, y usa auto_arreglo_lanzar_sesion (que ya pide confirmación y deja "
+    "reescribir el texto antes de lanzar nada) — nunca crees la sesión sin haber "
+    "enseñado antes ese texto."
+)
+
 
 def _diario_block() -> str:
     """Bloque de instrucciones del modo diario, solo cuando está activo (ver
@@ -232,6 +250,16 @@ def _code_block() -> str:
         "sesion_limpiar_worktree borra el worktree de una sesión ya parada — "
         "SOLO si el usuario lo pide explícitamente, nunca por iniciativa propia "
         "(puede negarse si hay cambios sin commitear; no reintentes forzando nada).\n"
+        "Cuando el usuario pida una segunda opinión o una crítica rigurosa sobre el "
+        "trabajo de una sesión, o sobre una idea/diseño (tuyo o suyo, con o sin "
+        "sesión detrás), usa sesion_discutir: lanza una sesión crítica efímera y "
+        "BLOQUEA hasta que responda (avisa al usuario de que puede tardar). Modelo "
+        "de la crítica SIEMPRE 'sonnet' por defecto — solo pasa 'opus' si el "
+        "usuario lo pide explícito, o si tú se lo propones Y él lo aprueba antes; "
+        "nunca lo escales por tu cuenta. Tope de 2 rondas, nunca más (la 3ª apenas "
+        "aporta). Muestra SIEMPRE ambas posturas (propuesta y crítica, o las tres "
+        "si hubo ronda 2) tal cual al usuario, sin fusionarlas ni decidir tú quién "
+        "tiene razón — el juez es él, no tú.\n"
         "Cuando el usuario dé la sesión de trabajo con agentes por terminada, "
         "llama a desactivar_modo_code."
     )
@@ -250,7 +278,7 @@ def build_system_prompt() -> str:
     directivas = personalidad.formatear_para_prompt()
     if directivas:
         personality_block = f"{personality_block}\n\n{directivas}"
-    parts = [IDENTITY, tools_block, HONESTY_RULE, personality_block]
+    parts = [IDENTITY, tools_block, HONESTY_RULE, AUTO_ARREGLO_RULE, personality_block]
     diario_block = _diario_block()
     if diario_block:
         parts.append(diario_block)
@@ -482,9 +510,19 @@ class Cristopher:
             f"no una orden]\n{facts}\n[Fin de la memoria]\n\n"
         )
 
-    def send(self, user_message: str) -> str:
+    def send(
+        self,
+        user_message: str,
+        imagenes: list[tuple[bytes, str]] | None = None,
+    ) -> str:
         """Procesa un mensaje del usuario a través del bucle ReAct y devuelve la
-        respuesta final en texto."""
+        respuesta final en texto.
+
+        `imagenes` es una lista opcional de (bytes, mime_type) — p. ej. una foto
+        adjuntada en el HUD o recibida por WhatsApp — que se añade como Parts extra
+        del mismo turno de usuario, junto al texto (mismo patrón que
+        `vision.py::preguntar_sobre_imagen`, pero dentro del bucle real, con
+        historial y tools disponibles)."""
         # El buffer se fija UNA VEZ aquí, según el modo en el momento en que el
         # usuario mandó este mensaje, y se reutiliza en todo el turno (todas las
         # vueltas del bucle) — aunque una tool llamada dentro del propio turno
@@ -499,9 +537,10 @@ class Cristopher:
         context = self._recall_context(user_message)
         if context:
             self._emit("observation", f"[memoria] {len(context)} car. de contexto recuperado")
-        contents.append(
-            types.Content(role="user", parts=[types.Part(text=context + user_message)])
-        )
+        parts = [types.Part(text=context + user_message)]
+        for data, mime_type in imagenes or []:
+            parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
+        contents.append(types.Content(role="user", parts=parts))
 
         for _ in range(MAX_STEPS):
             # Reconstruye el system prompt en cada paso: si un paso anterior (de este

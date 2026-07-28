@@ -37,6 +37,7 @@ Agente personal orquestado (tipo Jarvis) sobre Gemini. Este archivo manda: léel
 - **Navegador:** Playwright. Priorizar leer HTML / árbol de accesibilidad; captura solo cuando el HTML no baste.
 - **Voz (Fase 6):** faster-whisper (STT — modelo `small`, `language="es"`, cómputo `int8`) + Piper (TTS, voz en español) + openWakeWord. Kokoro como alternativa a comparar por naturalidad.
 - **WhatsApp:** Baileys (Node.js, no oficial — riesgo de baneo/limitación por Meta ya asumido). Es una tool más, NUNCA un bot autónomo: el agente solo lee/envía cuando el usuario lo pide en conversación, sin panel de aprobación por botón (divergencia deliberada de `enviar_correo`). Python lanza el servicio Node en segundo plano (patrón `browser.py`) y le habla por HTTP local (`cristopher/whatsapp_client.py`).
+  **Excepción acotada y explícita** (control remoto desde el móvil, `cristopher/whatsapp_comandos.py`): un mensaje que el usuario se manda a sí mismo en su propio chat ("Note to self") con el prefijo `/Cristopher` se ejecuta como un turno normal del agente — con todas las tools — y la respuesta vuelve por el mismo chat. Un hilo daemon dedicado lo vigila con poll propio (`POLL_WHATSAPP_COMANDOS`, ~7s), separado del ciclo de 60s del demonio proactivo general. No es un bot autónomo genérico: sigue siendo una instrucción literal del usuario, solo que llega por otro canal, y solo dispara con ese prefijo en ese chat concreto (el resto del chat sigue siendo notas sueltas, se ignora). Cuando el turno viene de ahí, la confirmación de acciones irreversibles (§9) también se pide por WhatsApp en vez de por clic en el HUD — nadie vería ese clic estando fuera de casa —, con el mismo "silencio = no" ante el timeout. También ve **imagen/documento/audio**, no solo texto: una foto o un PDF con el prefijo en el caption se descarga (`whatsapp/wa.js::detectarMedia`) y se pasa como Part multimodal a `Cristopher.send(..., imagenes=...)` (mismo mecanismo que usa el HUD para adjuntos); una nota de voz dispara siempre, sin exigir prefijo (mandártela ya es, por sí sola, un acto deliberado) y se transcribe con `voz.transcribir_archivo`. Gemini solo entiende documentos como datos inline si son PDF (o texto plano) — un `.docx`/`.xlsx`/`.pptx` no se lee directo, hay que convertirlo a PDF antes. Si el turno falla (mimetype no soportado, error de tool, lo que sea), `_procesar` manda el error por el mismo WhatsApp en vez de dejarlo solo en el log del HUD — silencio total sería peor que un error visible. Turnos largos (una tool lenta) mandan un aviso de "sigo en ello" pasado `WHATSAPP_HEARTBEAT_SEGUNDOS` para no sentirse colgado desde el móvil, donde no se ve el estado "pensando" del HUD.
 - **System prompt de runtime:** **embebido en el código** (`agent.py`), no cargado desde `.md`. El `cristopher_mega_prompt.md` queda solo como documentación del porqué.
 
 ---
@@ -223,6 +224,35 @@ y `/sesiones` y consume el SSE de `/eventos`.
   código de emparejamiento de 8 dígitos, **no** en el flujo QR que usa `setup_qr.js` —
   la señal real de "ya vinculado" es `creds.me`. `setup_qr.js` también guarda el QR como
   `qr.png` además de imprimirlo en ASCII (útil si la terminal no lo renderiza bien).
+  `self_chat_id()` expone el JID del chat "Note to self" (`wa.js::getSelfId()`, JID
+  normalizado vía `jidNormalizedUser`, `None` si aún no hay sesión vinculada).
+- `whatsapp_comandos.py` — hilo daemon propio (arrancado en `hud/__main__.py` junto al
+  demonio proactivo) que vigila el chat "Note to self" con poll dedicado
+  (`POLL_WHATSAPP_COMANDOS`, ~7s) buscando mensajes con el prefijo `/Cristopher`; ver la
+  excepción acotada de WhatsApp en "Decisiones de arquitectura". Dedup por
+  `Recordatorios.ya_visto/marcar_visto` (mismo SQLite que `proactivo.py`), clave
+  `wa_cmd:{id}`. En `whatsapp/store.js`, el carve-out `esSelfChat` es lo que permite que
+  este chat aparezca en `/check-new` pese a que Baileys marca `fromMe: true` en TODO
+  mensaje del propio chat (incluida la respuesta que el agente se manda a sí mismo por
+  `/send` — por eso esa ruta NO pasa `esSelfChat`, para no autodispararse en bucle).
+  Gotcha real ya pisado una vez: WhatsApp migró esta cuenta a direccionamiento **LID**
+  (identificador de privacidad) — el chat "Note to self" llega con `chatId =
+  creds.me.lid` (p. ej. `219254053949565@lid`), **no** con `creds.me.id` (el JID de
+  teléfono de siempre). `wa.js::getSelfIds()` devuelve ambos candidatos (`lid` primero
+  si existe) para no depender de cuál use WhatsApp; `getSelfId()` (usado por `/self` y
+  por el resto del código Python) devuelve el preferido. Si esto vuelve a fallar en el
+  futuro, lo primero es comprobar `data/whatsapp/session/creds.json` → `me.lid` contra
+  el `chat_id` real que reporta `/check-new`.
+  Adjuntos (imagen/documento/audio): `wa.js::detectarMedia()` reconoce
+  `imageMessage`/`documentMessage`/`audioMessage`, los descarga a disco vía
+  `downloadMediaMessage` de Baileys (`_descargarMedia`, con `reuploadRequest:
+  sock.updateMediaMessage` para el caso de media ya expirado) y expone
+  `tipo`/`media_path`/`mimetype` en `/check-new` y `/read` (genérico, `store.js` no
+  distingue tipos). Nota de voz dispara sin prefijo (transcrita con
+  `voz.transcribir_archivo`, igual que el adjunto de audio del HUD); imagen/documento
+  siguen exigiendo el prefijo en el caption. Los archivos bajados a
+  `data/whatsapp/media/` no se limpian nunca — crecen sin límite con el uso, aceptado
+  por ahora. Gemini solo lee documentos inline si son PDF/texto plano.
 - `recordatorios.py` — SQLite (`data/proactivo.db`) con los recordatorios programados
   y el dedup de avisos ya emitidos; lo consume `proactivo.py`.
 - `briefing.py` — súper briefing diario bajo demanda: agenda de hoy, correos, recordatorios

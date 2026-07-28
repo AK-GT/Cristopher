@@ -54,6 +54,10 @@ const server = http.createServer(async (req, res) => {
       return enviarJson(res, 200, { estado: conexion.estado });
     }
 
+    if (req.method === "GET" && url.pathname === "/self") {
+      return enviarJson(res, 200, { chat_id: conexion.getSelfId() });
+    }
+
     if (req.method === "GET" && url.pathname === "/check-new") {
       return enviarJson(res, 200, { estado: conexion.estado, chats: store.nuevos() });
     }
@@ -106,7 +110,13 @@ const server = http.createServer(async (req, res) => {
 conexion
   .iniciar({
     mostrarQr: false,
-    onMensaje: (m) => store.guardarMensaje(m),
+    // El chat "Note to self" (yo hablandome a mi mismo) llega de Baileys con
+    // fromMe:true igual que cualquier mensaje saliente; sin este flag el store
+    // nunca lo veria como "nuevo" (ver store.js::guardarMensaje). getSelfIds() (no
+    // solo getSelfId()) porque en cuentas migradas a LID el chatId real es
+    // creds.me.lid, distinto del JID de telefono de siempre.
+    onMensaje: (m) =>
+      store.guardarMensaje({ ...m, esSelfChat: conexion.getSelfIds().includes(m.chatId) }),
   })
   .catch((exc) => {
     console.error("No se pudo iniciar la conexion de WhatsApp:", exc);

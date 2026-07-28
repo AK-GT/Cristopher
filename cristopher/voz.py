@@ -1,26 +1,26 @@
-"""Voz de CRISTOPHER (Fase 6): STT (faster-whisper) + TTS (Piper, con edge-tts como
-motor en la nube opcional) + audio I/O.
+"""Voz de CRISTOPHER (Fase 6): STT (faster-whisper) + TTS (Piper, 100% local/offline)
++ audio I/O.
 
 - `transcribir(audio, sr)`: audio → texto (faster-whisper `small`, español, CPU).
-- `hablar(texto)`: texto → voz por el altavoz. Piper (local, offline) es el motor base
-  y el que corre siempre por defecto. Si el usuario elige explícitamente una voz en la
-  nube (`nube_elegir`), se intenta esa voz primero y, ante cualquier fallo (sin red,
-  servicio caído, falta la librería), se degrada de inmediato a Piper sin interrumpir
-  la respuesta — ver `motor_actual`/`nube_elegir`/`usar_motor_local`.
+- `hablar(texto)`: texto → voz por el altavoz con la voz Piper activa (ver
+  `voz_actual_nombre`/`voz_elegir` en `tools/voz_tools.py`).
 - `grabar_push_to_talk()`: graba del micrófono mientras se mantiene ESPACIO.
+
+Catálogo de voces (`VOCES_CATALOGO`): cada entrada tiene un campo `fuente`. Las
+oficiales se descargan del índice de rhasspy/piper-voices vía `piper.download_voices`;
+las de comunidad llevan `url_onnx`/`url_config` propios y se descargan por HTTP directo
+— ver `descargar_voz`.
 
 Carga perezosa de modelos. Errores explícitos si falta micro/altavoz o un modelo (§1).
 """
 
 from __future__ import annotations
 
-import asyncio
 import io
 import json
-import os
+import re
 import subprocess
 import sys
-import tempfile
 import threading
 import wave
 from pathlib import Path
@@ -35,30 +35,39 @@ SR = 16000  # tasa de muestreo para el micrófono / STT
 _whisper = None
 _piper_cache: dict[str, Any] = {}  # nombre de voz -> PiperVoice cargada
 
-# Catálogo de voces Piper en español, verificado contra rhasspy/piper-voices (solo
-# voces de un único hablante; se excluye es_ES-sharvard por ser multi-hablante).
+# Catálogo de voces Piper en español, de un único hablante. Las "oficial" están
+# verificadas contra el índice de rhasspy/piper-voices (se excluye es_ES-sharvard por
+# ser multi-hablante) y se descargan con `piper.download_voices`. Las "comunidad" son
+# reentrenos/voces nuevas de autores independientes que NO están en ese índice — llevan
+# `url_onnx`/`url_config` propios (descarga por HTTP directo, ver `descargar_voz`) y se
+# verificaron una a una (num_speakers==1, formato de config compatible con PiperVoice)
+# antes de añadirlas. Descartadas explícitamente tras esa verificación: voces con
+# licencia ambigua, origen sintético/cruzado entre idiomas sin poder auditar la calidad
+# acústica real, o que sugieren un clon de voz de un personaje con derechos de por medio.
 VOCES_CATALOGO: list[dict[str, str]] = [
-    {"nombre": "es_ES-davefx-medium", "region": "España", "calidad": "medium"},
-    {"nombre": "es_ES-carlfm-x_low", "region": "España", "calidad": "x_low"},
-    {"nombre": "es_ES-mls_9972-low", "region": "España", "calidad": "low"},
-    {"nombre": "es_ES-mls_10246-low", "region": "España", "calidad": "low"},
-    {"nombre": "es_MX-claude-high", "region": "México", "calidad": "high"},
-    {"nombre": "es_MX-ald-medium", "region": "México", "calidad": "medium"},
-    {"nombre": "es_AR-daniela-high", "region": "Argentina", "calidad": "high"},
-]
-
-# Catálogo de voces masculinas de España en la nube (edge-tts, servicio no oficial que
-# reutiliza el TTS neuronal de Microsoft Edge). Motor OPCIONAL y secundario: requiere
-# red, no tiene SLA y solo se activa si el usuario elige una de estas voces a propósito
-# (nube_elegir) — nunca por defecto, ver `VOZ_DEFECTO`/`motor_actual`.
-VOCES_NUBE: list[dict[str, str]] = [
-    {"nombre": "es-ES-AlvaroNeural", "region": "España", "calidad": "nube"},
-    {"nombre": "es-ES-ArnauNeural", "region": "España", "calidad": "nube"},
-    {"nombre": "es-ES-DarioNeural", "region": "España", "calidad": "nube"},
-    {"nombre": "es-ES-EliasNeural", "region": "España", "calidad": "nube"},
-    {"nombre": "es-ES-NilNeural", "region": "España", "calidad": "nube"},
-    {"nombre": "es-ES-SaulNeural", "region": "España", "calidad": "nube"},
-    {"nombre": "es-ES-TeoNeural", "region": "España", "calidad": "nube"},
+    {"nombre": "es_ES-davefx-medium", "region": "España", "calidad": "medium", "fuente": "oficial (rhasspy/piper-voices)"},
+    {"nombre": "es_ES-carlfm-x_low", "region": "España", "calidad": "x_low", "fuente": "oficial (rhasspy/piper-voices)"},
+    {"nombre": "es_ES-mls_9972-low", "region": "España", "calidad": "low", "fuente": "oficial (rhasspy/piper-voices)"},
+    {"nombre": "es_ES-mls_10246-low", "region": "España", "calidad": "low", "fuente": "oficial (rhasspy/piper-voices)"},
+    {"nombre": "es_MX-claude-high", "region": "México", "calidad": "high", "fuente": "oficial (rhasspy/piper-voices)"},
+    {"nombre": "es_MX-ald-medium", "region": "México", "calidad": "medium", "fuente": "oficial (rhasspy/piper-voices)"},
+    {"nombre": "es_AR-daniela-high", "region": "Argentina", "calidad": "high", "fuente": "oficial (rhasspy/piper-voices)"},
+    {
+        "nombre": "es_ES-carlfm-high",
+        "region": "España",
+        "calidad": "high",
+        "fuente": "comunidad (friyin, HuggingFace) — reentreno desde cero del dataset público de carlfm01",
+        "url_onnx": "https://huggingface.co/friyin/vits-piper-es_ES-carlfm-high/resolve/main/es_ES-carlfm-high.onnx",
+        "url_config": "https://huggingface.co/friyin/vits-piper-es_ES-carlfm-high/resolve/main/es_ES-carlfm-high.onnx.json",
+    },
+    {
+        "nombre": "es_MX-laura-high",
+        "region": "México",
+        "calidad": "high",
+        "fuente": "comunidad (HirCoir, HuggingFace, CC-BY-NC-4.0)",
+        "url_onnx": "https://huggingface.co/HirCoir/Piper-TTS-Laura/resolve/main/es_MX-laura-high.onnx",
+        "url_config": "https://huggingface.co/HirCoir/Piper-TTS-Laura/resolve/main/es_MX-laura-high.onnx.json",
+    },
 ]
 
 _VOZ_PATH = DATA / "voz.json"
@@ -94,6 +103,18 @@ def transcribir(audio: np.ndarray, sr: int = SR) -> str:
     return " ".join(s.text for s in segs).strip()
 
 
+def transcribir_archivo(ruta: str) -> str:
+    """Transcribe un archivo de audio (wav/ogg/webm/mp3…) a texto en español.
+
+    A diferencia de `transcribir()` (pensada para el ndarray ya decodificado de
+    `grabar_push_to_talk`), aquí faster-whisper decodifica el archivo internamente
+    (vía su dependencia `av`/ffmpeg) — útil para un adjunto subido en el HUD o una
+    nota de voz de WhatsApp, sin depender de cómo se capturó."""
+    model = _get_whisper()
+    segs, _ = model.transcribe(ruta, language=STT_LANG, vad_filter=True)
+    return " ".join(s.text for s in segs).strip()
+
+
 # --- TTS ----------------------------------------------------------------------
 def _nombres_catalogo() -> set[str]:
     return {v["nombre"] for v in VOCES_CATALOGO}
@@ -118,8 +139,7 @@ def voces_instaladas() -> list[dict[str, str]]:
 
 
 def _leer_voz_json() -> dict:
-    """Lee data/voz.json entero (Piper + estado del motor en la nube comparten el
-    mismo archivo). Dict vacío si no existe o está corrupto."""
+    """Lee data/voz.json entero. Dict vacío si no existe o está corrupto."""
     if not _VOZ_PATH.exists():
         return {}
     try:
@@ -130,8 +150,7 @@ def _leer_voz_json() -> dict:
 
 
 def _escribir_voz_json(cambios: dict) -> None:
-    """Actualiza solo las claves de `cambios`, preservando el resto (p. ej. elegir
-    una voz Piper no debe borrar la voz en la nube ya guardada, y viceversa)."""
+    """Actualiza solo las claves de `cambios`, preservando el resto."""
     with _VOZ_LOCK:
         DATA.mkdir(parents=True, exist_ok=True)
         data = _leer_voz_json()
@@ -154,55 +173,12 @@ def _guardar_voz_actual(nombre: str) -> None:
     _escribir_voz_json({"voz": nombre})
 
 
-# --- Motor en la nube (edge-tts), opcional --------------------------------------
-def _nombres_nube() -> set[str]:
-    return {v["nombre"] for v in VOCES_NUBE}
+def _entrada_catalogo(nombre: str) -> Optional[dict[str, str]]:
+    return next((v for v in VOCES_CATALOGO if v["nombre"] == nombre), None)
 
 
-def voces_nube_catalogo() -> list[dict[str, str]]:
-    """Catálogo de voces masculinas de España disponibles en la nube (edge-tts)."""
-    return list(VOCES_NUBE)
-
-
-def motor_actual() -> str:
-    """Motor de voz activo para `hablar()`: 'piper' (local, por defecto) o 'nube'
-    (edge-tts, solo si el usuario la eligió explícitamente con `nube_elegir`)."""
-    with _VOZ_LOCK:
-        data = _leer_voz_json()
-    if data.get("motor") == "nube" and data.get("voz_nube") in _nombres_nube():
-        return "nube"
-    return "piper"
-
-
-def voz_nube_actual_nombre() -> Optional[str]:
-    """Nombre de la voz en la nube seleccionada, o None si no hay ninguna elegida."""
-    with _VOZ_LOCK:
-        nombre = _leer_voz_json().get("voz_nube")
-    return nombre if nombre in _nombres_nube() else None
-
-
-def nube_elegir(nombre: str) -> None:
-    """Activa el motor en la nube (edge-tts) con la voz `nombre`. A partir de aquí
-    `hablar()` la usa como primera opción (con fallback automático a Piper si falla).
-    VozError si el nombre no está en `VOCES_NUBE`."""
-    if nombre not in _nombres_nube():
-        raise VozError(f"'{nombre}' no está en el catálogo de voces en la nube.")
-    _escribir_voz_json({"motor": "nube", "voz_nube": nombre})
-
-
-def usar_motor_local() -> None:
-    """Vuelve al motor local (Piper) como voz activa, desactivando la nube."""
-    _escribir_voz_json({"motor": "piper"})
-
-
-def descargar_voz(nombre: str) -> None:
-    """Descarga una voz del catálogo si aún no está instalada. VozError si falla."""
-    if nombre not in _nombres_catalogo():
-        raise VozError(f"'{nombre}' no está en el catálogo de voces conocidas.")
-    if _instalada(nombre):
-        return
-    destino = VOICE_DIR / "piper"
-    destino.mkdir(parents=True, exist_ok=True)
+def _descargar_voz_oficial(nombre: str, destino: Path) -> None:
+    """Descarga una voz del índice oficial de rhasspy/piper-voices."""
     try:
         subprocess.run(
             [sys.executable, "-m", "piper.download_voices", nombre, "--download-dir", str(destino)],
@@ -212,6 +188,48 @@ def descargar_voz(nombre: str) -> None:
         raise VozError(f"No pude descargar la voz '{nombre}': {exc.stderr.strip()}") from exc
     except subprocess.TimeoutExpired as exc:
         raise VozError(f"La descarga de la voz '{nombre}' tardó demasiado y se canceló.") from exc
+
+
+def _descargar_archivo(url: str, destino: Path) -> None:
+    try:
+        import requests
+        resp = requests.get(url, stream=True, timeout=(10, 300))
+        resp.raise_for_status()
+        with open(destino, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1 << 16):
+                f.write(chunk)
+    except Exception as exc:
+        destino.unlink(missing_ok=True)  # no dejar un archivo a medias
+        raise VozError(f"No pude descargar {url}: {exc}") from exc
+
+
+def _descargar_voz_url(nombre: str, entrada: dict[str, str], ruta: Path) -> None:
+    """Descarga una voz de comunidad por HTTP directo (.onnx + su config, cualquiera
+    que sea el nombre remoto del config — siempre se guarda como `{nombre}.onnx.json`,
+    que es lo que espera Piper)."""
+    _descargar_archivo(entrada["url_onnx"], ruta)
+    try:
+        _descargar_archivo(entrada["url_config"], ruta.with_suffix(".onnx.json"))
+    except VozError:
+        ruta.unlink(missing_ok=True)  # no dejar un .onnx huérfano sin su config
+        raise
+
+
+def descargar_voz(nombre: str) -> None:
+    """Descarga una voz del catálogo si aún no está instalada. VozError si falla.
+    Dos vías según `fuente`/`url_onnx` en VOCES_CATALOGO: el índice oficial de
+    rhasspy/piper-voices, o una URL directa para voces de comunidad."""
+    entrada = _entrada_catalogo(nombre)
+    if entrada is None:
+        raise VozError(f"'{nombre}' no está en el catálogo de voces conocidas.")
+    if _instalada(nombre):
+        return
+    destino = VOICE_DIR / "piper"
+    destino.mkdir(parents=True, exist_ok=True)
+    if entrada.get("url_onnx") and entrada.get("url_config"):
+        _descargar_voz_url(nombre, entrada, _ruta_voz(nombre))
+    else:
+        _descargar_voz_oficial(nombre, destino)
 
 
 def _get_piper(nombre: Optional[str] = None):
@@ -244,11 +262,74 @@ def sintetizar(texto: str) -> tuple[np.ndarray, int]:
     return data, sr
 
 
-def _hablar_piper(texto: str) -> None:
-    """Sintetiza y reproduce `texto` con Piper (motor base, 100% local/offline). Sin
-    cambios respecto al `hablar()` original: es la implementación de referencia y
-    también el fallback cuando el motor en la nube falla."""
+# --- Limpieza de Markdown antes de hablar --------------------------------------
+# Las respuestas del agente vienen formateadas en Markdown (el HUD las renderiza así),
+# pero un TTS no debe LEER los símbolos de marcado en voz alta — solo el texto que
+# envuelven. Regex simple, no un parser de Markdown completo (no hace falta: MVP,
+# la salida es siempre texto de un LLM, nunca Markdown adversarial).
+_MD_FENCE = re.compile(r"```.*?```", re.DOTALL)
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_MD_INLINE_CODE = re.compile(r"`([^`]*)`")
+_MD_STRIKE = re.compile(r"~~(.*?)~~")
+_MD_HEADER = re.compile(r"^\s{0,3}#{1,6}\s*", re.MULTILINE)
+_MD_BULLET = re.compile(r"^\s*[-*+]\s+", re.MULTILINE)
+_MD_BLOCKQUOTE = re.compile(r"^\s*>\s?", re.MULTILINE)
+_MD_EMPASIS = re.compile(r"(\*\*\*|\*\*|\*|___|__|_)")
+_MD_ESPACIOS = re.compile(r"[ \t]+")
+
+
+def _limpiar_markdown_para_voz(texto: str) -> str:
+    """Quita marcado Markdown (negrita/cursiva, listas, encabezados, enlaces, código,
+    citas) para que Piper no lea asteriscos, guiones bajos ni símbolos similares en
+    voz alta — se lee solo el texto que envuelven."""
+    texto = _MD_FENCE.sub(" ", texto)
+    texto = _MD_LINK.sub(r"\1", texto)
+    texto = _MD_INLINE_CODE.sub(r"\1", texto)
+    texto = _MD_STRIKE.sub(r"\1", texto)
+    texto = _MD_HEADER.sub("", texto)
+    texto = _MD_BULLET.sub("", texto)
+    texto = _MD_BLOCKQUOTE.sub("", texto)
+    texto = _MD_EMPASIS.sub("", texto)
+    texto = _MD_ESPACIOS.sub(" ", texto)
+    return texto.strip()
+
+
+# --- Interrupción de la reproducción (barge-in) --------------------------------
+# La síntesis de Piper (CPU) puede tardar más que tiempo real (verificado: ~3s para
+# sintetizar una frase de ~4s de audio) — `sd.stop()` solo puede cortar la
+# REPRODUCCIÓN, no acelerar una síntesis ya en curso. `_detener_evento` es la
+# bandera cooperativa que cubre ese hueco: si la interrupción llegó mientras se
+# sintetizaba, `hablar()` se entera al terminar y se salta la reproducción entera
+# en vez de reproducir igualmente un audio ya obsoleto.
+_detener_evento = threading.Event()
+
+
+def detener_habla() -> None:
+    """Corta de inmediato la reproducción de voz en curso, si la hay (barge-in):
+    un mensaje/instrucción nueva puede interrumpir lo que CRISTOPHER está diciendo
+    en vez de esperar a que termine. `sd.stop()` desbloquea cualquier `sd.wait()`
+    en curso en OTRO hilo (así lo llama el hilo HTTP del HUD mientras el worker
+    está bloqueado reproduciendo) y es un no-op seguro si no había nada sonando."""
+    _detener_evento.set()
+    try:
+        import sounddevice as sd
+        sd.stop()
+    except Exception:
+        pass
+
+
+def hablar(texto: str) -> None:
+    """Sintetiza y reproduce `texto` por el altavoz con la voz Piper activa (100%
+    local/offline). Limpia el Markdown antes de sintetizar (§ TTS) y puede
+    interrumpirse desde otro hilo con `detener_habla()` — tanto durante la síntesis
+    (se salta la reproducción entera) como durante la reproducción misma."""
+    texto = _limpiar_markdown_para_voz(texto or "")
+    if not texto:
+        return
+    _detener_evento.clear()
     data, sr = sintetizar(texto)
+    if _detener_evento.is_set():
+        return  # se pidió cortar mientras se sintetizaba: no reproducir ya un audio obsoleto
     try:
         import sounddevice as sd
     except ImportError as exc:
@@ -258,91 +339,6 @@ def _hablar_piper(texto: str) -> None:
         sd.wait()
     except Exception as exc:
         raise VozError(f"No pude reproducir audio (¿altavoz?): {exc}") from exc
-
-
-def _sintetizar_nube(texto: str, nombre: str) -> bytes:
-    """Sintetiza `texto` con edge-tts (voz `nombre`) y devuelve el MP3 resultante.
-    Requiere red; VozError si falta la librería o falla la síntesis (sin red, servicio
-    caído, etc.) — quien llame debe degradar a Piper ante este error."""
-    try:
-        import edge_tts
-    except ImportError as exc:
-        raise VozError("Falta edge-tts: pip install edge-tts") from exc
-
-    async def _generar() -> bytes:
-        comunicador = edge_tts.Communicate(texto, voice=nombre)
-        trozos = bytearray()
-        async for trozo in comunicador.stream():
-            if trozo["type"] == "audio":
-                trozos.extend(trozo["data"])
-        return bytes(trozos)
-
-    try:
-        audio = asyncio.run(_generar())
-    except Exception as exc:  # sin red, servicio no disponible, voz rechazada, etc.
-        raise VozError(f"No pude sintetizar con la voz en la nube '{nombre}': {exc}") from exc
-    if not audio:
-        raise VozError(f"La voz en la nube '{nombre}' no devolvió audio.")
-    return audio
-
-
-def _reproducir_mp3_bloqueante(audio_mp3: bytes) -> None:
-    """Reproduce bytes MP3 hasta el final, bloqueando. Usa VLC (ya es dependencia del
-    proyecto para música, ver `musica/reproductor.py`) en vez de sumar un decodificador
-    MP3 nuevo solo para esto."""
-    from cristopher.musica.reproductor import _preparar_libvlc
-
-    _preparar_libvlc()  # apunta a VLC portable si no hay instalación de sistema
-    try:
-        import vlc
-    except Exception as exc:
-        raise VozError("No encuentro VLC para reproducir la voz en la nube.") from exc
-
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-        f.write(audio_mp3)
-        ruta = f.name
-    try:
-        instancia = vlc.Instance("--no-video", "--quiet")
-        player = instancia.media_player_new()
-        player.set_media(instancia.media_new(ruta))
-        fin = threading.Event()
-        eventos = player.event_manager()
-        eventos.event_attach(vlc.EventType.MediaPlayerEndReached, lambda _e: fin.set())
-        eventos.event_attach(vlc.EventType.MediaPlayerEncounteredError, lambda _e: fin.set())
-        player.play()
-        fin.wait(timeout=60)  # red de seguridad: nunca bloquear para siempre
-        player.stop()
-        player.release()
-        instancia.release()
-    except Exception as exc:
-        raise VozError(f"No pude reproducir la voz en la nube: {exc}") from exc
-    finally:
-        try:
-            os.remove(ruta)
-        except OSError:
-            pass
-
-
-def hablar(texto: str) -> None:
-    """Sintetiza y reproduce el texto por el altavoz.
-
-    Motor local (Piper) por defecto, siempre disponible offline. Si el usuario eligió
-    explícitamente una voz en la nube (`nube_elegir`), se intenta primero; ante
-    cualquier fallo (sin red, servicio caído, falta edge-tts/VLC) degrada de inmediato
-    a Piper sin interrumpir la respuesta — nunca deja a CRISTOPHER sin voz."""
-    texto = (texto or "").strip()
-    if not texto:
-        return
-    if motor_actual() == "nube":
-        nombre_nube = voz_nube_actual_nombre()
-        if nombre_nube is not None:
-            try:
-                audio_mp3 = _sintetizar_nube(texto, nombre_nube)
-                _reproducir_mp3_bloqueante(audio_mp3)
-                return
-            except VozError:
-                pass  # degradación con elegancia (§2/§8): seguimos con Piper local
-    _hablar_piper(texto)
 
 
 # --- Micrófono (push-to-talk) -------------------------------------------------

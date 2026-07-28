@@ -137,10 +137,16 @@ from cristopher.tools.recordatorio_tools import (
     crear_recordatorio,
     listar_recordatorios,
 )
+from cristopher.tools.programador_tools import (
+    cancelar_programada,
+    listar_programadas,
+    programar_tarea,
+)
 from cristopher.tools.sesiones_tools import (
     sesion_conflictos,
     sesion_crear,
     sesion_diff,
+    sesion_discutir,
     sesion_escribir,
     sesion_leer,
     sesion_limpiar_worktree,
@@ -148,6 +154,7 @@ from cristopher.tools.sesiones_tools import (
     sesion_parar,
     sesion_vision_general,
 )
+from cristopher.tools.auto_arreglos_tools import auto_arreglo_lanzar_sesion
 from cristopher.tools.shell import run_shell
 from cristopher.tools.system_apps import abrir_app, cerrar_app
 from cristopher.tools.voz_tools import (
@@ -817,6 +824,61 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["rid"],
         },
         "fn": borrar_recordatorio,
+    },
+    {
+        "name": "programar_tarea",
+        "description": (
+            "Programa una instrucción para que la EJECUTES de verdad más tarde, con "
+            "TODAS tus herramientas (WhatsApp, correo, navegador, sesiones de código...) "
+            "— a diferencia de crear_recordatorio, que solo genera un aviso de texto. "
+            "Úsala para 'a las 5 envía un mensaje a X', o para encadenar varias fases de "
+            "un plan ('haz la fase 1 y en cuanto termines la 2, sin que te lo pida'): "
+            "llama a este tool una vez por fase con el mismo 'grupo' para que se disparen "
+            "en orden, cada una al terminar la anterior. Para 'lanza la sesión de código X "
+            "y no sigas hasta que termine', el paso que la lanza (con sesion_crear) debe ir "
+            "seguido de otro paso con 'espera_sesion' puesto al nombre de esa sesión."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "texto": {"type": "string", "description": "Instrucción completa a ejecutar, tal cual se la darías en el chat."},
+                "cuando": {
+                    "type": "string",
+                    "description": "Opcional. 'HH:MM', 'en N minutos', 'en N horas' o ISO. Vacío = no depende de una hora.",
+                },
+                "grupo": {
+                    "type": "string",
+                    "description": "Opcional. Nombre del plan/cadena; repite el mismo nombre para encadenar fases en orden.",
+                },
+                "espera_sesion": {
+                    "type": "string",
+                    "description": "Opcional. Nombre de una sesión de Claude Code que debe terminar antes de disparar este paso.",
+                },
+            },
+            "required": ["texto"],
+        },
+        "fn": programar_tarea,
+    },
+    {
+        "name": "listar_programadas",
+        "description": "Lista las tareas programadas/encadenadas y su estado (pendiente, lanzada, hecha, error, cancelada).",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": listar_programadas,
+    },
+    {
+        "name": "cancelar_programada",
+        "description": (
+            "Cancela una tarea programada por su número. Si el usuario lo pide por texto "
+            "y no sabes el número, llama antes a listar_programadas para encontrarlo."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer", "description": "Número de la tarea (el #N del listado)."},
+            },
+            "required": ["id"],
+        },
+        "fn": cancelar_programada,
     },
     # --- Música (Tanda A: reproducción + cola) --------------------------------
     {
@@ -1760,6 +1822,67 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": sesion_vision_general,
+    },
+    {
+        "name": "sesion_discutir",
+        "description": (
+            "Modo discusión (Fase 4b): lanza una sesión CRÍTICA efímera que evalúa "
+            "una propuesta con un ángulo distinto (abogado del diablo) y BLOQUEA "
+            "hasta que responda (puede tardar). Úsala cuando el usuario pida una "
+            "segunda opinión o crítica rigurosa sobre el trabajo de una sesión, o "
+            "sobre una idea/diseño que no viene de ninguna sesión. Devuelve las "
+            "posturas (propuesta / crítica / revisión si hubo ronda 2) SIN "
+            "fusionarlas: muéstraselas ambas al usuario tal cual y deja que él "
+            "decida quién tiene razón — nunca zanjes tú el debate ni asumas que la "
+            "crítica es correcta."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sesion_a": {
+                    "type": "string",
+                    "description": (
+                        "Id de la sesión cuyo trabajo se discute (opcional si das "
+                        "contenido). Si se da y contenido está vacío, se toma su "
+                        "diff (si es de código) o su último mensaje."
+                    ),
+                },
+                "contenido": {
+                    "type": "string",
+                    "description": (
+                        "Texto libre a discutir (una idea, un diseño) cuando no hay "
+                        "sesión detrás, o para forzar qué se discute en vez de lo "
+                        "que hizo sesion_a."
+                    ),
+                },
+                "tarea_critica": {
+                    "type": "string",
+                    "description": (
+                        "Ángulo extra opcional para la crítica (p. ej. 'céntrate en "
+                        "seguridad' o 'juzga solo la arquitectura')."
+                    ),
+                },
+                "modelo_b": {
+                    "type": "string",
+                    "description": (
+                        "Modelo de la sesión crítica: 'sonnet' SIEMPRE por defecto. "
+                        "Solo pasa 'opus' si el usuario lo pide explícitamente, o si "
+                        "tú se lo propones Y él lo aprueba en la conversación — "
+                        "nunca lo escales por tu cuenta."
+                    ),
+                },
+                "rondas": {
+                    "type": "integer",
+                    "description": (
+                        "1 (por defecto, solo la crítica) o 2 (la crítica vuelve a "
+                        "sesion_a para que revise — exige sesion_a). Nunca más de 2: "
+                        "una 3ª ronda apenas aporta y solo gasta tokens."
+                    ),
+                },
+            },
+            "required": [],
+        },
+        "fn": sesion_discutir,
     },
     # --- Modo concentración (deep work) ----------------------------------------
     {

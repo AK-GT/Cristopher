@@ -700,7 +700,11 @@
     setTarea(s.tarea); setRoster(s.subagentes);
     if (s.alertas) s.alertas.slice().reverse().forEach(addAlerta);
     if (s.log) s.log.forEach(addLog);
-    if (s.sesiones) { pintarSesiones(s.sesiones); window.__hudCodeSesiones && window.__hudCodeSesiones(s.sesiones); }
+    if (s.sesiones) {
+      panelAgentes.pintar(s.sesiones);
+      panelAutoArreglos.pintar(s.sesiones);
+      window.__hudCodeSesiones && window.__hudCodeSesiones(s.sesiones);
+    }
     if (s.concentracion) setConcentracion(s.concentracion);
   }
 
@@ -719,13 +723,15 @@
         case "alerta": addAlerta(m.datos); break;
         case "confirmacion": showConfirm(m.datos); break;
         case "sesiones":
-          pintarSesiones(m.datos);
+          panelAgentes.pintar(m.datos);
+          panelAutoArreglos.pintar(m.datos);
           window.__hudCodeSesiones && window.__hudCodeSesiones(m.datos);
           break;
         case "concentracion": setConcentracion(m.datos); break;
         case "modo_code": setModo(m.datos); break;
         case "sesion_entrada":
-          if (m.datos.nombre === sesionSeleccionada) appendTranscriptEntry(m.datos.entrada);
+          panelAgentes.onEntrada(m.datos);
+          panelAutoArreglos.onEntrada(m.datos);
           window.__hudCodeSesionEntrada && window.__hudCodeSesionEntrada(m.datos);
           break;
       }
@@ -735,9 +741,88 @@
   conectar();
 
   // ---------- Entrada ----------
-  $("form").addEventListener("submit", (e) => {
+  // Adjunto pendiente (imagen elegida con el picker, o audio grabado/elegido):
+  // { tipo: "imagen"|"audio", mime, blob } o null si no hay nada adjunto.
+  let adjuntoPendiente = null;
+  const adjuntoNombreEl = $("adjunto-nombre");
+
+  function mostrarAdjunto(etiqueta) {
+    adjuntoNombreEl.textContent = etiqueta;
+    adjuntoNombreEl.hidden = !etiqueta;
+  }
+
+  function limpiarAdjunto() {
+    adjuntoPendiente = null;
+    $("adjunto-file").value = "";
+    mostrarAdjunto("");
+  }
+
+  $("btn-adjuntar").addEventListener("click", () => $("adjunto-file").click());
+
+  $("adjunto-file").addEventListener("change", () => {
+    const file = $("adjunto-file").files[0];
+    if (!file) return;
+    const tipo = file.type.startsWith("image/") ? "imagen" : "audio";
+    adjuntoPendiente = { tipo, mime: file.type, blob: file };
+    mostrarAdjunto(`📎 ${file.name}`);
+  });
+
+  // Grabación de audio desde el propio navegador (MediaRecorder) — alternativa a
+  // elegir un archivo ya existente. audio/webm lo decodifica faster-whisper sin
+  // conversión aparte (ver voz.py::transcribir_archivo).
+  let mediaRecorder = null;
+  let grabando = false;
+  const btnGrabar = $("btn-grabar");
+
+  btnGrabar.addEventListener("click", async () => {
+    if (grabando) { mediaRecorder && mediaRecorder.stop(); return; }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      mostrarAdjunto("⚠️ sin acceso al micrófono");
+      return;
+    }
+    const chunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      grabando = false;
+      btnGrabar.classList.remove("grabando");
+      const blob = new Blob(chunks, { type: "audio/webm" });
+      adjuntoPendiente = { tipo: "audio", mime: "audio/webm", blob };
+      mostrarAdjunto("🎤 audio grabado");
+    };
+    mediaRecorder.start();
+    grabando = true;
+    btnGrabar.classList.add("grabando");
+    mostrarAdjunto("🎤 grabando…");
+  });
+
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  $("form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const input = $("entrada"); const texto = input.value.trim();
+    if (adjuntoPendiente) {
+      const { tipo, mime, blob } = adjuntoPendiente;
+      input.value = "";
+      limpiarAdjunto();
+      const datos_b64 = await blobToBase64(blob);
+      fetch("/enviar_media", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tipo, mime, datos_b64, texto }),
+      }).catch(() => {});
+      return;
+    }
     if (!texto) return;
     input.value = "";
     fetch("/enviar", {
@@ -748,19 +833,33 @@
 
   // ---------- Confirmación de acción irreversible ----------
   const confirmOverlay = $("confirm-overlay");
+  const confirmTextoRow = $("confirm-texto-row");
+  const confirmTextoInput = $("confirm-texto");
   function showConfirm(d) {
     $("confirm-body").textContent = (d && d.texto) || "¿Confirmar la acción?";
+    // permite_texto (preguntas de sesión): además de Confirmar/Cancelar,
+    // deja responder con un mensaje propio (p. ej. "B" o "indaga más") que sustituye
+    // al borrador propuesto — vacío si el usuario solo pincha Confirmar.
+    const conTexto = !!(d && d.permite_texto);
+    confirmTextoRow.hidden = !conTexto;
+    confirmTextoInput.value = "";
     confirmOverlay.hidden = false;
+    if (conTexto) confirmTextoInput.focus();
   }
   function resolveConfirm(ok) {
+    const texto = confirmTextoRow.hidden ? "" : confirmTextoInput.value.trim();
     confirmOverlay.hidden = true;
     fetch("/confirmar", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ok }),
+      body: JSON.stringify({ ok, texto }),
     }).catch(() => {});
   }
   $("confirm-ok").addEventListener("click", () => resolveConfirm(true));
   $("confirm-cancel").addEventListener("click", () => resolveConfirm(false));
+  $("confirm-texto-row").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    resolveConfirm(true);
+  });
 
   // ---------- NOW PLAYING (música) ----------
   const np = {
@@ -878,41 +977,55 @@
   notasTick();
   setInterval(notasTick, 4000);
 
-  // ---------- MODO AGENTES (sesiones vivas de Claude Code, Fase 2) ----------
-  const ag = {
-    overlay: $("agentes-overlay"), lista: $("agentes-lista"), transcript: $("agentes-transcript"),
-    formEscribir: $("agentes-form-escribir"), mensaje: $("agentes-mensaje"), parar: $("agentes-parar"),
-    formCrear: $("agentes-form-crear"), nombre: $("agentes-nombre"), ruta: $("agentes-ruta"), tarea: $("agentes-tarea"),
-  };
-  let sesionSeleccionada = null;
-  let sesionesCache = [];
+  // ---------- PROGRAMADAS (cola del programador de tareas, por polling) ----------
+  function pintarProgramadas(d) {
+    const el = $("programadas");
+    const list = (d && d.programadas) || [];
+    if (!list.length) { el.innerHTML = '<div class="empty">sin tareas programadas</div>'; return; }
+    el.innerHTML = list.map((p) => {
+      const partes = [];
+      if (p.grupo) partes.push(`grupo '${esc(p.grupo)}' paso ${esc(p.orden)}`);
+      if (p.dispara_en_iso) partes.push(esc(p.dispara_en_iso.replace("T", " ").slice(0, 16)));
+      if (p.espera_sesion) partes.push(`espera sesión '${esc(p.espera_sesion)}'`);
+      partes.push(esc(p.estado));
+      return `<div class="item"><small>#${esc(p.id)} · ${partes.join(" · ")}</small>${esc(p.texto)}` +
+        `<button type="button" class="prog-cancelar" data-id="${esc(p.id)}" title="Cancelar">×</button></div>`;
+    }).join("");
+  }
+  function programadasTick() {
+    fetch("/programadas").then((r) => r.json()).then(pintarProgramadas).catch(() => {});
+  }
+  programadasTick();
+  setInterval(programadasTick, 4000);
+  $("programadas").addEventListener("click", (e) => {
+    if (!e.target.classList.contains("prog-cancelar")) return;
+    const id = parseInt(e.target.dataset.id, 10);
+    fetch("/programadas/cancelar", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    }).then(programadasTick).catch(() => {});
+  });
+
+  // ---------- Panel de sesiones vivas de Claude Code (fábrica reutilizable) ----------
+  // Dos instancias concretas la usan: `panelAgentes` (todas las sesiones, con
+  // formulario de creación manual — modo agentes original, Fase 2) y
+  // `panelAutoArreglos` (solo las que CRISTOPHER lanzó por iniciativa propia,
+  // origen='auto_arreglo', sin formulario de creación: esas solo las crea él).
   const ICONOS_ESTADO = { arrancando: "🟡", trabajando: "🔧", esperando: "🟢", pregunta: "❓", terminado: "⚪", error: "🔴" };
+  const ESTADOS_FINALES = ["terminado", "error"];
 
-  function pintarSesiones(list) {
-    sesionesCache = list || [];
-    if (!sesionesCache.length) { ag.lista.innerHTML = '<div class="empty">sin sesiones</div>'; return; }
-    ag.lista.innerHTML = sesionesCache.map((s) => `
-      <div class="item${s.nombre === sesionSeleccionada ? " sel" : ""}" data-nombre="${esc(s.nombre)}">
-        <b>${ICONOS_ESTADO[s.estado] || "•"} ${esc(s.nombre)} [${esc(s.estado)}]</b>
-        <small>${esc(s.ruta)}</small>
-      </div>`).join("");
-    ag.lista.querySelectorAll(".item").forEach((el) => {
-      el.addEventListener("click", () => seleccionarSesion(el.dataset.nombre));
-    });
-    // Si la sesión ya no existe (no debería pasar) desactiva los controles.
-    if (sesionSeleccionada && !sesionesCache.some((s) => s.nombre === sesionSeleccionada)) {
-      sesionSeleccionada = null;
-      actualizarControles();
-    }
+  function fmtDuracion(seg) {
+    seg = Math.max(0, Math.floor(seg));
+    const h = Math.floor(seg / 3600), m = Math.floor((seg % 3600) / 60), s = seg % 60;
+    if (h) return `${h}h ${m}m`;
+    if (m) return `${m}m ${s}s`;
+    return `${s}s`;
   }
-
-  function actualizarControles() {
-    const activa = !!sesionSeleccionada;
-    ag.mensaje.disabled = !activa;
-    ag.formEscribir.querySelector('button[type="submit"]').disabled = !activa;
-    ag.parar.disabled = !activa;
+  function duracionTexto(s) {
+    if (s.creado_ts == null) return "";
+    const fin = ESTADOS_FINALES.includes(s.estado) ? (s.ultima_actividad_ts || s.creado_ts) : (Date.now() / 1000);
+    return fmtDuracion(fin - s.creado_ts);
   }
-
   function pintarEntradaTranscript(e) {
     const d = document.createElement("div");
     d.className = "e";
@@ -920,75 +1033,146 @@
     return d;
   }
 
-  function appendTranscriptEntry(entrada) {
-    if (ag.transcript.querySelector(".empty")) ag.transcript.innerHTML = "";
-    ag.transcript.appendChild(pintarEntradaTranscript(entrada));
-    ag.transcript.scrollTop = ag.transcript.scrollHeight;
-  }
+  function crearPanelSesiones(els, opts) {
+    opts = opts || {};
+    const filtroOrigen = opts.filtroOrigen || "";
+    const vacio = opts.vacio || "sin sesiones";
+    let seleccionada = null;
+    let cache = [];
 
-  function cargarTranscript(nombre) {
-    fetch("/sesiones/leer?nombre=" + encodeURIComponent(nombre) + "&n=200")
-      .then((r) => r.json())
-      .then((d) => {
-        const entradas = (d && d.transcript) || [];
-        if (!entradas.length) { ag.transcript.innerHTML = '<div class="empty">todavía sin transcript</div>'; return; }
-        ag.transcript.innerHTML = "";
-        entradas.forEach((e) => ag.transcript.appendChild(pintarEntradaTranscript(e)));
-        ag.transcript.scrollTop = ag.transcript.scrollHeight;
-      })
-      .catch(() => {});
-  }
+    function renderLista() {
+      if (!cache.length) { els.lista.innerHTML = `<div class="empty">${vacio}</div>`; return; }
+      els.lista.innerHTML = cache.map((s) => `
+        <div class="item${s.nombre === seleccionada ? " sel" : ""}" data-nombre="${esc(s.nombre)}">
+          <b>${ICONOS_ESTADO[s.estado] || "•"} ${esc(s.nombre)} [${esc(s.estado)}]</b>
+          <small>${esc(s.ruta)} · <span class="ag-tiempo" data-nombre="${esc(s.nombre)}">${esc(duracionTexto(s))}</span></small>
+        </div>`).join("");
+      els.lista.querySelectorAll(".item").forEach((el) => {
+        el.addEventListener("click", () => seleccionar(el.dataset.nombre));
+      });
+    }
 
-  function seleccionarSesion(nombre) {
-    sesionSeleccionada = nombre;
-    pintarSesiones(sesionesCache);
+    function pintar(list) {
+      cache = filtroOrigen ? (list || []).filter((s) => s.origen === filtroOrigen) : (list || []);
+      renderLista();
+      if (seleccionada && !cache.some((s) => s.nombre === seleccionada)) {
+        seleccionada = null;
+        actualizarControles();
+      }
+    }
+
+    function actualizarControles() {
+      const activa = !!seleccionada;
+      if (els.mensaje) els.mensaje.disabled = !activa;
+      if (els.formEscribir) els.formEscribir.querySelector('button[type="submit"]').disabled = !activa;
+      if (els.parar) els.parar.disabled = !activa;
+    }
+
+    function appendTranscriptEntry(entrada) {
+      if (els.transcript.querySelector(".empty")) els.transcript.innerHTML = "";
+      els.transcript.appendChild(pintarEntradaTranscript(entrada));
+      els.transcript.scrollTop = els.transcript.scrollHeight;
+    }
+
+    function cargarTranscript(nombre) {
+      fetch("/sesiones/leer?nombre=" + encodeURIComponent(nombre) + "&n=200")
+        .then((r) => r.json())
+        .then((d) => {
+          const entradas = (d && d.transcript) || [];
+          if (!entradas.length) { els.transcript.innerHTML = '<div class="empty">todavía sin transcript</div>'; return; }
+          els.transcript.innerHTML = "";
+          entradas.forEach((e) => els.transcript.appendChild(pintarEntradaTranscript(e)));
+          els.transcript.scrollTop = els.transcript.scrollHeight;
+        })
+        .catch(() => {});
+    }
+
+    function seleccionar(nombre) {
+      seleccionada = nombre;
+      renderLista();
+      actualizarControles();
+      cargarTranscript(nombre);
+    }
+
+    function tick() {
+      const url = filtroOrigen ? "/sesiones?origen=" + encodeURIComponent(filtroOrigen) : "/sesiones";
+      fetch(url).then((r) => r.json()).then((d) => pintar(d.sesiones || [])).catch(() => {});
+    }
+
+    setInterval(() => {
+      els.lista.querySelectorAll(".ag-tiempo").forEach((el) => {
+        const s = cache.find((x) => x.nombre === el.dataset.nombre);
+        if (s) el.textContent = duracionTexto(s);
+      });
+    }, 1000);
+
+    if (els.formCrear) {
+      els.formCrear.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const nombre = els.nombre.value.trim(), ruta = els.ruta.value.trim(), tarea = els.tarea.value.trim();
+        if (!nombre || !ruta || !tarea) return;
+        fetch("/sesiones/crear", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ nombre, ruta, tarea }),
+        }).then((r) => r.json()).then((d) => {
+          if (d.ok) { els.nombre.value = ""; els.ruta.value = ""; els.tarea.value = ""; tick(); }
+          else alert(d.error || "No se pudo crear la sesión.");
+        }).catch(() => {});
+      });
+    }
+
+    if (els.formEscribir) {
+      els.formEscribir.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const mensaje = els.mensaje.value.trim();
+        if (!mensaje || !seleccionada) return;
+        els.mensaje.value = "";
+        fetch("/sesiones/escribir", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ nombre: seleccionada, mensaje }),
+        }).catch(() => {});
+      });
+    }
+
+    if (els.parar) {
+      els.parar.addEventListener("click", () => {
+        if (!seleccionada) return;
+        fetch("/sesiones/parar", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ nombre: seleccionada }),
+        }).then(() => tick()).catch(() => {});
+      });
+    }
+
     actualizarControles();
-    cargarTranscript(nombre);
+
+    return {
+      pintar,
+      tick,
+      onEntrada(datos) { if (datos.nombre === seleccionada) appendTranscriptEntry(datos.entrada); },
+    };
   }
 
-  function sesionesTick() {
-    fetch("/sesiones").then((r) => r.json()).then((d) => pintarSesiones(d.sesiones || [])).catch(() => {});
-  }
-
+  const panelAgentes = crearPanelSesiones({
+    overlay: $("agentes-overlay"), lista: $("agentes-lista"), transcript: $("agentes-transcript"),
+    formEscribir: $("agentes-form-escribir"), mensaje: $("agentes-mensaje"), parar: $("agentes-parar"),
+    formCrear: $("agentes-form-crear"), nombre: $("agentes-nombre"), ruta: $("agentes-ruta"), tarea: $("agentes-tarea"),
+  });
   $("agentes-toggle").addEventListener("click", () => {
-    ag.overlay.hidden = false;
-    sesionesTick();
+    $("agentes-overlay").hidden = false;
+    panelAgentes.tick();
   });
-  $("agentes-close").addEventListener("click", () => { ag.overlay.hidden = true; });
+  $("agentes-close").addEventListener("click", () => { $("agentes-overlay").hidden = true; });
 
-  ag.formCrear.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const nombre = ag.nombre.value.trim(), ruta = ag.ruta.value.trim(), tarea = ag.tarea.value.trim();
-    if (!nombre || !ruta || !tarea) return;
-    fetch("/sesiones/crear", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nombre, ruta, tarea }),
-    }).then((r) => r.json()).then((d) => {
-      if (d.ok) { ag.nombre.value = ""; ag.ruta.value = ""; ag.tarea.value = ""; sesionesTick(); }
-      else alert(d.error || "No se pudo crear la sesión.");
-    }).catch(() => {});
+  const panelAutoArreglos = crearPanelSesiones({
+    overlay: $("autoarreglos-overlay"), lista: $("autoarreglos-lista"), transcript: $("autoarreglos-transcript"),
+    formEscribir: $("autoarreglos-form-escribir"), mensaje: $("autoarreglos-mensaje"), parar: $("autoarreglos-parar"),
+  }, { filtroOrigen: "auto_arreglo", vacio: "sin auto-arreglos" });
+  $("autoarreglos-toggle").addEventListener("click", () => {
+    $("autoarreglos-overlay").hidden = false;
+    panelAutoArreglos.tick();
   });
-
-  ag.formEscribir.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const mensaje = ag.mensaje.value.trim();
-    if (!mensaje || !sesionSeleccionada) return;
-    ag.mensaje.value = "";
-    fetch("/sesiones/escribir", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nombre: sesionSeleccionada, mensaje }),
-    }).catch(() => {});
-  });
-
-  ag.parar.addEventListener("click", () => {
-    if (!sesionSeleccionada) return;
-    fetch("/sesiones/parar", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ nombre: sesionSeleccionada }),
-    }).then(() => sesionesTick()).catch(() => {});
-  });
-
-  actualizarControles();
+  $("autoarreglos-close").addEventListener("click", () => { $("autoarreglos-overlay").hidden = true; });
 
   // ---------- Reloj ----------
   function tick() { $("clock").textContent = new Date().toLocaleTimeString("es-ES"); }

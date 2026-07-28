@@ -98,6 +98,10 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
 
 # --- Fase 8: HUD -------------------------------------------------------------
 HUD_PORT = int(os.getenv("CRISTOPHER_HUD_PORT", "8765"))
+# Imágenes adjuntadas por /enviar_media, guardadas en disco (gitignored, dentro de
+# DATA) para que el modelo pueda darle su ruta a tools que necesitan un archivo real
+# (p. ej. huella_buscar_cara) — los bytes solos no bastan para esas tools.
+HUD_UPLOADS_DIR = DATA / "hud" / "uploads"
 
 # --- Fase 7: proactividad ----------------------------------------------------
 PROACTIVO_DB = DATA / "proactivo.db"          # recordatorios + dedup de avisos
@@ -267,6 +271,13 @@ WHATSAPP_HTTP_TIMEOUT = 15    # s: timeout por request a la API del servicio Nod
 # de estar "chateando en vivo" desde el móvil.
 WHATSAPP_COMANDO_PREFIJO = "/cristopher"
 POLL_WHATSAPP_COMANDOS = int(os.getenv("CRISTOPHER_POLL_WHATSAPP", "7"))
+
+# Si un turno disparado por WhatsApp (comando o nota de voz) tarda más de esto en
+# responder, se manda UN aviso de "sigo en ello" por el mismo chat — desde el móvil
+# no se ve el HUD, así que el silencio de una tool lenta (huella_investigar, p. ej.)
+# se siente como que se colgó. Un solo aviso (no repetido) es suficiente (ver
+# hud/__main__.py::_procesar).
+WHATSAPP_HEARTBEAT_SEGUNDOS = int(os.getenv("CRISTOPHER_WHATSAPP_HEARTBEAT", "25"))
 
 
 class ConfigError(RuntimeError):

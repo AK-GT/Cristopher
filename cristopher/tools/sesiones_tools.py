@@ -6,7 +6,9 @@ ocultan (§1 "fallos explícitos").
 
 from __future__ import annotations
 
-from cristopher.sesiones import SesionesError, get_gestor_sesiones
+import time
+
+from cristopher.sesiones import ESTADOS_FINALES, SesionesError, get_gestor_sesiones
 
 _ICONOS_ESTADO = {
     "arrancando": "🟡",
@@ -126,6 +128,30 @@ def _sufijo_modelo_contexto(f: dict) -> str:
     return f" ({', '.join(partes)})" if partes else ""
 
 
+def _fmt_duracion(segundos: float) -> str:
+    """'3m', '1h 12m', '45s' — cronómetro legible, sin librería de fechas."""
+    segundos = max(0, int(segundos))
+    h, resto = divmod(segundos, 3600)
+    m, s = divmod(resto, 60)
+    if h:
+        return f"{h}h {m}m"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+def _sufijo_duracion(f: dict) -> str:
+    """'lleva 12m trabajando' (sesión activa) o 'estuvo activa 8m' (terminada/error),
+    calculado con creado_ts/ultima_actividad_ts (Fase 5: cronómetro de sesión)."""
+    creado_ts = f.get("creado_ts")
+    if creado_ts is None:
+        return ""
+    if f.get("estado") in ESTADOS_FINALES:
+        fin = f.get("ultima_actividad_ts") or creado_ts
+        return f" · estuvo activa {_fmt_duracion(fin - creado_ts)}"
+    return f" · lleva {_fmt_duracion(time.time() - creado_ts)} trabajando"
+
+
 def sesion_listar() -> str:
     """Muestra el estado de todas las sesiones (activas y ya terminadas)."""
     filas = get_gestor_sesiones().listar()
@@ -134,7 +160,7 @@ def sesion_listar() -> str:
     return "\n".join(
         f"{_ICONOS_ESTADO.get(f['estado'], '•')} {f['nombre']} [{f['estado']}] · "
         f"{f['ruta']} · última actividad: {f['ultima_actividad']}"
-        f"{_sufijo_modelo_contexto(f)}"
+        f"{_sufijo_duracion(f)}{_sufijo_modelo_contexto(f)}"
         for f in filas
     )
 
@@ -167,6 +193,44 @@ def sesion_parar(nombre: str) -> str:
         return f"ERROR: {exc}"
 
 
+def sesion_discutir(
+    sesion_a: str = "", contenido: str = "", tarea_critica: str = "",
+    modelo_b: str = "sonnet", rondas: int = 1,
+) -> str:
+    """Modo discusión (Fase 4b): lanza una sesión CRÍTICA efímera que evalúa una
+    propuesta con un ángulo distinto — bloquea hasta que responda (puede tardar).
+
+    Úsala cuando el usuario pida una segunda opinión o una crítica rigurosa sobre
+    el trabajo de una sesión, o sobre una idea/diseño (tuyo o suyo) que no tiene
+    por qué venir de ninguna sesión. Modelo por defecto SIEMPRE 'sonnet': solo pasa
+    'opus' si el usuario lo pide explícitamente, o si tú se lo propones Y él lo
+    aprueba en la conversación — nunca lo escales por tu cuenta.
+
+    Devuelve las posturas (propuesta / crítica / revisión si hubo ronda 2) tal
+    cual, SIN fusionarlas: muéstraselas ambas al usuario y deja que él decida quién
+    tiene razón — nunca zanjes tú el debate ni asumas que la crítica es correcta.
+
+    Args:
+        sesion_a: id de la sesión cuyo trabajo se discute (opcional si das
+            `contenido`). Si se da y `contenido` está vacío, se toma su diff (si
+            es de código) o su último mensaje.
+        contenido: texto libre a discutir (una idea, un diseño) cuando no hay
+            sesión detrás, o para forzar qué se discute en vez de lo que hizo
+            `sesion_a`.
+        tarea_critica: ángulo extra opcional para la crítica (p. ej. "céntrate en
+            seguridad" o "juzga solo la arquitectura").
+        modelo_b: modelo de la sesión crítica ('sonnet' por defecto).
+        rondas: 1 (solo la crítica, por defecto) o 2 (la crítica vuelve a
+            `sesion_a` para que revise — exige `sesion_a`). Nunca más de 2.
+    """
+    try:
+        return get_gestor_sesiones().discutir(
+            sesion_a, contenido, tarea_critica, modelo_b, rondas,
+        )
+    except SesionesError as exc:
+        return f"ERROR: {exc}"
+
+
 def sesion_vision_general() -> str:
     """Resumen de todas las sesiones (activas y terminadas): qué hace cada una,
     cuál está bloqueada/esperando y su último mensaje, para detectar conflictos
@@ -188,6 +252,6 @@ def sesion_vision_general() -> str:
         partes.append(
             f"{_ICONOS_ESTADO.get(f['estado'], '•')} {f['nombre']} [{f['estado']}] · "
             f"{f['ruta']} · última actividad: {f['ultima_actividad']}"
-            f"{_sufijo_modelo_contexto(f)}{ultimo}"
+            f"{_sufijo_duracion(f)}{_sufijo_modelo_contexto(f)}{ultimo}"
         )
     return "\n".join(partes)

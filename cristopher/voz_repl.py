@@ -39,6 +39,32 @@ def _es_afirmativo(resp: str) -> bool:
     return bool(tokens & _AFIRMATIVAS)
 
 
+def _hablar_interrumpible(texto: str) -> None:
+    """Reproduce la respuesta pero permite cortarla pulsando ESPACIO mientras suena
+    (barge-in, Fase 9): no hace falta esperar a que CRISTOPHER termine de hablar
+    para volver a tomar la palabra. Un listener de teclado en segundo plano vigila
+    SOLO durante esta reproducción — se para en cuanto `hablar()` termina (sola o
+    interrumpida), para no dejar dos listeners vivos a la vez con el siguiente
+    `grabar_push_to_talk()` del bucle principal."""
+    try:
+        from pynput import keyboard
+    except ImportError:
+        voz.hablar(texto)  # sin pynput no hay barge-in, pero la voz debe seguir funcionando
+        return
+
+    def _on_press(k):
+        if k == keyboard.Key.space:
+            voz.detener_habla()
+            return False  # detiene este listener
+
+    listener = keyboard.Listener(on_press=_on_press)
+    listener.start()
+    try:
+        voz.hablar(texto)
+    finally:
+        listener.stop()
+
+
 def _voz_confirm(prompt: str) -> bool:
     """Confirmador por VOZ (§9): lee el borrador en pantalla, lo pregunta en voz alta y
     espera un 'sí/no' hablado (push-to-talk). Ante duda o silencio, NO envía."""
@@ -107,7 +133,7 @@ def main() -> int:
         _, respuesta = split_final(answer)
         print(f"{CYAN}{BOLD}CRISTOPHER ›{RESET} {respuesta}")
         try:
-            voz.hablar(respuesta)
+            _hablar_interrumpible(respuesta)
         except voz.VozError as exc:
             print(f"{AMBER}[VOZ] {exc}{RESET}")
 

@@ -45,6 +45,12 @@ def _parse_cuando(cuando: str) -> datetime:
         ) from exc
 
 
+def parse_cuando_a_datetime(cuando: str) -> datetime:
+    """Wrapper público de _parse_cuando para que otras tools de programación
+    (programador_tools.py) reutilicen el mismo parser sin reimplementarlo."""
+    return _parse_cuando(cuando)
+
+
 def crear_recordatorio(texto: str, cuando: str) -> str:
     """Programa un recordatorio para una hora futura. El demonio te avisará entonces.
 

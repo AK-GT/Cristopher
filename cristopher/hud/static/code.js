@@ -66,8 +66,30 @@
   const listaEl = $("code-sesiones-lista");
   const transcriptEl = $("code-transcript");
   const ICONOS_ESTADO = { arrancando: "🟡", trabajando: "🔧", esperando: "🟢", pregunta: "❓", terminado: "⚪", error: "🔴" };
+  const ESTADOS_FINALES = ["terminado", "error"];
   let sesionSeleccionada = null;
   let sesionesCache = [];
+
+  // ---------- Cronómetro por sesión (desde creado_ts; congelado si ya terminó) ----------
+  function fmtDuracion(seg) {
+    seg = Math.max(0, Math.floor(seg));
+    const h = Math.floor(seg / 3600), m = Math.floor((seg % 3600) / 60), s = seg % 60;
+    if (h) return `${h}h ${m}m`;
+    if (m) return `${m}m ${s}s`;
+    return `${s}s`;
+  }
+  function duracionTexto(s) {
+    if (s.creado_ts == null) return "";
+    const fin = ESTADOS_FINALES.includes(s.estado) ? (s.ultima_actividad_ts || s.creado_ts) : (Date.now() / 1000);
+    return fmtDuracion(fin - s.creado_ts);
+  }
+  setInterval(() => {
+    if (!listaEl) return;
+    listaEl.querySelectorAll(".code-tiempo").forEach((el) => {
+      const s = sesionesCache.find((x) => x.nombre === el.dataset.nombre);
+      if (s) el.textContent = duracionTexto(s);
+    });
+  }, 1000);
 
   function actualizarControles() {
     const activa = !!sesionSeleccionada;
@@ -161,7 +183,7 @@
       return `
       <div class="item${s.nombre === sesionSeleccionada ? " sel" : ""}" data-nombre="${esc(s.nombre)}">
         <b>${ICONOS_ESTADO[s.estado] || "•"} ${esc(s.nombre)} [${esc(s.estado)}]</b>
-        <small>${esc(s.ruta)}${detalle ? " · " + esc(detalle) : ""}</small>
+        <small>${esc(s.ruta)}${detalle ? " · " + esc(detalle) : ""} · <span class="code-tiempo" data-nombre="${esc(s.nombre)}">${esc(duracionTexto(s))}</span></small>
       </div>`;
     }).join("");
     listaEl.querySelectorAll(".item").forEach((el) => {
@@ -345,6 +367,13 @@
     btnRevisar.addEventListener("click", () => {
       if (!sesionSeleccionada) { alert("Selecciona antes una sesión en el widget Sesiones."); return; }
       enviarChat(`Revisa el diff de la sesión '${sesionSeleccionada}' y dame tu veredicto.`);
+    });
+  }
+  const btnDiscutir = $("code-btn-discutir");
+  if (btnDiscutir) {
+    btnDiscutir.addEventListener("click", () => {
+      if (!sesionSeleccionada) { alert("Selecciona antes una sesión en el widget Sesiones."); return; }
+      enviarChat(`Discute el trabajo de la sesión '${sesionSeleccionada}' con una sesión crítica y muéstrame ambas posturas.`);
     });
   }
 

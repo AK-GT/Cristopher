@@ -48,9 +48,12 @@ class Store {
     fs.writeFileSync(this.indexPath, JSON.stringify(index, null, 2), "utf8");
   }
 
-  guardarMensaje({ chatId, id, fromMe, texto, ts, nombre }) {
+  guardarMensaje({
+    chatId, id, fromMe, texto, ts, nombre, esSelfChat = false,
+    tipo = "texto", mediaPath = null, mimetype = null,
+  }) {
     const mensajes = this._leerChat(chatId);
-    mensajes.push({ id, from: fromMe ? "yo" : nombre, texto, ts, fromMe });
+    mensajes.push({ id, from: fromMe ? "yo" : nombre, texto, ts, fromMe, tipo, mediaPath, mimetype });
     const recortados = mensajes.slice(-MAX_POR_CHAT);
     fs.writeFileSync(this._archivoChat(chatId), JSON.stringify(recortados, null, 2), "utf8");
 
@@ -58,12 +61,18 @@ class Store {
     index[chatId] = { nombre: fromMe ? (index[chatId] || {}).nombre || chatId : nombre, ultimo_ts: ts };
     this._guardarIndex(index);
 
-    if (!fromMe) {
+    // El chat "Note to self" llega con fromMe:true igual que un mensaje saliente
+    // normal; esSelfChat lo trata igual como "nuevo" para que el watcher de
+    // comandos de CRISTOPHER pueda detectarlo (ver whatsapp/server.js).
+    if (!fromMe || esSelfChat) {
       const actual = this._nuevos.get(chatId) || { n: 0, nombre };
       this._nuevos.set(chatId, {
         n: actual.n + 1,
         ultimoId: id,
         ultimoTexto: texto,
+        ultimoTipo: tipo,
+        ultimoMediaPath: mediaPath,
+        ultimoMimetype: mimetype,
         nombre,
       });
     }
@@ -78,6 +87,9 @@ class Store {
         n_nuevos: v.n,
         ultimo_texto: v.ultimoTexto,
         ultimo_id: v.ultimoId,
+        tipo: v.ultimoTipo || "texto",
+        media_path: v.ultimoMediaPath || null,
+        mimetype: v.ultimoMimetype || null,
       });
     }
     return out;

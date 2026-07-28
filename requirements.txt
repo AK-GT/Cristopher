@@ -12,20 +12,17 @@ google-auth-httplib2>=0.2.0
 # Fase 5 — Navegador. Tras instalar: `playwright install chromium`.
 playwright>=1.40.0
 
-# Fase 6 — Voz. STT (faster-whisper), TTS (piper-tts), audio (sounddevice), micrófono
-# (pynput). Descargar la voz: python -m piper.download_voices es_ES-davefx-medium
-#   --download-dir data/voice/piper
+# Fase 6 — Voz. STT (faster-whisper), TTS (piper-tts, 100% local/offline), audio
+# (sounddevice), micrófono (pynput). Las voces oficiales del catálogo se descargan con
+# python -m piper.download_voices <nombre> --download-dir data/voice/piper; las voces
+# de comunidad (VOCES_CATALOGO con url_onnx/url_config) se bajan por HTTP directo con
+# `requests` (ya dependencia transitiva vía google-genai, igual que para Tavily/WhatsApp
+# más abajo) — ver voz.py::descargar_voz.
 faster-whisper>=1.0.0
 piper-tts>=1.2.0
 sounddevice>=0.4.6
 numpy>=1.24.0
 pynput>=1.7.0
-
-# Voz — motor en la nube OPCIONAL (voces masculinas de España vía edge-tts, servicio no
-# oficial de Microsoft Edge). Piper sigue siendo el motor por defecto y offline; esto
-# solo hace falta si el usuario elige explícitamente una voz en la nube (voz.nube_elegir).
-# Reproduce el MP3 resultante con VLC (ya es dependencia del proyecto, ver más abajo).
-edge-tts>=6.1.0
 
 # Fase 8 — HUD. Métricas de sistema. three.js va vendorizado en
 # cristopher/hud/static/three.min.js (offline, sin CDN).
