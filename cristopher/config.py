@@ -280,6 +280,23 @@ POLL_WHATSAPP_COMANDOS = int(os.getenv("CRISTOPHER_POLL_WHATSAPP", "7"))
 WHATSAPP_HEARTBEAT_SEGUNDOS = int(os.getenv("CRISTOPHER_WHATSAPP_HEARTBEAT", "25"))
 
 
+# --- Fase 1: Modo Control Total (control_total/) ------------------------------
+# Atajo global de emergencia (hombre muerto): pynput.keyboard.GlobalHotKeys, mismo
+# formato de combo que CANCION_ATAJO_CORTAR (escucha.py). Elegido por el usuario pese
+# al aviso de que Ctrl+F3 tiene significado propio en algunas apps (p. ej. "Nuevo
+# nombre" en Excel) — pynput no suprime la tecla, así que la app en foco también la
+# recibe. Sin colisión con Ctrl+Shift+Esc (Task Manager) ni Ctrl+M (escucha.py).
+CONTROL_TOTAL_HOTKEY = os.getenv("CRISTOPHER_CONTROL_TOTAL_HOTKEY", "<ctrl>+<f3>")
+CONTROL_TOTAL_LOG = DATA / "control_total.log"
+CONTROL_TOTAL_LOG_MAXLEN = 500   # tope de entradas de auditoría en memoria (deque)
+# Límite por defecto de una sesión de control (lo consumirá el bucle de Fase 2; se fija
+# ya porque condiciona cómo se escribe todo lo demás). Mismo orden de magnitud que
+# SUBAGENT_TIMEOUT (600s) y MAX_STEPS (40, bucle ReAct principal en agent.py), escalado
+# porque una sesión de control visual (percepción->decisión->acción) es más lenta por paso.
+CONTROL_TOTAL_SESION_TIMEOUT = 600      # s
+CONTROL_TOTAL_SESION_MAX_PASOS = 300
+
+
 class ConfigError(RuntimeError):
     """Fallo de configuración que impide arrancar (p. ej. falta la API key)."""
 

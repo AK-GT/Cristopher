@@ -32,6 +32,7 @@ from cristopher.config import (
     POLL_WHATSAPP_COMANDOS,
     WHATSAPP_HEARTBEAT_SEGUNDOS,
 )
+from cristopher.control_total import killswitch
 from cristopher.tools.google_tools import set_confirmer, set_confirmer_texto
 
 STATIC = Path(__file__).parent / "static"
@@ -839,13 +840,23 @@ def main() -> int:
     get_gestor_sesiones().set_on_evento(_on_evento_sesion)
     from cristopher.programador import get_programador
     get_programador().recuperar_huerfanas()
+    # Kill-switch del Modo Control Total (Fase 1): registrado desde el arranque del
+    # sistema vivo, no desde un script aparte — queda escuchando todo lo que dure este
+    # proceso. Inofensivo mientras no haya ninguna primitiva de control_total en marcha
+    # (Fase 2/4 son quienes lo consumen de verdad); degrada solo con un log.warning si
+    # falta pynput o falla el registro (ver killswitch.iniciar_killswitch).
+    killswitch.iniciar_killswitch()
     threading.Thread(target=_worker, daemon=True).start()
     threading.Thread(target=_muestreo_metricas, daemon=True).start()
     threading.Thread(target=_demonio_proactivo, daemon=True).start()
     threading.Thread(target=_whatsapp_comandos_watcher, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", HUD_PORT), Handler)
     url = f"http://localhost:{HUD_PORT}"
-    print(f"CRISTOPHER HUD en {url}  (Ctrl+C para salir)")
+    # Mismo guard que cristopher/__main__.py: bajo pythonw (sin consola) sys.stdout es
+    # None y print() revienta con AttributeError (bpo-13120), matando el proceso antes
+    # de abrir el navegador o arrancar el servidor.
+    if sys.stdout is not None:
+        print(f"CRISTOPHER HUD en {url}  (Ctrl+C para salir)")
     try:
         # Ventana propia en el lado izquierdo: la canción de arranque (escucha.py)
         # abre la suya a la derecha (--window-position=960,0); con webbrowser.open()
@@ -861,7 +872,8 @@ def main() -> int:
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
-        print("\nHUD detenido.")
+        if sys.stdout is not None:
+            print("\nHUD detenido.")
     return 0
 
 
