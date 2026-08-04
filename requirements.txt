@@ -103,3 +103,9 @@ Pillow>=10.4.0
 # transitivamente vía google-genai (igual que para Tavily). El servicio en sí es
 # Node.js: requiere Node.js instalado en el sistema + `npm install` en whatsapp/
 # (dependencias declaradas en whatsapp/package.json).
+
+# Modo Control Total, Fase 3 — widget flotante (ventana nativa sin marco, siempre
+# encima). Usa el runtime WebView2 de Windows (preinstalado en Win10 1803+/Win11
+# junto con Edge). Verificado real en esta máquina: crea una ventana frameless/
+# on_top/transparent sin errores (spike propio antes de construir el resto encima).
+pywebview>=6.0

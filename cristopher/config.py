@@ -296,6 +296,17 @@ CONTROL_TOTAL_LOG_MAXLEN = 500   # tope de entradas de auditoría en memoria (de
 CONTROL_TOTAL_SESION_TIMEOUT = 600      # s
 CONTROL_TOTAL_SESION_MAX_PASOS = 300
 
+# --- Fase 2: bucle percepción->decisión->acción + guardarraíles ---------------
+# Atajo de autocompletado del gestor de contraseñas (Bitwarden/1Password/...),
+# disparado por guardarraíles.py en vez de escribir la contraseña. Vacío por
+# defecto (sin gestor configurado): el guardarraíl pausa y pide rellenarla a
+# mano en su lugar.
+CONTROL_TOTAL_GESTOR_CONTRASENAS_HOTKEY = os.getenv("CRISTOPHER_GESTOR_CONTRASENAS_HOTKEY", "")
+
+# --- Fase 3: widget flotante + borde de pantalla -------------------------------
+CONTROL_TOTAL_WIDGET_POS = DATA / "control_total_widget.json"  # posición recordada
+CONTROL_TOTAL_OVERLAY_COLOR = "#2f8fff"   # azul del borde (mismo tono que el HUD)
+
 
 class ConfigError(RuntimeError):
     """Fallo de configuración que impide arrancar (p. ej. falta la API key)."""

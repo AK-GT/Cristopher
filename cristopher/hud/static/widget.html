@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CRISTOPHER · widget</title>
+  <link rel="stylesheet" href="widget.css" />
+</head>
+<body data-estado="reposo">
+  <!-- pywebview-drag-region: SOLO estos elementos arrastran la ventana (ver
+       widget_flotante.py::lanzar, DRAG_REGION_DIRECT_TARGET_ONLY) — los botones
+       y el input quedan fuera a propósito. -->
+  <header class="w-top pywebview-drag-region">
+    <span class="w-core pywebview-drag-region" id="w-core"></span>
+    <span class="w-name pywebview-drag-region">CRISTOPHER</span>
+    <span class="w-status pywebview-drag-region" id="w-status">reposo</span>
+    <span class="w-controles">
+      <button type="button" id="w-restaurar" title="Restaurar">▢</button>
+      <button type="button" id="w-minimizar" title="Minimizar">—</button>
+      <button type="button" id="w-cerrar" title="Cerrar">✕</button>
+    </span>
+  </header>
+  <div class="w-log" id="w-log"></div>
+  <form class="w-form" id="w-form">
+    <input type="text" id="w-entrada" autocomplete="off" placeholder="Escribe aquí…" />
+    <button type="submit">▶</button>
+  </form>
+  <script src="widget.js"></script>
+</body>
+</html>

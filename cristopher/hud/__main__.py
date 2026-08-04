@@ -524,6 +524,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             return self._static("index.html")
+        if self.path in ("/widget", "/widget.html"):
+            return self._static("widget.html")
         if self.path == "/estado":
             return self._json(bus.snapshot())
         if self.path == "/eventos":
@@ -818,6 +820,25 @@ def _whatsapp_comandos_watcher():
         pass  # degrada con elegancia si no hay Node/WhatsApp vinculado
 
 
+def _otra_instancia_viva() -> bool:
+    """True si ya hay un HUD real respondiendo en HUD_PORT.
+
+    ThreadingHTTPServer hereda allow_reuse_address=True, y en Windows eso permite
+    que un segundo proceso "bindee" el mismo puerto sin error — así que confiar en
+    que server.listen() falle no basta (así se acumularon 3 procesos `-m cristopher`
+    vivos a la vez, cada uno con su propio hilo whatsapp_comandos compitiendo por
+    lanzar el servicio de Node, lo que corrompió la sesión de WhatsApp — ver
+    diagnóstico del bug "no lee lo que le escribo por WhatsApp"). Mismo patrón que
+    escucha.py::_hud_vivo().
+    """
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", HUD_PORT), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 def _chrome_path() -> str | None:
     """Ruta a chrome.exe si está instalado en una ubicación estándar; si no, None."""
     candidatos = [
@@ -832,6 +853,18 @@ def _chrome_path() -> str | None:
 
 
 def main() -> int:
+    if _otra_instancia_viva():
+        # Ya hay un HUD real corriendo: reabre la pestaña en vez de apilar otro
+        # proceso en silencio (ver _otra_instancia_viva). No es un fallo: es el
+        # mismo caso que resuelve escucha.py cuando ya está despierto.
+        url = f"http://localhost:{HUD_PORT}"
+        if sys.stdout is not None:
+            print(f"CRISTOPHER ya está corriendo en {url}; abro la pestaña.")
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+        return 0
     # En el HUD, la confirmación de acciones irreversibles (§9) es por clic, no por
     # stdin: el usuario escribe desde el navegador y no vería un input() del servidor.
     set_confirmer(_hud_confirm)
