@@ -50,11 +50,12 @@ from cristopher.config import (
     PALMADA_GAP_MIN,
     PALMADA_UMBRAL,
     ROOT,
+    RUIDO_MARGEN_DB,
+    RUIDO_MUESTREO_SEGUNDOS,
 )
 
 SR = 16000                 # tasa de muestreo del micrófono
 BLOQUE = int(SR * 0.03)    # ~30 ms por bloque de análisis
-CHEQUEO_FLAG_SEGUNDOS = 1.0  # cada cuánto relee el archivo bandera dentro del bucle
 _ATAJO = "CRISTOPHER Escucha.lnk"   # nombre del acceso directo en la carpeta Inicio
 CANCION_DURACION_MAX = 20   # s: corte automático de la canción de arranque
 CANCION_ATAJO_CORTAR = "<ctrl>+m"   # atajo global para cortarla a mano
@@ -239,12 +240,21 @@ def escuchar(visible: bool = False) -> None:
               ESCUCHA_ATAJO_CANCELAR)
     if visible:
         print("CRISTOPHER — escuchando en vivo (2 palmadas disparan de verdad; Ctrl+C para salir)")
-        print(f"  Umbral fijo: PALMADA_UMBRAL={PALMADA_UMBRAL}\n")
+        print(f"  Umbral fijo (suelo): PALMADA_UMBRAL={PALMADA_UMBRAL}  "
+              f"margen sobre ruido: +{RUIDO_MARGEN_DB:.0f}dB\n")
 
     activo_prev = False    # ¿el bloque anterior superaba el umbral? (para el flanco)
     ultimo_onset = -1e9    # instante de la última palmada aislada (centinela: nunca empareja)
     hasta = 0.0            # fin de la guarda (cooldown) tras disparar
-    ultimo_chequeo_flag = 0.0
+    ultimo_muestreo = 0.0
+
+    # Umbral adaptativo al ruido de fondo (ver RUIDO_* en config.py): arranca en el
+    # umbral fijo hasta tener la primera muestra de ruido ambiente.
+    umbral_db_suelo = 20 * np.log10(PALMADA_UMBRAL)
+    umbral = PALMADA_UMBRAL
+    ruido_suma = 0.0
+    ruido_n = 0
+    promedio_ruido_db = None
 
     try:
         with sd.InputStream(samplerate=SR, channels=1, dtype="float32",
@@ -255,18 +265,25 @@ def escuchar(visible: bool = False) -> None:
 
                 data, _ = stream.read(BLOQUE)
                 pico = float(np.max(np.abs(data)))
+                pico_db = 20 * np.log10(max(pico, 1e-6))
                 ahora = time.monotonic()
                 marca = ""
 
-                # Reconsulta el archivo bandera sin martillear el disco cada 30ms.
-                if ahora - ultimo_chequeo_flag >= CHEQUEO_FLAG_SEGUNDOS:
-                    ultimo_chequeo_flag = ahora
+                # Cada RUIDO_MUESTREO_SEGUNDOS: relee el archivo bandera y toma una
+                # muestra de ruido de fondo para recalcular el umbral dinámico.
+                if ahora - ultimo_muestreo >= RUIDO_MUESTREO_SEGUNDOS:
+                    ultimo_muestreo = ahora
                     if ESCUCHA_FLAG_DESACTIVAR.exists():
                         log.info("Archivo bandera detectado; dejo de escuchar.")
                         return
+                    ruido_suma += pico_db
+                    ruido_n += 1
+                    promedio_ruido_db = ruido_suma / ruido_n
+                    umbral_db = max(umbral_db_suelo, promedio_ruido_db + RUIDO_MARGEN_DB)
+                    umbral = 10 ** (umbral_db / 20)
 
                 # Flanco de subida = onset (una posible palmada).
-                if pico >= PALMADA_UMBRAL and not activo_prev:
+                if pico >= umbral and not activo_prev:
                     if ahora >= hasta:  # fuera de la guarda
                         dt = ahora - ultimo_onset
                         if PALMADA_GAP_MIN <= dt <= PALMADA_GAP_MAX:
@@ -278,13 +295,14 @@ def escuchar(visible: bool = False) -> None:
                             marca = "  <- palmada"
                             ultimo_onset = ahora  # primera palmada (o demasiado tarde)
                     activo_prev = True
-                elif pico < PALMADA_UMBRAL:
+                elif pico < umbral:
                     activo_prev = False
 
                 if visible:
-                    db = 20 * np.log10(max(pico, 1e-6))
-                    linea = f"nivel={pico:6.3f} ({db:6.1f} dB)  umbral={PALMADA_UMBRAL:6.3f}{marca}"
-                    print("\r" + linea.ljust(70), end="", flush=True)
+                    ruido_txt = f"{promedio_ruido_db:5.1f}dB" if promedio_ruido_db is not None else "  n/a"
+                    linea = (f"nivel={pico:6.3f} ({pico_db:6.1f} dB)  ruido_medio={ruido_txt}  "
+                             f"umbral={umbral:6.3f}{marca}")
+                    print("\r" + linea.ljust(90), end="", flush=True)
     except EscuchaError:
         raise
     except KeyboardInterrupt:
@@ -305,11 +323,18 @@ def calibrar() -> None:
     sd = _importar_sounddevice()
 
     print("CRISTOPHER — calibración (Ctrl+C para salir; esto NO lanza el agente)")
-    print(f"  Umbral fijo: PALMADA_UMBRAL={PALMADA_UMBRAL}")
+    print(f"  Umbral fijo (suelo): PALMADA_UMBRAL={PALMADA_UMBRAL}  margen sobre ruido: +{RUIDO_MARGEN_DB:.0f}dB")
     print(f"  Ventana entre palmadas: {PALMADA_GAP_MIN}s – {PALMADA_GAP_MAX}s\n")
 
     activo_prev = False
     ultimo_onset = -1e9
+    ultimo_muestreo = 0.0
+
+    umbral_db_suelo = 20 * np.log10(PALMADA_UMBRAL)
+    umbral = PALMADA_UMBRAL
+    ruido_suma = 0.0
+    ruido_n = 0
+    promedio_ruido_db = None
 
     with sd.InputStream(samplerate=SR, channels=1, dtype="float32", blocksize=BLOQUE) as stream:
         while True:
@@ -318,8 +343,16 @@ def calibrar() -> None:
             db = 20 * np.log10(max(pico, 1e-6))
             ahora = time.monotonic()
 
+            if ahora - ultimo_muestreo >= RUIDO_MUESTREO_SEGUNDOS:
+                ultimo_muestreo = ahora
+                ruido_suma += db
+                ruido_n += 1
+                promedio_ruido_db = ruido_suma / ruido_n
+                umbral_db = max(umbral_db_suelo, promedio_ruido_db + RUIDO_MARGEN_DB)
+                umbral = 10 ** (umbral_db / 20)
+
             marca = ""
-            if pico >= PALMADA_UMBRAL and not activo_prev:
+            if pico >= umbral and not activo_prev:
                 dt = ahora - ultimo_onset
                 if PALMADA_GAP_MIN <= dt <= PALMADA_GAP_MAX:
                     marca = "  <<< 2 PALMADAS: TRIGGER >>>"
@@ -328,11 +361,12 @@ def calibrar() -> None:
                     marca = "  <- palmada"
                     ultimo_onset = ahora
                 activo_prev = True
-            elif pico < PALMADA_UMBRAL:
+            elif pico < umbral:
                 activo_prev = False
 
-            linea = f"nivel={pico:6.3f} ({db:6.1f} dB)  umbral={PALMADA_UMBRAL:6.3f}{marca}"
-            print("\r" + linea.ljust(70), end="", flush=True)
+            ruido_txt = f"{promedio_ruido_db:5.1f}dB" if promedio_ruido_db is not None else "  n/a"
+            linea = f"nivel={pico:6.3f} ({db:6.1f} dB)  ruido_medio={ruido_txt}  umbral={umbral:6.3f}{marca}"
+            print("\r" + linea.ljust(90), end="", flush=True)
 
 
 # --- Autostart (carpeta Inicio de Windows) -----------------------------------
