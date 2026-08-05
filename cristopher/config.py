@@ -128,26 +128,12 @@ VOZ_DEFECTO = "es_ES-davefx-medium"  # nombre de la voz Piper por defecto
 
 # --- Arranque por 2 palmadas + música ----------------------------------------
 # Escucha ambiental ligera (cristopher/escucha.py): 2 palmadas despiertan el HUD y
-# suena la canción. Umbral fijo en pico de audio (sin suelo de ruido adaptativo — se
-# probó y con ruido de sala sostenido se retroalimentaba sin límite, dejando el sistema
-# sordo a palmadas reales); calibrar con cristopher/calibracion.py y ajustar por entorno.
-PALMADA_UMBRAL   = float(os.getenv("CRISTOPHER_PALMADA_UMBRAL", "1"))     # pico mínimo absoluto
+# suena la canción. Umbrales ajustables por entorno para calibrar según el micro.
+PALMADA_FACTOR   = float(os.getenv("CRISTOPHER_PALMADA_FACTOR", "40"))    # pico / suelo de ruido (subido para evitar falsos positivos)
+PALMADA_UMBRAL   = float(os.getenv("CRISTOPHER_PALMADA_UMBRAL", "1"))     # pico mínimo absoluto (subido para evitar falsos positivos)
 PALMADA_GAP_MIN  = float(os.getenv("CRISTOPHER_PALMADA_GAP_MIN", "0.12")) # s mínimos entre palmadas
 PALMADA_GAP_MAX  = float(os.getenv("CRISTOPHER_PALMADA_GAP_MAX", "0.6"))  # s máximos entre palmadas
-# Debe ser >= CANCION_DURACION_MAX (escucha.py, 20s): si el cooldown es más corto que la
-# canción de arranque, el micrófono la capta sonando por los altavoces como "palmadas" y
-# retriggerea en bucle mientras la anterior sigue sonando (se vio en pruebas reales).
-PALMADA_COOLDOWN = float(os.getenv("CRISTOPHER_PALMADA_COOLDOWN", "25"))  # s de guarda tras disparar
-# Umbral adaptativo al ruido de fondo (segundo intento, distinto del suelo adaptativo de
-# arriba que se revirtió): se muestrea el nivel en dB una vez por segundo (no cada
-# bloque de ~30ms) y se promedia TODO lo muestreado desde que arrancó el proceso — peso
-# 1/n por muestra, decreciente, no una media móvil de memoria corta. Así un pico puntual
-# de ruido (p. ej. la propia canción de arranque sonando ~20s) diluye su influencia con
-# el tiempo en vez de desplazar el umbral de forma permanente, que es justo lo que causó
-# el "sordo a palmadas reales" del intento anterior. El umbral real de disparo es
-# max(PALMADA_UMBRAL, media_ruido_dB + RUIDO_MARGEN_DB): nunca baja del umbral fijo.
-RUIDO_MUESTREO_SEGUNDOS = float(os.getenv("CRISTOPHER_RUIDO_MUESTREO_SEGUNDOS", "1"))
-RUIDO_MARGEN_DB = float(os.getenv("CRISTOPHER_RUIDO_MARGEN_DB", "20"))
+PALMADA_COOLDOWN = float(os.getenv("CRISTOPHER_PALMADA_COOLDOWN", "5"))   # s de guarda tras disparar
 # Modo normal corre sin consola (pythonw vía autostart): nada de print(), todo a este log.
 ESCUCHA_LOG = DATA / "escucha.log"
 # Si este archivo existe, escucha.py no abre el micro (o corta si ya estaba escuchando).
@@ -320,10 +306,6 @@ CONTROL_TOTAL_GESTOR_CONTRASENAS_HOTKEY = os.getenv("CRISTOPHER_GESTOR_CONTRASEN
 # --- Fase 3: widget flotante + borde de pantalla -------------------------------
 CONTROL_TOTAL_WIDGET_POS = DATA / "control_total_widget.json"  # posición recordada
 CONTROL_TOTAL_OVERLAY_COLOR = "#2f8fff"   # azul del borde (mismo tono que el HUD)
-
-# --- Fase 4: PID-guard para no abrir dos veces el widget/borde -----------------
-CONTROL_TOTAL_WIDGET_PID = DATA / "control_total_widget.pid"
-CONTROL_TOTAL_OVERLAY_PID = DATA / "control_total_overlay.pid"
 
 
 class ConfigError(RuntimeError):
