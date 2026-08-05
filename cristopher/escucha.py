@@ -46,7 +46,6 @@ from cristopher.config import (
     ESCUCHA_LOG,
     HUD_PORT,
     PALMADA_COOLDOWN,
-    PALMADA_FACTOR,
     PALMADA_GAP_MAX,
     PALMADA_GAP_MIN,
     PALMADA_UMBRAL,
@@ -57,13 +56,18 @@ SR = 16000                 # tasa de muestreo del micrófono
 BLOQUE = int(SR * 0.03)    # ~30 ms por bloque de análisis
 CHEQUEO_FLAG_SEGUNDOS = 1.0  # cada cuánto relee el archivo bandera dentro del bucle
 _ATAJO = "CRISTOPHER Escucha.lnk"   # nombre del acceso directo en la carpeta Inicio
-# Nombre (sin extensión) del archivo en data/musica/ que resuelve la canción de arranque
-# (ver resolver.buscar_local: hace match por substring contra el nombre de archivo).
-CANCION_ARCHIVO = "back_in_black"
 CANCION_DURACION_MAX = 20   # s: corte automático de la canción de arranque
 CANCION_ATAJO_CORTAR = "<ctrl>+m"   # atajo global para cortarla a mano
+# Atajo global: cancela la escucha por palmadas para lo que queda de esta sesión de
+# Windows (mismo efecto que la tool escucha_detener_sesion, pero disparado localmente
+# desde dentro del propio proceso en vez de por PID). pynput no suprime la tecla: la
+# app en foco también la recibe (p. ej. el buscador de un navegador) — mismo trade-off
+# ya aceptado para Ctrl+F3 en Control Total (ver CONTROL_TOTAL_HOTKEY en config.py).
+ESCUCHA_ATAJO_CANCELAR = "<ctrl>+f"
 
 log = logging.getLogger("cristopher.escucha")
+
+_CANCELAR_ESCUCHA = threading.Event()
 
 
 def _configurar_logging(consola: bool = False) -> None:
@@ -107,22 +111,42 @@ def _detener_cancion(motivo: str) -> None:
         log.warning("No pude cortar la canción: %s", exc)
 
 
-def _iniciar_atajo_cortar() -> None:
-    """Registra el atajo global Ctrl+M para cortar la canción a mano, además del corte
-    automático a los CANCION_DURACION_MAX segundos. Se registra una sola vez por
-    proceso; si falta pynput, degrada con elegancia (solo queda el corte por tiempo)."""
+def _cancelar_escucha() -> None:
+    """Callback del atajo Ctrl+F: cancela la escucha por palmadas para lo que queda de
+    esta sesión de Windows. No toca el autostart ni ningún archivo en disco — el propio
+    proceso deja de escuchar y termina; como el autostart (carpeta Inicio) solo lanza
+    cristopher.escucha al iniciar sesión, no vuelve a reaccionar a palmadas hasta que
+    se apague/reinicie el PC (mismo criterio que la tool escucha_detener_sesion)."""
+    log.warning(
+        "Escucha cancelada por %s: no reacciono a más palmadas hasta que se "
+        "apague/reinicie el ordenador (el autostart no se toca).",
+        ESCUCHA_ATAJO_CANCELAR,
+    )
+    _CANCELAR_ESCUCHA.set()
+
+
+def _iniciar_atajos_globales() -> None:
+    """Registra los atajos globales de escucha.py: Ctrl+M corta la canción a mano
+    (además del corte automático a los CANCION_DURACION_MAX segundos) y Ctrl+F cancela
+    la escucha por palmadas de esta sesión. Se registran una sola vez por proceso; si
+    falta pynput, degrada con elegancia (log.warning, nunca rompe el arranque)."""
     try:
         from pynput import keyboard
     except ImportError:
-        log.warning("Falta pynput: sin atajo %s para cortar la canción (sigue el corte a los %ss).",
-                    CANCION_ATAJO_CORTAR, CANCION_DURACION_MAX)
+        log.warning(
+            "Falta pynput: sin atajo %s para cortar la canción ni %s para cancelar la escucha.",
+            CANCION_ATAJO_CORTAR, ESCUCHA_ATAJO_CANCELAR,
+        )
         return
     try:
-        hk = keyboard.GlobalHotKeys({CANCION_ATAJO_CORTAR: lambda: _detener_cancion(f"atajo {CANCION_ATAJO_CORTAR}")})
+        hk = keyboard.GlobalHotKeys({
+            CANCION_ATAJO_CORTAR: lambda: _detener_cancion(f"atajo {CANCION_ATAJO_CORTAR}"),
+            ESCUCHA_ATAJO_CANCELAR: _cancelar_escucha,
+        })
         hk.daemon = True
         hk.start()
     except Exception as exc:
-        log.warning("No pude registrar el atajo %s: %s", CANCION_ATAJO_CORTAR, exc)
+        log.warning("No pude registrar los atajos globales: %s", exc)
 
 
 def sonar_cancion() -> None:
@@ -136,9 +160,11 @@ def sonar_cancion() -> None:
     con la versión anterior por YouTube).
     """
     try:
+        from cristopher import arranque
         from cristopher.musica import get_reproductor
-        get_reproductor().reproducir(CANCION_ARCHIVO)
-        log.info("Sonando canción de arranque (%s).", CANCION_ARCHIVO)
+        cancion = arranque.obtener()
+        get_reproductor().reproducir(cancion)
+        log.info("Sonando canción de arranque (%s).", cancion)
         threading.Timer(CANCION_DURACION_MAX, _detener_cancion, args=(f"{CANCION_DURACION_MAX}s",)).start()
     except Exception as exc:  # nunca romper el arranque por la música
         log.warning("No pude sonar la canción de arranque: %s", exc)
@@ -207,14 +233,14 @@ def escuchar(visible: bool = False) -> None:
         return
 
     sd = _importar_sounddevice()
-    _iniciar_atajo_cortar()
+    _iniciar_atajos_globales()
 
-    log.info("Escuchando… (2 palmadas para despertar; archivo bandera para desactivar)")
+    log.info("Escuchando… (2 palmadas para despertar; archivo bandera para desactivar; %s cancela la sesión)",
+              ESCUCHA_ATAJO_CANCELAR)
     if visible:
         print("CRISTOPHER — escuchando en vivo (2 palmadas disparan de verdad; Ctrl+C para salir)")
-        print(f"  Umbral: PALMADA_UMBRAL={PALMADA_UMBRAL}  PALMADA_FACTOR={PALMADA_FACTOR}\n")
+        print(f"  Umbral fijo: PALMADA_UMBRAL={PALMADA_UMBRAL}\n")
 
-    suelo = 0.01           # suelo de ruido adaptativo
     activo_prev = False    # ¿el bloque anterior superaba el umbral? (para el flanco)
     ultimo_onset = -1e9    # instante de la última palmada aislada (centinela: nunca empareja)
     hasta = 0.0            # fin de la guarda (cooldown) tras disparar
@@ -224,9 +250,11 @@ def escuchar(visible: bool = False) -> None:
         with sd.InputStream(samplerate=SR, channels=1, dtype="float32",
                             blocksize=BLOQUE) as stream:
             while True:
+                if _CANCELAR_ESCUCHA.is_set():
+                    return
+
                 data, _ = stream.read(BLOQUE)
                 pico = float(np.max(np.abs(data)))
-                umbral = max(PALMADA_UMBRAL, suelo * PALMADA_FACTOR)
                 ahora = time.monotonic()
                 marca = ""
 
@@ -238,7 +266,7 @@ def escuchar(visible: bool = False) -> None:
                         return
 
                 # Flanco de subida = onset (una posible palmada).
-                if pico >= umbral and not activo_prev:
+                if pico >= PALMADA_UMBRAL and not activo_prev:
                     if ahora >= hasta:  # fuera de la guarda
                         dt = ahora - ultimo_onset
                         if PALMADA_GAP_MIN <= dt <= PALMADA_GAP_MAX:
@@ -250,13 +278,12 @@ def escuchar(visible: bool = False) -> None:
                             marca = "  <- palmada"
                             ultimo_onset = ahora  # primera palmada (o demasiado tarde)
                     activo_prev = True
-                elif pico < umbral:
+                elif pico < PALMADA_UMBRAL:
                     activo_prev = False
-                    suelo = 0.95 * suelo + 0.05 * pico  # solo se adapta en silencio
 
                 if visible:
                     db = 20 * np.log10(max(pico, 1e-6))
-                    linea = f"nivel={pico:6.3f} ({db:6.1f} dB)  umbral={umbral:6.3f}{marca}"
+                    linea = f"nivel={pico:6.3f} ({db:6.1f} dB)  umbral={PALMADA_UMBRAL:6.3f}{marca}"
                     print("\r" + linea.ljust(70), end="", flush=True)
     except EscuchaError:
         raise
@@ -278,10 +305,9 @@ def calibrar() -> None:
     sd = _importar_sounddevice()
 
     print("CRISTOPHER — calibración (Ctrl+C para salir; esto NO lanza el agente)")
-    print(f"  Umbral: PALMADA_UMBRAL={PALMADA_UMBRAL}  PALMADA_FACTOR={PALMADA_FACTOR}")
+    print(f"  Umbral fijo: PALMADA_UMBRAL={PALMADA_UMBRAL}")
     print(f"  Ventana entre palmadas: {PALMADA_GAP_MIN}s – {PALMADA_GAP_MAX}s\n")
 
-    suelo = 0.01
     activo_prev = False
     ultimo_onset = -1e9
 
@@ -289,12 +315,11 @@ def calibrar() -> None:
         while True:
             data, _ = stream.read(BLOQUE)
             pico = float(np.max(np.abs(data)))
-            umbral = max(PALMADA_UMBRAL, suelo * PALMADA_FACTOR)
             db = 20 * np.log10(max(pico, 1e-6))
             ahora = time.monotonic()
 
             marca = ""
-            if pico >= umbral and not activo_prev:
+            if pico >= PALMADA_UMBRAL and not activo_prev:
                 dt = ahora - ultimo_onset
                 if PALMADA_GAP_MIN <= dt <= PALMADA_GAP_MAX:
                     marca = "  <<< 2 PALMADAS: TRIGGER >>>"
@@ -303,11 +328,10 @@ def calibrar() -> None:
                     marca = "  <- palmada"
                     ultimo_onset = ahora
                 activo_prev = True
-            elif pico < umbral:
+            elif pico < PALMADA_UMBRAL:
                 activo_prev = False
-                suelo = 0.95 * suelo + 0.05 * pico
 
-            linea = f"nivel={pico:6.3f} ({db:6.1f} dB)  umbral={umbral:6.3f}{marca}"
+            linea = f"nivel={pico:6.3f} ({db:6.1f} dB)  umbral={PALMADA_UMBRAL:6.3f}{marca}"
             print("\r" + linea.ljust(70), end="", flush=True)
 
 
