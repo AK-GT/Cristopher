@@ -17,12 +17,19 @@ import os
 import socket
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
-from cristopher.config import CONTROL_TOTAL_WIDGET_POS, HUD_PORT, ROOT
+from cristopher.config import CONTROL_TOTAL_WIDGET_PID, CONTROL_TOTAL_WIDGET_POS, HUD_PORT, ROOT
+from cristopher.control_total import killswitch
 
 ANCHO, ALTO = 340, 420
 MARGEN = 24
+
+# Sondeos consecutivos fallidos (a 0.5s cada uno, ~5s) antes de darse por vencido
+# con el HUD y cerrarse solo — mismo umbral que control_overlay.py::FALLOS_MAX.
+FALLOS_MAX = 10
 
 
 class WidgetError(RuntimeError):
@@ -62,6 +69,62 @@ def _guardar_posicion(x: int, y: int) -> None:
         CONTROL_TOTAL_WIDGET_POS.write_text(
             json.dumps({"x": int(x), "y": int(y)}), encoding="utf-8",
         )
+    except OSError:
+        pass
+
+
+# --- Cierre robusto: kill-switch local + caída del HUD (Fase 4) ------------------
+# control_overlay.py ya tenía esto (kill-switch local + auto-cierre si el HUD deja
+# de responder); el widget solo cerraba de forma reactiva vía SSE, lo que dejaba la
+# ventana flotando para siempre si el HUD moría o si Ctrl+F3 saltaba sin que el
+# roundtrip HTTP llegara a tiempo.
+def _sondear_cierre(window, detenido: threading.Event) -> None:
+    fallos = 0
+    while not detenido.is_set():
+        time.sleep(0.5)
+        if detenido.is_set():
+            return
+        if killswitch.disparado():
+            break
+        if _hud_vivo():
+            fallos = 0
+        else:
+            fallos += 1
+            if fallos >= FALLOS_MAX:
+                break
+    try:
+        window.destroy()
+    except Exception:
+        pass
+
+
+# --- PID-guard: no abrir un segundo widget si ya hay uno vivo (Fase 4) ------------
+def _pid_guardado() -> "int | None":
+    try:
+        return int(CONTROL_TOTAL_WIDGET_PID.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _proceso_vivo(pid: int) -> bool:
+    try:
+        import psutil
+        return psutil.pid_exists(pid)
+    except Exception:
+        return False
+
+
+def _guardar_pid(pid: int) -> None:
+    try:
+        CONTROL_TOTAL_WIDGET_PID.parent.mkdir(parents=True, exist_ok=True)
+        CONTROL_TOTAL_WIDGET_PID.write_text(str(pid), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _borrar_pid() -> None:
+    try:
+        CONTROL_TOTAL_WIDGET_PID.unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -128,18 +191,28 @@ def lanzar() -> None:
         except Exception:
             pass  # un callback roto NUNCA debe interrumpir el cierre de pywebview
 
+    detenido = threading.Event()
+
     def _on_closed():
         # Verificado real: una excepción sin capturar aquí puede cortar a media
         # el propio cierre interno de pywebview (Application.Exit() no llega a
         # ejecutarse) y el proceso se queda colgado aunque la ventana ya no se
         # vea — por eso el try/except es total, no solo OSError.
         try:
+            detenido.set()
             _guardar_posicion(*ultima_pos)
+            _borrar_pid()
         except Exception:
             pass
 
     window.events.moved += _on_moved
     window.events.closed += _on_closed
+
+    # Kill-switch LOCAL a este proceso + auto-cierre si el HUD cae, igual que
+    # control_overlay.py — sin esto, Ctrl+F3 no cierra el widget cuando el HUD no
+    # puede avisarle por SSE (caído, o el evento se pierde en el reconecte).
+    killswitch.iniciar_killswitch()
+    threading.Thread(target=_sondear_cierre, args=(window, detenido), daemon=True).start()
 
     webview.start()
 
@@ -153,15 +226,20 @@ def _pythonw() -> str:
 def lanzar_proceso() -> None:
     """Lanza el widget como proceso propio y desacoplado (mismo patrón que
     `escucha.py::_lanzar_hud`): sobrevive aunque el proceso que llama a esto
-    termine."""
+    termine. PID-guard: si ya hay un widget vivo (p. ej. el usuario lo abrió a
+    mano, o una activación anterior no lo cerró), no abre una segunda ventana."""
+    pid = _pid_guardado()
+    if pid is not None and _proceso_vivo(pid):
+        return
     creationflags = 0
     if os.name == "nt":
         # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
         creationflags = 0x00000008 | 0x00000200
-    subprocess.Popen(
+    proc = subprocess.Popen(
         [_pythonw(), "-m", "cristopher.hud.widget_flotante"],
         cwd=str(ROOT), creationflags=creationflags,
     )
+    _guardar_pid(proc.pid)
 
 
 def main() -> int:

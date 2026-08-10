@@ -140,6 +140,23 @@ _ACCIONES: list[dict] = [
             "required": ["cantidad", "riesgo", "razon"],
         },
     },
+    {
+        "name": "objetivo_cumplido",
+        "description": (
+            "Declara que el objetivo YA está conseguido, visto en la última captura "
+            "de pantalla — no mueve el ratón ni el teclado, solo termina la sesión."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "razon": {
+                    "type": "string",
+                    "description": "Qué se ve en la captura que confirma que el objetivo está cumplido.",
+                },
+            },
+            "required": ["razon"],
+        },
+    },
 ]
 
 
@@ -271,7 +288,10 @@ def _prompt_decision(bucle: Bucle, titulo_ventana: str) -> str:
         "mismo texto) y la ventana activa no ha cambiado, te has quedado atascado: "
         "prueba algo DISTINTO en vez de repetir la misma acción.\n"
         "- Antes de dar el objetivo por cumplido, comprueba en la captura que de "
-        "verdad se ve conseguido (p. ej. el texto ya escrito en la ventana correcta).\n"
+        "verdad se ve conseguido (p. ej. el texto ya escrito en la ventana correcta). "
+        "Cuando lo esté, llama a 'objetivo_cumplido' — NUNCA repitas una acción de "
+        "ratón/teclado (mover el cursor, etc.) solo para 'no hacer nada'; eso deja "
+        "la sesión dando vueltas sin fin hasta el tope de tiempo/pasos.\n"
         "- NUNCA dejes una acción a medias esperando que el usuario la termine a "
         "mano (p. ej. escribir el nombre de una app y parar ahí sin pulsar Enter o "
         "sin hacer clic en el resultado) — complétala tú mismo, ese es el sentido "
@@ -318,6 +338,14 @@ def _vuelta(bucle: Bucle) -> None:
         return
 
     args = dict(fc.args or {})
+
+    if fc.name == "objetivo_cumplido":
+        razon = str(args.pop("razon", "")).strip()
+        with bucle.lock:
+            bucle.estado = "terminado"
+        _emitir(bucle, "sistema", f"Objetivo cumplido: {razon}" if razon else "Objetivo cumplido.")
+        return
+
     riesgo_declarado = str(args.pop("riesgo", "ninguno"))
     razon = str(args.pop("razon", "")).strip()
     _emitir(

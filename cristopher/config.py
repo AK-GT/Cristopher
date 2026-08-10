@@ -307,6 +307,10 @@ CONTROL_TOTAL_GESTOR_CONTRASENAS_HOTKEY = os.getenv("CRISTOPHER_GESTOR_CONTRASEN
 CONTROL_TOTAL_WIDGET_POS = DATA / "control_total_widget.json"  # posición recordada
 CONTROL_TOTAL_OVERLAY_COLOR = "#2f8fff"   # azul del borde (mismo tono que el HUD)
 
+# --- Fase 4: PID-guard (no abrir un segundo widget/borde si ya hay uno vivo) ----
+CONTROL_TOTAL_WIDGET_PID = DATA / "control_total_widget.pid"
+CONTROL_TOTAL_OVERLAY_PID = DATA / "control_total_overlay.pid"
+
 
 class ConfigError(RuntimeError):
     """Fallo de configuración que impide arrancar (p. ej. falta la API key)."""
