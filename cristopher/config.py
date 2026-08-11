@@ -96,6 +96,80 @@ GOOGLE_SCOPES = [
 # Búsqueda de élite (opcional). Sin ella, la búsqueda cae a DuckDuckGo.
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
 
+# --- Redes sociales (redes_auth.py), Fase 1: YouTube -------------------------
+# Almacén multi-cuenta: cada plataforma guarda tokens en su propia subcarpeta,
+# indexados por alias en un único índice JSON (gitignored, mismo patrón que
+# personalidad.json / briefing.json).
+REDES_DIR = DATA / "redes"
+REDES_CUENTAS = REDES_DIR / "cuentas.json"    # índice: plataforma -> [cuentas]
+YOUTUBE_TOKENS_DIR = REDES_DIR / "youtube"    # cada alias: youtube/<alias>/token.json
+
+# YouTube reutiliza el MISMO credentials.json de Google (GOOGLE_CREDENTIALS) — mismo
+# proyecto de Google Cloud que Calendar/Gmail — pero con su PROPIO scope list, en
+# tokens SEPARADOS por alias (multi-cuenta real: cada alias puede ser una cuenta de
+# Google distinta). Deliberadamente NO se añade a GOOGLE_SCOPES: forzaría
+# re-consentimiento del token único de Calendar/Gmail sin ninguna ventaja, y acoplaría
+# un flujo multi-cuenta a uno de una sola cuenta (google_auth.py).
+YOUTUBE_SCOPES = [
+    "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+    "https://www.googleapis.com/auth/youtube.upload",
+]
+
+# --- Redes sociales, Fase 2: Instagram ("Instagram API with Instagram Login",
+# Business Login — SIN página de Facebook vinculada, verificado en la
+# documentación de Meta, ago 2026: mejora sobre el diseño original de
+# PLAN_R~1.MD, que asumía el flujo clásico vía graph.facebook.com + página) ----
+INSTAGRAM_TOKENS_DIR = REDES_DIR / "instagram"    # cada alias: instagram/<alias>/token.json
+META_APP_ID = os.getenv("META_APP_ID", "").strip()
+META_APP_SECRET = os.getenv("META_APP_SECRET", "").strip()
+INSTAGRAM_SCOPES = (
+    "instagram_business_basic,instagram_business_manage_insights,"
+    "instagram_business_content_publish"
+)
+INSTAGRAM_REDIRECT_PORT = int(os.getenv("CRISTOPHER_INSTAGRAM_REDIRECT_PORT", "8787"))
+# HTTPS, no HTTP: verificado con un fallo real en el panel de Meta ("Error al
+# guardar los URI de redireccionamiento") — Business Login for Instagram exige
+# HTTPS incluso para localhost. El servidor local de conectar_cuenta_instagram
+# usa un certificado autofirmado para poder recibir esta redirección (ver
+# redes_auth.py::_generar_cert_local).
+INSTAGRAM_REDIRECT_URI = f"https://localhost:{INSTAGRAM_REDIRECT_PORT}/callback"
+INSTAGRAM_GRAPH_VERSION = "v21.0"  # bump aquí si Meta lo deprecia
+# Margen antes de que caduque (60 días) para intentar refresco silencioso del token.
+INSTAGRAM_REFRESH_MARGIN_SEGUNDOS = 5 * 24 * 3600
+
+# --- Redes sociales, Fase 3: TikTok (Login Kit + Display API) ----------------
+TIKTOK_TOKENS_DIR = REDES_DIR / "tiktok"      # cada alias: tiktok/<alias>/token.json
+TIKTOK_CLIENT_KEY = os.getenv("TIKTOK_CLIENT_KEY", "").strip()
+TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET", "").strip()
+TIKTOK_SCOPES = "user.info.basic,user.info.stats,video.list,video.publish"
+TIKTOK_REDIRECT_PORT = int(os.getenv("CRISTOPHER_TIKTOK_REDIRECT_PORT", "8788"))
+TIKTOK_REDIRECT_URI = f"http://localhost:{TIKTOK_REDIRECT_PORT}/callback"
+# access_token dura solo 24h (mucho más corto que Instagram): margen amplio para
+# refrescar en cuanto quede poco, no solo al borde de caducar.
+TIKTOK_REFRESH_MARGIN_SEGUNDOS = 30 * 60
+
+# --- Redes sociales, fase de publicación (subida): YouTube/Instagram/TikTok --
+# (deliberadamente NO "Fase 4" — ese número ya lo usan Google Calendar/Gmail y
+# Modo Control Total en este repo, ver PLAN_R~1.MD y CLAUDE.md)
+#
+# Instagram Content Publishing exige un video_url público que Meta descargue;
+# YouTube (resumable upload) y TikTok (FILE_UPLOAD de bytes) no lo necesitan.
+# Se usa Cloud Storage del MISMO proyecto GCP que ya usa Calendar/Gmail/YouTube,
+# con una service account propia (no el OAuth interactivo de usuario) y signed
+# URLs en vez de objetos públicos — ver cristopher/redes_hosting_temporal.py.
+INSTAGRAM_PUBLISH_POLL_INTERVAL_SEGUNDOS = 5        # arranque del backoff
+INSTAGRAM_PUBLISH_POLL_MAX_INTERVALO_SEGUNDOS = 30  # tope del backoff
+INSTAGRAM_PUBLISH_POLL_TIMEOUT_SEGUNDOS = 600       # 10 min tope total de espera
+
+TIKTOK_PUBLISH_POLL_INTERVAL_SEGUNDOS = 3
+TIKTOK_PUBLISH_POLL_TIMEOUT_SEGUNDOS = 300
+TIKTOK_UPLOAD_CHUNK_SIZE_BYTES = 10 * 1024 * 1024  # 10MB; dentro del rango 5-64MB de la API
+
+GCS_BUCKET_TEMPORAL = os.getenv("GCS_BUCKET_TEMPORAL", "").strip()
+GCS_SERVICE_ACCOUNT_JSON = GOOGLE_DIR / "gcs-service-account.json"  # gitignored vía data/
+GCS_SIGNED_URL_EXPIRACION_SEGUNDOS = 30 * 60
+
 # --- Fase 8: HUD -------------------------------------------------------------
 HUD_PORT = int(os.getenv("CRISTOPHER_HUD_PORT", "8765"))
 # Imágenes adjuntadas por /enviar_media, guardadas en disco (gitignored, dentro de

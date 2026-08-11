@@ -104,6 +104,13 @@ Pillow>=10.4.0
 # Node.js: requiere Node.js instalado en el sistema + `npm install` en whatsapp/
 # (dependencias declaradas en whatsapp/package.json).
 
+# Fase de publicación (redes sociales) — hosting temporal para Instagram Reels:
+# Content Publishing exige una URL pública que Meta pueda descargar. Se usa Cloud
+# Storage del mismo proyecto GCP que ya usa Calendar/Gmail/YouTube (ver
+# cristopher/redes_hosting_temporal.py). YouTube (resumable upload) y TikTok
+# (FILE_UPLOAD de bytes) no necesitan esta dependencia.
+google-cloud-storage>=2.10.0
+
 # Modo Control Total, Fase 3 — widget flotante (ventana nativa sin marco, siempre
 # encima). Usa el runtime WebView2 de Windows (preinstalado en Win10 1803+/Win11
 # junto con Edge). Verificado real en esta máquina: crea una ventana frameless/

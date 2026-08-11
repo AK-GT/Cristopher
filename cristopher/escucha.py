@@ -11,6 +11,12 @@ En modo normal no imprime nada (el autostart lo lanza con pythonw, sin consola);
 todo el log va a data/escucha.log. Para desactivar la escucha sin desinstalar el
 autostart, crea el archivo data/escucha.desactivada (borrarlo la reactiva).
 
+El proceso corre desde el arranque pero empieza DESARMADO: no reacciona a ninguna
+palmada hasta que se pulsa Ctrl+N (ESCUCHA_ATAJO_ARMAR). Detectadas las 2 palmadas se
+desarma solo — un único disparo por cada Ctrl+N — así que para volver a despertar al
+sistema por palmadas hay que pulsar Ctrl+N de nuevo. Ctrl+F sigue cancelando la escucha
+entera para el resto de la sesión (ver ESCUCHA_ATAJO_CANCELAR más abajo).
+
 La "canción de arranque" suena con el motor de música propio de CRISTOPHER (VLC local,
 `cristopher.musica`, Tanda A) desde el archivo en data/musica/ — se descartó abrirla en
 una pestaña de YouTube: además de competir por la misma ventana de Chrome que el HUD
@@ -64,10 +70,15 @@ CANCION_ATAJO_CORTAR = "<ctrl>+m"   # atajo global para cortarla a mano
 # app en foco también la recibe (p. ej. el buscador de un navegador) — mismo trade-off
 # ya aceptado para Ctrl+F3 en Control Total (ver CONTROL_TOTAL_HOTKEY en config.py).
 ESCUCHA_ATAJO_CANCELAR = "<ctrl>+f"
+# Atajo global: arma la detección de palmadas para UN disparo. Por defecto (recién
+# arrancado, o justo después de disparar) está desarmado y no reacciona a nada — hay
+# que pulsar este atajo cada vez que se quiera despertar al sistema por palmadas.
+ESCUCHA_ATAJO_ARMAR = "<ctrl>+n"
 
 log = logging.getLogger("cristopher.escucha")
 
 _CANCELAR_ESCUCHA = threading.Event()
+_ARMADO = threading.Event()  # empieza desarmado: hay que pulsar ESCUCHA_ATAJO_ARMAR
 
 
 def _configurar_logging(consola: bool = False) -> None:
@@ -125,23 +136,37 @@ def _cancelar_escucha() -> None:
     _CANCELAR_ESCUCHA.set()
 
 
+def _armar_escucha() -> None:
+    """Callback del atajo Ctrl+N: arma la detección de palmadas para UN disparo.
+    Idempotente si ya estaba armado. El propio bucle de escuchar() se desarma solo en
+    cuanto detecta las 2 palmadas — no hace falta ningún atajo para "desarmar"."""
+    if _ARMADO.is_set():
+        log.info("%s: ya estaba armado, sigue escuchando palmadas.", ESCUCHA_ATAJO_ARMAR)
+        return
+    _ARMADO.set()
+    log.info("Armado por %s: la próxima vez que detecte 2 palmadas, actúa (un solo disparo).",
+              ESCUCHA_ATAJO_ARMAR)
+
+
 def _iniciar_atajos_globales() -> None:
     """Registra los atajos globales de escucha.py: Ctrl+M corta la canción a mano
-    (además del corte automático a los CANCION_DURACION_MAX segundos) y Ctrl+F cancela
-    la escucha por palmadas de esta sesión. Se registran una sola vez por proceso; si
-    falta pynput, degrada con elegancia (log.warning, nunca rompe el arranque)."""
+    (además del corte automático a los CANCION_DURACION_MAX segundos), Ctrl+F cancela
+    la escucha por palmadas de esta sesión y Ctrl+N arma un disparo. Se registran una
+    sola vez por proceso; si falta pynput, degrada con elegancia (log.warning, nunca
+    rompe el arranque)."""
     try:
         from pynput import keyboard
     except ImportError:
         log.warning(
-            "Falta pynput: sin atajo %s para cortar la canción ni %s para cancelar la escucha.",
-            CANCION_ATAJO_CORTAR, ESCUCHA_ATAJO_CANCELAR,
+            "Falta pynput: sin atajo %s (cortar canción), %s (cancelar escucha) ni %s (armar).",
+            CANCION_ATAJO_CORTAR, ESCUCHA_ATAJO_CANCELAR, ESCUCHA_ATAJO_ARMAR,
         )
         return
     try:
         hk = keyboard.GlobalHotKeys({
             CANCION_ATAJO_CORTAR: lambda: _detener_cancion(f"atajo {CANCION_ATAJO_CORTAR}"),
             ESCUCHA_ATAJO_CANCELAR: _cancelar_escucha,
+            ESCUCHA_ATAJO_ARMAR: _armar_escucha,
         })
         hk.daemon = True
         hk.start()
@@ -235,16 +260,17 @@ def escuchar(visible: bool = False) -> None:
     sd = _importar_sounddevice()
     _iniciar_atajos_globales()
 
-    log.info("Escuchando… (2 palmadas para despertar; archivo bandera para desactivar; %s cancela la sesión)",
-              ESCUCHA_ATAJO_CANCELAR)
+    log.info("Escuchando… (desarmado; %s arma un disparo; archivo bandera para desactivar; %s cancela la sesión)",
+              ESCUCHA_ATAJO_ARMAR, ESCUCHA_ATAJO_CANCELAR)
     if visible:
-        print("CRISTOPHER — escuchando en vivo (2 palmadas disparan de verdad; Ctrl+C para salir)")
+        print(f"CRISTOPHER — escuchando en vivo, DESARMADO (pulsa {ESCUCHA_ATAJO_ARMAR} para armar un disparo; Ctrl+C para salir)")
         print(f"  Umbral fijo: PALMADA_UMBRAL={PALMADA_UMBRAL}\n")
 
     activo_prev = False    # ¿el bloque anterior superaba el umbral? (para el flanco)
     ultimo_onset = -1e9    # instante de la última palmada aislada (centinela: nunca empareja)
     hasta = 0.0            # fin de la guarda (cooldown) tras disparar
     ultimo_chequeo_flag = 0.0
+    armado_prev = False    # para detectar el flanco desarmado->armado y arrancar en limpio
 
     try:
         with sd.InputStream(samplerate=SR, channels=1, dtype="float32",
@@ -258,12 +284,29 @@ def escuchar(visible: bool = False) -> None:
                 ahora = time.monotonic()
                 marca = ""
 
+                armado = _ARMADO.is_set()
+                if armado and not armado_prev:
+                    # Recién armado (Ctrl+N): arranca en limpio, sin arrastrar estado
+                    # de una ronda anterior (cooldown, palmada suelta a medias...).
+                    activo_prev = False
+                    ultimo_onset = -1e9
+                    hasta = 0.0
+                armado_prev = armado
+
                 # Reconsulta el archivo bandera sin martillear el disco cada 30ms.
                 if ahora - ultimo_chequeo_flag >= CHEQUEO_FLAG_SEGUNDOS:
                     ultimo_chequeo_flag = ahora
                     if ESCUCHA_FLAG_DESACTIVAR.exists():
                         log.info("Archivo bandera detectado; dejo de escuchar.")
                         return
+
+                # Desarmado: no reacciona a ningún pico, solo se ve el nivel en vivo.
+                if not armado:
+                    if visible:
+                        db = 20 * np.log10(max(pico, 1e-6))
+                        linea = f"nivel={pico:6.3f} ({db:6.1f} dB)  [DESARMADO — {ESCUCHA_ATAJO_ARMAR} para armar]"
+                        print("\r" + linea.ljust(90), end="", flush=True)
+                    continue
 
                 # Flanco de subida = onset (una posible palmada).
                 if pico >= PALMADA_UMBRAL and not activo_prev:
@@ -274,6 +317,9 @@ def escuchar(visible: bool = False) -> None:
                             _disparar()
                             hasta = ahora + PALMADA_COOLDOWN
                             ultimo_onset = 0.0
+                            _ARMADO.clear()
+                            log.info("Disparo hecho; desarmado de nuevo. Pulsa %s para volver a armar.",
+                                      ESCUCHA_ATAJO_ARMAR)
                         else:
                             marca = "  <- palmada"
                             ultimo_onset = ahora  # primera palmada (o demasiado tarde)
@@ -283,8 +329,8 @@ def escuchar(visible: bool = False) -> None:
 
                 if visible:
                     db = 20 * np.log10(max(pico, 1e-6))
-                    linea = f"nivel={pico:6.3f} ({db:6.1f} dB)  umbral={PALMADA_UMBRAL:6.3f}{marca}"
-                    print("\r" + linea.ljust(70), end="", flush=True)
+                    linea = f"nivel={pico:6.3f} ({db:6.1f} dB)  umbral={PALMADA_UMBRAL:6.3f}  [ARMADO]{marca}"
+                    print("\r" + linea.ljust(90), end="", flush=True)
     except EscuchaError:
         raise
     except KeyboardInterrupt:

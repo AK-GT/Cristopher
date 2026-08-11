@@ -29,6 +29,9 @@ _estado: dict[str, Any] = {
     "sesiones": [],              # snapshot de GestorSesiones.listar() (Fase 2 modo agentes)
     "concentracion": {"activo": False},  # snapshot de concentracion.estado_actual()
     "modo_code": False,           # snapshot de estado_code.esta_activo() (Cristopher Code)
+    "modo_redes": False,          # snapshot de estado_redes.esta_activo() (Modo redes)
+    "control_total": False,       # snapshot de estado_control_total.esta_activo() (Fase 4)
+    "control_total_actividad": "reposo",  # "reposo"|"trabajando" del bucle (Fase 2)
 }
 _log: deque = deque(maxlen=200)   # trazas recientes: [{kind, text, hora}]
 _subs: list[queue.Queue] = []     # colas de suscriptores SSE
@@ -109,6 +112,38 @@ def set_modo_code(activo: bool) -> None:
     with _LOCK:
         _estado["modo_code"] = activo
     _emit("modo_code", activo)
+
+
+def set_modo_redes(activo: bool) -> None:
+    """Flag del Modo redes (dashboard de YouTube/Instagram/TikTok): el HUD lo usa
+    para transformar la pantalla (núcleo morado + layout de widgets propio)."""
+    with _LOCK:
+        _estado["modo_redes"] = activo
+    _emit("modo_redes", activo)
+
+
+def set_control_total(activo: bool) -> None:
+    """Flag del Modo Control Total (Fase 4): el HUD lo usa para teñir el núcleo de
+    azul; el widget flotante y el borde de pantalla lo consultan (SSE/HTTP) para
+    auto-cerrarse cuando pasa a False, en vez de que nadie tenga que matarlos por
+    PID."""
+    with _LOCK:
+        _estado["control_total"] = activo
+    _emit("control_total", activo)
+
+
+def set_control_total_actividad(estado: str) -> None:
+    """'trabajando'/'reposo' del bucle percepción-decisión-acción (Fase 2) — el
+    borde de pantalla lo sondea por HTTP para decidir el brillo de su pulso."""
+    with _LOCK:
+        _estado["control_total_actividad"] = estado
+    _emit("control_total_actividad", estado)
+
+
+def add_control_total_entrada(entrada: dict) -> None:
+    """Nueva entrada del transcript del bucle (Fase 2), para narrarla en vivo en
+    el widget. Efímera (no se guarda en el snapshot), igual que `add_sesion_entrada`."""
+    _emit("control_total_entrada", entrada)
 
 
 def set_concentracion(snapshot: dict) -> None:

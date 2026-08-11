@@ -4,7 +4,14 @@ real. Sin dependencias nuevas: `tkinter` (stdlib) + `ctypes` (extiende el idiom 
 establecido en `pantalla_tools.py`/`control_pc_tools.py`/`system_apps.py`).
 
 Vive en su PROPIO proceso (mismo motivo que `widget_flotante.py`: el bucle de
-eventos de Tk bloquea el hilo que lo llama).
+eventos de Tk bloquea el hilo que lo llama). Precisamente POR eso (Fase 4,
+corrección de arquitectura real): la señal de "trabajando" no puede leerse
+importando `cristopher.control_total.bucle` directamente — ese import crearía un
+`_BUCLE` propio y vacío en ESTE proceso, no el bucle real que corre dentro del
+proceso del HUD. Se consulta por HTTP (`GET /estado`), igual que el widget ya usa
+SSE — mismo criterio, mismo servidor. El kill-switch local (Ctrl+F3) SÍ se queda
+por import directo: cada proceso reacciona a la misma tecla física de forma
+independiente, eso es correcto por diseño (Fase 1).
 
 Receta de click-through (verificada en la práctica: renderizado, click-through y
 apagado por kill-switch confirmados a ojo y a golpe de ratón real): fondo a un
@@ -20,13 +27,25 @@ Uso:
 from __future__ import annotations
 
 import ctypes
+import json
 import math
+import os
+import socket
+import subprocess
 import sys
+import threading
 import time
 import tkinter as tk
+import urllib.request
 from ctypes import wintypes
+from pathlib import Path
 
-from cristopher.config import CONTROL_TOTAL_OVERLAY_COLOR
+from cristopher.config import (
+    CONTROL_TOTAL_OVERLAY_COLOR,
+    CONTROL_TOTAL_OVERLAY_PID,
+    HUD_PORT,
+    ROOT,
+)
 from cristopher.control_total import killswitch
 
 GWL_EXSTYLE = -20
@@ -44,6 +63,23 @@ TARGETS = {
     "reposo": (0.35, 3.2),
     "trabajando": (0.95, 0.9),
 }
+
+# Sondeos consecutivos fallidos (a 0.5s cada uno, ~5s) antes de darse por
+# vencido con el HUD y cerrarse solo — un HUD caído no debe dejar el borde azul
+# pegado en pantalla para siempre.
+FALLOS_MAX = 10
+
+
+class OverlayError(RuntimeError):
+    """El borde de pantalla no pudo arrancar."""
+
+
+def _hud_vivo() -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", HUD_PORT), timeout=0.5):
+            return True
+    except OSError:
+        return False
 
 
 def _dpi_aware() -> None:
@@ -111,8 +147,36 @@ def _lerp_color(c1: str, c2: str, t: float) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+def _sondear_estado(overlay: "Overlay") -> None:
+    """Hilo de fondo: GET /estado cada 0.5s. Nunca bloquea el bucle de animación
+    de Tk con I/O de red — solo escribe en `overlay._remoto` bajo lock."""
+    fallos = 0
+    while not overlay._detenido:
+        try:
+            with urllib.request.urlopen(
+                f"http://localhost:{HUD_PORT}/estado", timeout=1.0
+            ) as resp:
+                data = json.loads(resp.read())
+            with overlay._remoto_lock:
+                overlay._remoto["control_total"] = bool(data.get("control_total", False))
+                overlay._remoto["actividad"] = data.get("control_total_actividad", "reposo")
+                overlay._remoto["hud_caido"] = False
+            fallos = 0
+        except Exception:
+            fallos += 1
+            if fallos >= FALLOS_MAX:
+                with overlay._remoto_lock:
+                    overlay._remoto["hud_caido"] = True
+        time.sleep(0.5)
+
+
 class Overlay:
     def __init__(self) -> None:
+        if not _hud_vivo():
+            raise OverlayError(
+                f"El HUD no está corriendo en el puerto {HUD_PORT}. "
+                "Arráncalo primero: python -m cristopher"
+            )
         _dpi_aware()
         self.x, self.y, self.w, self.h = _rect_virtual()
 
@@ -135,20 +199,23 @@ class Overlay:
         self.cur = TARGETS["reposo"][0]
         self.target = TARGETS["reposo"][0]
         self._detenido = False
-        self._ultimo_chequeo_estado = 0.0
+
+        # Kill-switch LOCAL a este proceso (Fase 4, hueco real: el chequeo de
+        # killswitch.disparado() en _tick() ya existía, pero nada arrancaba el
+        # listener aquí, así que nunca podía dispararse por sí solo — el cierre
+        # dependía por completo del roundtrip HTTP de /estado. Con esto, Ctrl+F3
+        # cierra el borde de inmediato (siguiente tick, ~16ms) además de por el
+        # camino lento del polling si por lo que sea este listener no arrancara.
+        killswitch.iniciar_killswitch()
+
+        # Arranca optimista: recién lanzado por activar_control_total, el modo YA
+        # está activo aunque el primer sondeo tarde su medio segundo en confirmarlo.
+        self._remoto_lock = threading.Lock()
+        self._remoto = {"control_total": True, "actividad": "reposo", "hud_caido": False}
+        threading.Thread(target=_sondear_estado, args=(self,), daemon=True).start()
 
         self._dibujar()
         self._tick()
-
-    def _estado_real(self) -> str:
-        """Consulta cristopher.control_total.bucle (Fase 2, ya construido) — señal
-        real de "trabajando" sin esperar al flag de modo de Fase 4."""
-        try:
-            from cristopher.control_total import bucle
-            info = bucle.estado_actual()
-            return "trabajando" if info.get("estado") == "trabajando" else "reposo"
-        except Exception:
-            return "reposo"
 
     def _dibujar(self) -> None:
         self.canvas.delete("all")
@@ -178,11 +245,17 @@ class Overlay:
             self.ocultar()
             return
 
+        with self._remoto_lock:
+            remoto = dict(self._remoto)
+        if remoto["hud_caido"] or not remoto["control_total"]:
+            self.ocultar()
+            return
+
         ahora = time.monotonic()
-        if ahora - self._ultimo_chequeo_estado > 0.5:
-            self._ultimo_chequeo_estado = ahora
-            brillo_obj, _periodo = TARGETS[self._estado_real()]
-            self.target = brillo_obj
+        brillo_obj, _periodo = TARGETS[
+            "trabajando" if remoto["actividad"] == "trabajando" else "reposo"
+        ]
+        self.target = brillo_obj
 
         # Mismo patrón de interpolación que TARGETS/app.js (cur += (target-cur)*f),
         # con un pulso senoidal encima para que "respire" en vez de quedarse fijo.
@@ -208,12 +281,73 @@ def mostrar() -> Overlay:
     return Overlay()
 
 
+# --- PID-guard + lanzamiento como proceso propio (Fase 4) -------------------------
+def _pid_guardado() -> "int | None":
+    try:
+        return int(CONTROL_TOTAL_OVERLAY_PID.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _proceso_vivo(pid: int) -> bool:
+    try:
+        import psutil
+        return psutil.pid_exists(pid)
+    except Exception:
+        return False
+
+
+def _guardar_pid(pid: int) -> None:
+    try:
+        CONTROL_TOTAL_OVERLAY_PID.parent.mkdir(parents=True, exist_ok=True)
+        CONTROL_TOTAL_OVERLAY_PID.write_text(str(pid), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _borrar_pid() -> None:
+    try:
+        CONTROL_TOTAL_OVERLAY_PID.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _pythonw() -> str:
+    exe = Path(sys.executable)
+    pw = exe.with_name("pythonw.exe")
+    return str(pw if pw.exists() else exe)
+
+
+def lanzar_proceso() -> None:
+    """Lanza el borde como proceso propio y desacoplado (mismo patrón que
+    `widget_flotante.lanzar_proceso`/`escucha.py::_lanzar_hud`). PID-guard: si ya
+    hay un borde vivo, no abre uno segundo."""
+    pid = _pid_guardado()
+    if pid is not None and _proceso_vivo(pid):
+        return
+    creationflags = 0
+    if os.name == "nt":
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        creationflags = 0x00000008 | 0x00000200
+    proc = subprocess.Popen(
+        [_pythonw(), "-m", "cristopher.hud.control_overlay"],
+        cwd=str(ROOT), creationflags=creationflags,
+    )
+    _guardar_pid(proc.pid)
+
+
 def main() -> int:
-    overlay = mostrar()
+    try:
+        overlay = mostrar()
+    except OverlayError as exc:
+        print(f"[control_overlay] {exc}")
+        return 1
     try:
         overlay.mainloop()
     except KeyboardInterrupt:
         overlay.ocultar()
+    finally:
+        _borrar_pid()
     return 0
 
 

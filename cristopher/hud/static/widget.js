@@ -27,10 +27,51 @@
     logEl.scrollTop = logEl.scrollHeight;
   }
 
+  // Iconos por rol de la narración del bucle (Fase 2 control_total.bucle._emitir):
+  // accion_propuesta ya trae la 'razon' en lenguaje natural en su propio texto.
+  const PREF_NARRACION = {
+    accion_propuesta: "→", accion_ejecutada: "✓", guardarraíl: "⚠",
+    sistema: "ℹ", error_accion: "!!", error_vision: "!!",
+  };
+  function addNarracion(e) {
+    if (!e) return;
+    const d = document.createElement("div");
+    const esError = String(e.rol || "").startsWith("error");
+    d.className = "l" + (esError ? " error" : "");
+    const pref = PREF_NARRACION[e.rol] || e.rol;
+    d.innerHTML = `<span class="t">${esc(e.ts || "")}</span><b>${esc(pref)}</b> <span>${esc(e.texto)}</span>`;
+    logEl.appendChild(d);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
   function applySnapshot(s) {
     setEstado(s.estado);
     logEl.innerHTML = "";
     if (s.log) s.log.forEach(addLog);
+  }
+
+  // ---------- Modal de confirmación (Fase 4, guardarraíles.py) ----------
+  const confirmOverlay = $("w-confirm-overlay");
+  const confirmBody = $("w-confirm-body");
+  function showConfirm(d) {
+    confirmBody.textContent = (d && d.texto) || "¿Confirmar la acción?";
+    confirmOverlay.hidden = false;
+  }
+  function resolveConfirm(ok) {
+    confirmOverlay.hidden = true;
+    fetch("/confirmar", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ok, texto: "" }),
+    }).catch(() => {});
+  }
+  $("w-confirm-ok").addEventListener("click", () => resolveConfirm(true));
+  $("w-confirm-cancel").addEventListener("click", () => resolveConfirm(false));
+
+  // ---------- Auto-cierre al desactivar el Modo Control Total (Fase 4) ----------
+  function cerrarPorDesactivacion() {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.cerrar) {
+      window.pywebview.api.cerrar().catch(() => {});
+    }
   }
 
   function conectar() {
@@ -42,6 +83,9 @@
         case "snapshot": applySnapshot(m.datos); break;
         case "estado": setEstado(m.datos); break;
         case "log": addLog(m.datos); break;
+        case "confirmacion": showConfirm(m.datos); break;
+        case "control_total": if (!m.datos) cerrarPorDesactivacion(); break;
+        case "control_total_entrada": addNarracion(m.datos); break;
       }
     };
     es.onerror = () => { es.close(); setTimeout(conectar, 2000); };

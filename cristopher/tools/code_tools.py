@@ -8,7 +8,7 @@ a diferencia de sesiones.py, estado_code no necesita probarse aislado del HUD.
 
 from __future__ import annotations
 
-from cristopher import bus, estado_code
+from cristopher import bus, estado_code, estado_redes
 
 
 def activar_modo_code() -> str:
@@ -19,6 +19,10 @@ def activar_modo_code() -> str:
     'ponme en modo code', 'quiero programar con agentes'). Si no está claro,
     pregúntale antes en lugar de activarlo."""
     estado_code.activar()
+    # Modo code y Modo redes comparten la misma pantalla dedicada del HUD y son
+    # mutuamente excluyentes (ver redes_modo_tools.py / style.css body[data-modo]).
+    estado_redes.desactivar()
+    bus.set_modo_redes(False)
     bus.set_modo_code(True)
     return "Modo code activado: a gestionar sesiones."
 

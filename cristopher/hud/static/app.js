@@ -544,6 +544,17 @@
   // de las correcciones al plan), así que basta este override en animate().
   let modoCode = false;
   const CODE_COL = 0xE24B4A;
+  // Modo redes (dashboard YouTube/Instagram/TikTok, ver PLAN "Modo redes"): mismo
+  // mecanismo que modoCode, color morado. Backend garantiza que modoCode y
+  // modoRedes nunca están a true a la vez (exclusión mutua en hud/__main__.py),
+  // así que el orden de precedencia de abajo es solo defensivo.
+  let modoRedes = false;
+  const REDES_COL = 0xB15CFF;
+  // Modo Control Total (Fase 4): mismo mecanismo, color azul, independiente de
+  // modoCode (ver setModoControlTotal más abajo) — si algún día coexistieran,
+  // modoCode manda (orden de la línea de abajo), caso raro sin resolver a propósito.
+  let modoControlTotal = false;
+  const CONTROL_COL = 0x2f8fff;
   function setCoreState(s) {
     if (s === "pensando" && prevStateName !== "pensando") flash = 1.0;  // destello al entrar
     prevStateName = s;
@@ -566,8 +577,9 @@
     U.uWave.value = cur.wave;
     U.uFreq.value = cur.freq;
     // Color del estado: todas las capas convergen al mismo tono suavemente. En modo
-    // code, el rojo manda sobre el color del estado (reposo/pensando/…).
-    targetCol.set(modoCode ? CODE_COL : target.col);
+    // code, el rojo manda sobre el color del estado (reposo/pensando/…); en Modo
+    // Control Total (Fase 4), el azul manda igual salvo que modo code esté activo.
+    targetCol.set(modoCode ? CODE_COL : (modoRedes ? REDES_COL : (modoControlTotal ? CONTROL_COL : target.col)));
     U.uCol.value.lerp(targetCol, 0.04);
 
     flash *= 0.9;  // decae solo (destello de un solo disparo al entrar en "pensando")
@@ -641,10 +653,30 @@
   // Modo code (Fase 1): flag global que retiñe el orbe (arriba) y transforma la
   // pantalla vía CSS (body[data-modo="code"], ver style.css §12). code.js escucha
   // este mismo cambio para arrancar sus propios widgets si hace falta.
+  function _actualizarDatasetModo() {
+    // modoCode manda si ambos llegaran a estar true por una carrera rara — la
+    // exclusión mutua real vive en el backend (hud/__main__.py), esto es defensivo.
+    document.body.dataset.modo = modoCode ? "code" : (modoRedes ? "redes" : "normal");
+  }
   function setModo(activo) {
     modoCode = !!activo;
-    document.body.dataset.modo = modoCode ? "code" : "normal";
+    _actualizarDatasetModo();
     window.__hudCodeSetModo && window.__hudCodeSetModo(modoCode);
+  }
+  // Modo redes (ver PLAN "Modo redes"): mismo mecanismo que setModo. redes.js
+  // escucha este mismo cambio para arrancar sus propios widgets si hace falta.
+  function setModoRedes(activo) {
+    modoRedes = !!activo;
+    _actualizarDatasetModo();
+    window.__hudRedesSetModo && window.__hudRedesSetModo(modoRedes);
+  }
+  // Modo Control Total (Fase 4): mismo mecanismo que setModo, atributo booleano
+  // INDEPENDIENTE (data-control-total, no data-modo — no reemplaza al modo code,
+  // ver style.css §12b) porque el widget/borde viven en ventanas propias, no en
+  // un layout alternativo de esta página.
+  function setModoControlTotal(activo) {
+    modoControlTotal = !!activo;
+    document.body.dataset.controlTotal = modoControlTotal ? "1" : "0";
   }
   function setTarea(txt) { $("task").textContent = txt || "—"; }
   function setRoster(list) {
@@ -696,6 +728,8 @@
   function applySnapshot(s) {
     setEstado(s.estado || "reposo");
     setModo(s.modo_code);
+    setModoRedes(s.modo_redes);
+    setModoControlTotal(s.control_total);
     if (s.metricas) setMetricas(s.metricas);
     setTarea(s.tarea); setRoster(s.subagentes);
     if (s.alertas) s.alertas.slice().reverse().forEach(addAlerta);
@@ -722,6 +756,7 @@
         case "subagentes": setRoster(m.datos); break;
         case "alerta": addAlerta(m.datos); break;
         case "confirmacion": showConfirm(m.datos); break;
+        case "control_total": setModoControlTotal(m.datos); break;
         case "sesiones":
           panelAgentes.pintar(m.datos);
           panelAutoArreglos.pintar(m.datos);
@@ -729,6 +764,7 @@
           break;
         case "concentracion": setConcentracion(m.datos); break;
         case "modo_code": setModo(m.datos); break;
+        case "modo_redes": setModoRedes(m.datos); break;
         case "sesion_entrada":
           panelAgentes.onEntrada(m.datos);
           panelAutoArreglos.onEntrada(m.datos);

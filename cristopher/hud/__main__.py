@@ -377,6 +377,20 @@ def _on_evento_sesion(nombre: str, evento: dict) -> None:
         pass
 
 
+def _on_evento_control_total(evento: dict) -> None:
+    """Callback de `control_total.bucle` (Fase 2): republica al bus para que el
+    widget narre en vivo y el borde sepa si está "trabajando" — a diferencia de
+    `_on_evento_sesion`, un solo argumento: el Modo Control Total es un singleton,
+    no varias sesiones con nombre (ver `bucle.py::OnEvento`)."""
+    try:
+        bus.set_control_total_actividad(evento.get("estado", "reposo"))
+        entrada = evento.get("entrada")
+        if entrada:
+            bus.add_control_total_entrada(entrada)
+    except Exception:
+        pass
+
+
 def _sesiones_listar(origen: str = "") -> dict:
     from cristopher.sesiones import get_gestor_sesiones
     sesiones = get_gestor_sesiones().listar()
@@ -450,14 +464,53 @@ def _sesiones_parar(nombre: str) -> dict:
 # --- Modo code (Fase 1): entrar/salir por botón + tareas para el widget -----------
 # `estado_code` es un flag sin lock propio (como estado.py/estado_diario.py), así que
 # es seguro leerlo/mutarlo directamente desde el hilo HTTP, igual que música/notas.
+# Modo code y Modo redes ocupan la misma pantalla dedicada del HUD (ver style.css
+# body[data-modo=...]) — activar uno desactiva el otro, así el frontend nunca tiene
+# que resolver la ambigüedad de dos flags true a la vez.
 def _modo_code_set(activo: bool) -> dict:
-    from cristopher import estado_code
+    from cristopher import estado_code, estado_redes
     if activo:
         estado_code.activar()
+        estado_redes.desactivar()
+        bus.set_modo_redes(False)
     else:
         estado_code.desactivar()
     bus.set_modo_code(activo)
     return {"ok": True, "activo": activo}
+
+
+# --- Modo redes: dashboard de YouTube/Instagram/TikTok (ver PLAN "Modo redes") ----
+# Mismo mecanismo que Modo code (arriba), en espejo. Al activar, dispara un refresco
+# en un hilo aparte para no dejar la pantalla vacía mientras responde /modo_redes;
+# el hilo de sondeo (_redes_poll_loop) se encarga de mantenerlo fresco mientras el
+# modo siga activo.
+def _modo_redes_set(activo: bool) -> dict:
+    from cristopher import estado_code, estado_redes
+    if activo:
+        estado_redes.activar()
+        estado_code.desactivar()
+        bus.set_modo_code(False)
+        from cristopher import redes_dashboard
+        threading.Thread(target=redes_dashboard.refrescar_todo, daemon=True).start()
+    else:
+        estado_redes.desactivar()
+    bus.set_modo_redes(activo)
+    return {"ok": True, "activo": activo}
+
+
+def _redes_dashboard_json() -> dict:
+    from cristopher import redes_dashboard
+    return redes_dashboard.cache_actual()
+
+
+def _redes_detalle_json(plataforma: str, alias: str) -> dict:
+    from cristopher import redes_dashboard
+    return redes_dashboard.detalle_cuenta(plataforma, alias)
+
+
+def _redes_refrescar_json() -> dict:
+    from cristopher import redes_dashboard
+    return redes_dashboard.refrescar_todo()
 
 
 def _tareas_listar() -> dict:
@@ -555,6 +608,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_sesiones_conflictos())
         if self.path == "/tareas":
             return self._json(_tareas_listar())
+        if self.path == "/redes/dashboard":
+            return self._json(_redes_dashboard_json())
+        if self.path.startswith("/redes/detalle"):
+            qs = parse_qs(urlparse(self.path).query)
+            plataforma = (qs.get("plataforma") or [""])[0]
+            alias = (qs.get("alias") or [""])[0]
+            return self._json(_redes_detalle_json(plataforma, alias))
         # archivo estático por nombre
         nombre = self.path.lstrip("/").split("?")[0]
         if (STATIC / nombre).is_file():
@@ -624,6 +684,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_programadas_cancelar()
         if self.path == "/modo_code":
             return self._post_modo_code()
+        if self.path == "/modo_redes":
+            return self._post_modo_redes()
+        if self.path == "/redes/refrescar":
+            return self._json(_redes_refrescar_json())
         return self.send_error(404)
 
     def _post_enviar(self):
@@ -785,6 +849,10 @@ class Handler(BaseHTTPRequestHandler):
         data = self._body_json()
         self._json(_modo_code_set(bool(data.get("activo"))))
 
+    def _post_modo_redes(self):
+        data = self._body_json()
+        self._json(_modo_redes_set(bool(data.get("activo"))))
+
 
 def _muestreo_metricas():
     try:
@@ -799,6 +867,28 @@ def _muestreo_metricas():
             bus.set_metricas(cpu, ram)
         except Exception:
             return
+
+
+_REDES_REFRESCO_SEGUNDOS = 5 * 60
+
+
+def _redes_poll_loop():
+    """Sondeo en segundo plano del Modo redes: SOLO refresca mientras el modo está
+    activo (cuida cuota de las 3 APIs con 8 cuentas — ver PLAN "Modo redes"),
+    cada `_REDES_REFRESCO_SEGUNDOS`. Duerme en tramos cortos para reaccionar rápido
+    cuando el modo se activa/desactiva por chat o por botón."""
+    from cristopher import estado_redes, redes_dashboard
+    while True:
+        time.sleep(30)
+        try:
+            if not estado_redes.esta_activo():
+                continue
+            cache = redes_dashboard.cache_actual()
+            actualizado_en = cache.get("actualizado_en")
+            if actualizado_en is None or (time.time() - actualizado_en) >= _REDES_REFRESCO_SEGUNDOS:
+                redes_dashboard.refrescar_todo()
+        except Exception:
+            pass  # un fallo puntual de red no debe matar el hilo de sondeo
 
 
 def _demonio_proactivo():
@@ -879,10 +969,17 @@ def main() -> int:
     # (Fase 2/4 son quienes lo consumen de verdad); degrada solo con un log.warning si
     # falta pynput o falla el registro (ver killswitch.iniciar_killswitch).
     killswitch.iniciar_killswitch()
+    # Fase 4: el bucle narra en vivo (widget) y el kill-switch, si salta, deja el
+    # widget/borde/HUD coherentes (no solo el flag de bajo nivel del driver).
+    from cristopher.control_total import bucle
+    from cristopher.tools.control_total_tools import desactivar_control_total
+    bucle.set_on_evento(_on_evento_control_total)
+    killswitch.set_on_disparo_extra(lambda: desactivar_control_total())
     threading.Thread(target=_worker, daemon=True).start()
     threading.Thread(target=_muestreo_metricas, daemon=True).start()
     threading.Thread(target=_demonio_proactivo, daemon=True).start()
     threading.Thread(target=_whatsapp_comandos_watcher, daemon=True).start()
+    threading.Thread(target=_redes_poll_loop, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", HUD_PORT), Handler)
     url = f"http://localhost:{HUD_PORT}"
     # Mismo guard que cristopher/__main__.py: bajo pythonw (sin consola) sys.stdout es

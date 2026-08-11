@@ -22,7 +22,7 @@ body{
   margin:0; background:var(--bg); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
   color:var(--text); font-family:var(--sans); font-size:12px;
   border:1px solid var(--line); border-radius:10px; overflow:hidden;
-  display:flex; flex-direction:column;
+  display:flex; flex-direction:column; position:relative;
 }
 
 .w-top{
@@ -77,3 +77,28 @@ body[data-estado="escuchando"] .w-core{ background:var(--cyan-glow); box-shadow:
 
 .w-log::-webkit-scrollbar{ width:6px; }
 .w-log::-webkit-scrollbar-thumb{ background:var(--line); border-radius:3px; }
+
+/* Modal de confirmación (Fase 4) — bloquea el resto del widget mientras hay una
+   pausa de guardarraíles.py pendiente. */
+.w-confirm-overlay[hidden]{ display:none; }
+.w-confirm-overlay{
+  position:absolute; inset:0; z-index:10;
+  background:rgba(2,4,8,.82); backdrop-filter:blur(3px);
+  display:flex; align-items:center; justify-content:center; padding:16px;
+}
+.w-confirm-box{
+  background:rgba(8,13,22,.96); border:1px solid var(--line); border-radius:8px;
+  padding:14px; width:100%; max-width:280px;
+}
+.w-confirm-box p{
+  margin:0 0 12px; font-size:12px; line-height:1.5; color:var(--text-hi);
+  white-space:pre-wrap;
+}
+.w-confirm-botones{ display:flex; gap:8px; justify-content:flex-end; }
+.w-confirm-botones button{
+  background:transparent; border:1px solid var(--line); color:var(--text);
+  border-radius:6px; padding:6px 12px; cursor:pointer; font-size:11px;
+}
+#w-confirm-ok{ border-color:var(--cyan); color:var(--cyan-glow); }
+#w-confirm-ok:hover{ background:rgba(47,143,255,.18); }
+#w-confirm-cancel:hover{ background:rgba(226,75,74,.18); border-color:#F09595; color:#F09595; }

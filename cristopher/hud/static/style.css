@@ -759,6 +759,109 @@ body[data-modo="code"] .hud-code{
 .nowplaying[data-sonando="0"] .np-state{color:var(--steel)}
 .nowplaying[data-sonando="0"] .np-vis{opacity:.4}
 
+/* ---------- 12b. Modo Control Total (Fase 4) ---------- */
+/* Skin azul, mismo mecanismo que el rojo de modo code (arriba) — pero NO oculta
+   los widgets normales ni cambia el layout: el widget/borde viven en ventanas
+   propias (Fase 3), aquí solo se retiñe el HUD grande. Atributo INDEPENDIENTE de
+   data-modo (no lo sustituye): en teoría ambos podrían coexistir — caso raro, sin
+   resolver a propósito. El orbe 3D se retiñe aparte en app.js (mismo motivo que
+   modo code: su color sale de TARGETS/uCol, no de estas variables). */
+body[data-control-total="1"]{
+  --cyan:#2f8fff;
+  --cyan-bright:#7ab8ff;
+  --cyan-glow:#5aa6ff;
+  --line-cyan:rgba(47,143,255,.28);
+}
+
+/* ---------- 12c. Modo redes (dashboard YouTube/Instagram/TikTok) ---------- */
+/* Skin morado: mismo mecanismo exacto que el rojo de Modo code (§12) — Modo code y
+   Modo redes comparten el mismo atributo body[data-modo], son mutuamente
+   excluyentes (lo aplica hud/__main__.py, nunca hay los dos a "true" a la vez), así
+   que basta con añadir el valor "redes" al mismo selector sin tocar la lógica de
+   Modo code. El orbe 3D se retiñe aparte en app.js (mismo motivo que Modo code: su
+   color sale de TARGETS/uCol, no de estas variables). Ver PLAN "Modo redes". */
+body[data-modo="redes"]{
+  --cyan:#B15CFF;
+  --cyan-bright:#D19DFF;
+  --cyan-glow:#C688FF;
+  --line-cyan:rgba(177,92,255,.28);
+}
+body[data-modo="redes"] .hud-normal-widget{display:none !important}
+body[data-modo="redes"] .core{
+  position:fixed; top:66px; right:18px; width:150px; height:150px; z-index:3;
+  padding:0; border:none; background:none; box-shadow:none; pointer-events:none;
+}
+body[data-modo="redes"] .core .bracket,
+body[data-modo="redes"] .core::before,
+body[data-modo="redes"] .core::after,
+body[data-modo="redes"] .core .widget-drag,
+body[data-modo="redes"] .core .widget-resize,
+body[data-modo="redes"] .core .widget-remove,
+body[data-modo="redes"] .core .core-caption{display:none}
+
+/* Pantalla dedicada del Modo redes: mismo hueco de rejilla que deja Modo code. */
+.hud-redes{display:none; grid-column:1/13; grid-row:2/15}
+body[data-modo="redes"] .hud-redes{
+  display:grid; grid-template-columns:repeat(12, 1fr); grid-template-rows:repeat(13, 1fr);
+  gap:var(--gap);
+}
+.redes-cuentas{grid-column:1/5; grid-row:1/14; display:flex; flex-direction:column; min-height:0}
+.redes-detalle{grid-column:5/13; grid-row:1/9; display:flex; flex-direction:column; min-height:0}
+.redes-tips{grid-column:5/13; grid-row:9/14; display:flex; flex-direction:column; min-height:0}
+
+.redes-toolbar{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; flex-wrap:wrap}
+.redes-toolbar-acciones{display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; margin-left:auto}
+.redes-actualizado{font-family:var(--mono); font-size:10px; color:var(--steel); opacity:.75; white-space:nowrap}
+.redes-refrescar{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;
+  padding:6px 12px; border-radius:var(--r); cursor:pointer;
+  background:transparent; border:1px solid var(--line-cyan); color:var(--cyan-glow);
+  transition:background .2s var(--ease);
+}
+.redes-refrescar:hover{background:rgba(177,92,255,.14)}
+.redes-refrescar:disabled{opacity:.5; cursor:not-allowed}
+
+.redes-plataforma-titulo{
+  font-family:var(--mono); text-transform:uppercase; font-size:9.5px; letter-spacing:.16em;
+  color:var(--steel); margin:12px 0 6px;
+}
+.redes-plataforma-titulo:first-child{margin-top:0}
+.redes-lista{flex:1; overflow-y:auto; min-height:0}
+.redes-tarjeta{
+  font-family:var(--mono); font-size:11px; color:var(--steel-2); cursor:pointer;
+  padding:9px 10px; border-left:2px solid var(--steel); border-radius:0 var(--r) var(--r) 0;
+  margin-bottom:6px; transition:background .15s var(--ease), border-color .15s var(--ease);
+}
+.redes-tarjeta:hover{background:rgba(177,92,255,.08)}
+.redes-tarjeta.sel{border-color:var(--cyan); background:rgba(177,92,255,.12)}
+.redes-tarjeta b{color:var(--cyan-glow); display:block}
+.redes-tarjeta small{opacity:.65; display:block; margin-top:2px}
+.redes-tarjeta.con-error{border-color:var(--amber); color:var(--amber-bright)}
+.redes-lista .empty{color:var(--steel); font-size:11px; font-style:italic}
+
+.redes-detalle-cuerpo{flex:1; overflow-y:auto; min-height:0}
+.redes-detalle-resumen{
+  font-family:var(--mono); font-size:12px; color:var(--text); line-height:1.6;
+  padding-bottom:10px; margin-bottom:10px; border-bottom:1px solid var(--line);
+}
+.redes-detalle-resumen b{color:var(--cyan-glow)}
+.redes-detalle-item{
+  font-family:var(--mono); font-size:11px; color:var(--steel-2);
+  padding:7px 0; border-bottom:1px solid var(--line);
+}
+.redes-detalle-item:last-child{border-bottom:none}
+.redes-detalle-item .t{color:var(--text); display:block; margin-bottom:3px}
+.redes-detalle-item small{opacity:.7}
+.redes-detalle .empty{color:var(--steel); font-size:11px; font-style:italic}
+
+.redes-tips-lista{flex:1; overflow-y:auto; min-height:0}
+.redes-tips-lista .item{
+  font-family:var(--mono); font-size:11px; color:var(--amber-bright);
+  padding:7px 9px; border-left:2px solid var(--amber); border-radius:0 var(--r) var(--r) 0;
+  margin-bottom:6px; background:rgba(245,185,66,.06);
+}
+.redes-tips-lista .empty{color:var(--steel); font-size:11px; font-style:italic}
+
 /* ---------- 13. Accesibilidad / responsive ---------- */
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.001ms !important; animation-iteration-count:1 !important}

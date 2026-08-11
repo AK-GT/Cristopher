@@ -73,6 +73,10 @@ def _spawn() -> subprocess.Popen:
     env["CRISTOPHER_WHATSAPP_STORE_DIR"] = str(WHATSAPP_STORE_DIR)
 
     log = open(WHATSAPP_LOG, "a", encoding="utf-8")
+    # CREATE_NO_WINDOW: sin esto, cada intento de arranque (p. ej. si node crashea al
+    # instante por un módulo que falta) abre y cierra una consola de Node visible —
+    # el padre (pythonw, sin consola propia) hace que Windows le cree una nueva.
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     try:
         return subprocess.Popen(
             [node, str(server_js)],
@@ -80,6 +84,7 @@ def _spawn() -> subprocess.Popen:
             stdout=log,
             stderr=subprocess.STDOUT,
             env=env,
+            creationflags=creationflags,
         )
     except Exception as exc:
         raise WhatsAppError(f"No pude lanzar el servicio de WhatsApp: {exc}") from exc

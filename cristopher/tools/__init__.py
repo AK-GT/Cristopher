@@ -20,6 +20,14 @@ from cristopher.tools.code_tools import (
     activar_modo_code,
     desactivar_modo_code,
 )
+from cristopher.tools.redes_modo_tools import (
+    activar_modo_redes,
+    desactivar_modo_redes,
+)
+from cristopher.tools.control_total_tools import (
+    activar_control_total,
+    desactivar_control_total,
+)
 from cristopher.tools.briefing_tools import (
     briefing_generar,
     briefing_tema_agregar,
@@ -126,6 +134,11 @@ from cristopher.tools.personalidad_tools import (
     personalidad_quitar,
     personalidad_ver,
 )
+from cristopher.tools.arranque_tools import (
+    cancion_arranque_cambiar,
+    cancion_arranque_ver,
+    escucha_detener_sesion,
+)
 from cristopher.tools.pantalla_tools import (
     capturar_pantalla,
     capturar_ventana_activa,
@@ -166,6 +179,22 @@ from cristopher.tools.voz_tools import (
     voz_listar_voces,
 )
 from cristopher.tools.whatsapp_tools import whatsapp_check_new, whatsapp_read, whatsapp_send
+from cristopher.tools.youtube_tools import (
+    youtube_listar_shorts,
+    youtube_metricas_canal,
+    youtube_publicar_video,
+)
+from cristopher.tools.instagram_tools import (
+    instagram_listar_publicaciones,
+    instagram_metricas_cuenta,
+    instagram_publicar_reel,
+)
+from cristopher.tools.tiktok_tools import (
+    tiktok_listar_videos,
+    tiktok_metricas_cuenta,
+    tiktok_publicar_video,
+)
+from cristopher.tools.redes_tools import redes_cuenta_conectar, redes_cuentas_listar, redes_resumen
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -361,6 +390,48 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": personalidad_ver,
+    },
+    {
+        "name": "cancion_arranque_cambiar",
+        "description": (
+            "Cambia la canción que suena al detectar las 2 palmadas de arranque. "
+            "Úsala solo cuando el usuario lo pida explícitamente."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "consulta": {
+                    "type": "string",
+                    "description": (
+                        "Nombre de archivo en la biblioteca local (data/musica), "
+                        "título a buscar en la web, o una URL directa."
+                    ),
+                },
+            },
+            "required": ["consulta"],
+        },
+        "fn": cancion_arranque_cambiar,
+    },
+    {
+        "name": "cancion_arranque_ver",
+        "description": (
+            "Muestra qué canción de arranque está configurada ahora mismo (la que "
+            "suena con las 2 palmadas)."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": cancion_arranque_ver,
+    },
+    {
+        "name": "escucha_detener_sesion",
+        "description": (
+            "Mata el proceso que escucha las 2 palmadas para lo que queda de esta "
+            "sesión de Windows (no reacciona más hasta apagar/reiniciar el ordenador). "
+            "El autostart no se toca: la próxima vez que se encienda, vuelve a arrancar "
+            "solo. Úsala solo si el usuario pide explícitamente que no le despiertes "
+            "más por palmadas en esta sesión / hasta que reinicie o apague."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": escucha_detener_sesion,
     },
     {
         "name": "briefing_generar",
@@ -618,6 +689,205 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["message_id"],
         },
         "fn": marcar_leido,
+    },
+    # --- Redes sociales (Fase 1: YouTube) -----------------------------------
+    {
+        "name": "redes_cuenta_conectar",
+        "description": (
+            "Conecta una cuenta nueva de una red social (lanza el consentimiento en "
+            "el navegador; el usuario elige ahí la cuenta a autorizar). Soportadas: "
+            "'youtube', 'instagram' y 'tiktok'. NO requiere confirmación aparte: la "
+            "propia pantalla de consentimiento es la confirmación."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "plataforma": {
+                    "type": "string",
+                    "description": "Red social: 'youtube', 'instagram' o 'tiktok'.",
+                },
+                "alias": {
+                    "type": "string",
+                    "description": "Nombre corto para identificar esta cuenta (p. ej. 'principal').",
+                },
+            },
+            "required": ["plataforma", "alias"],
+        },
+        "fn": redes_cuenta_conectar,
+    },
+    {
+        "name": "redes_cuentas_listar",
+        "description": "Muestra qué cuentas de redes sociales están conectadas, por plataforma.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": redes_cuentas_listar,
+    },
+    {
+        "name": "redes_resumen",
+        "description": (
+            "Panorama rápido de todas las cuentas de redes sociales conectadas "
+            "(suscriptores, vistas recientes, video más visto). Fase 1: datos reales "
+            "solo de YouTube."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": redes_resumen,
+    },
+    {
+        "name": "youtube_listar_shorts",
+        "description": (
+            "Lista los Shorts (vídeos de <=60s) más recientes de un canal de YouTube "
+            "conectado, con vistas/likes/comentarios de cada uno."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "alias": {"type": "string", "description": "Alias de la cuenta YouTube conectada."},
+                "n": {"type": "integer", "description": "Cuántos shorts como máximo (por defecto 10)."},
+            },
+            "required": ["alias"],
+        },
+        "fn": youtube_listar_shorts,
+    },
+    {
+        "name": "youtube_metricas_canal",
+        "description": (
+            "Métricas de un canal de YouTube en un rango de días: vistas, minutos "
+            "vistos, suscriptores ganados/perdidos, likes, comentarios, compartidos."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "alias": {"type": "string", "description": "Alias de la cuenta YouTube conectada."},
+                "dias": {"type": "integer", "description": "Ventana en días hacia atrás (por defecto 28)."},
+            },
+            "required": ["alias"],
+        },
+        "fn": youtube_metricas_canal,
+    },
+    {
+        "name": "youtube_publicar_video",
+        "description": (
+            "Sube un vídeo/Short a un canal de YouTube conectado. PIDE CONFIRMACIÓN "
+            "al usuario antes de subir nada; por defecto queda como privado."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "alias": {"type": "string", "description": "Alias de la cuenta YouTube conectada."},
+                "ruta_archivo": {"type": "string", "description": "Ruta local al archivo de vídeo."},
+                "titulo": {"type": "string", "description": "Título del vídeo."},
+                "descripcion": {"type": "string", "description": "Descripción del vídeo (opcional)."},
+                "privacidad": {
+                    "type": "string",
+                    "description": "'private' (por defecto), 'unlisted' o 'public'.",
+                },
+            },
+            "required": ["alias", "ruta_archivo", "titulo"],
+        },
+        "fn": youtube_publicar_video,
+    },
+    {
+        "name": "instagram_listar_publicaciones",
+        "description": (
+            "Lista las publicaciones más recientes de una cuenta de Instagram "
+            "conectada, con likes/comentarios/alcance/guardados de cada una."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "alias": {"type": "string", "description": "Alias de la cuenta Instagram conectada."},
+                "n": {"type": "integer", "description": "Cuántas publicaciones como máximo (por defecto 10)."},
+            },
+            "required": ["alias"],
+        },
+        "fn": instagram_listar_publicaciones,
+    },
+    {
+        "name": "instagram_metricas_cuenta",
+        "description": (
+            "Métricas de una cuenta de Instagram en un rango de días: alcance y "
+            "seguidores actuales."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "alias": {"type": "string", "description": "Alias de la cuenta Instagram conectada."},
+                "dias": {"type": "integer", "description": "Ventana en días hacia atrás (por defecto 28)."},
+            },
+            "required": ["alias"],
+        },
+        "fn": instagram_metricas_cuenta,
+    },
+    {
+        "name": "instagram_publicar_reel",
+        "description": (
+            "Publica un Reel en una cuenta de Instagram conectada. PIDE "
+            "CONFIRMACIÓN antes de tocar nada. Puede tardar varios minutos "
+            "(Meta procesa el vídeo antes de poder publicarlo)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "alias": {"type": "string", "description": "Alias de la cuenta Instagram conectada."},
+                "ruta_archivo": {"type": "string", "description": "Ruta local al archivo de vídeo."},
+                "caption": {"type": "string", "description": "Descripción del Reel (opcional)."},
+            },
+            "required": ["alias", "ruta_archivo"],
+        },
+        "fn": instagram_publicar_reel,
+    },
+    {
+        "name": "tiktok_listar_videos",
+        "description": (
+            "Lista los vídeos más recientes de una cuenta de TikTok conectada, con "
+            "vistas/likes/comentarios/compartidos de cada uno."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "alias": {"type": "string", "description": "Alias de la cuenta TikTok conectada."},
+                "n": {"type": "integer", "description": "Cuántos vídeos como máximo (por defecto 10)."},
+            },
+            "required": ["alias"],
+        },
+        "fn": tiktok_listar_videos,
+    },
+    {
+        "name": "tiktok_metricas_cuenta",
+        "description": (
+            "Estadísticas actuales de una cuenta de TikTok: seguidores, likes "
+            "totales recibidos y número de vídeos. Snapshot del momento (la Display "
+            "API de TikTok no da series históricas por rango de fechas)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "alias": {"type": "string", "description": "Alias de la cuenta TikTok conectada."},
+            },
+            "required": ["alias"],
+        },
+        "fn": tiktok_metricas_cuenta,
+    },
+    {
+        "name": "tiktok_publicar_video",
+        "description": (
+            "Publica un vídeo en una cuenta de TikTok conectada. PIDE CONFIRMACIÓN "
+            "antes de subir nada. Por defecto solo lo ve el propio usuario "
+            "(SELF_ONLY) — publicar público exige que la app esté auditada por TikTok."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "alias": {"type": "string", "description": "Alias de la cuenta TikTok conectada."},
+                "ruta_archivo": {"type": "string", "description": "Ruta local al archivo de vídeo."},
+                "titulo": {"type": "string", "description": "Título/descripción del vídeo (opcional)."},
+                "privacidad": {
+                    "type": "string",
+                    "description": "'SELF_ONLY' (por defecto) u otro nivel si la app está auditada.",
+                },
+            },
+            "required": ["alias", "ruta_archivo"],
+        },
+        "fn": tiktok_publicar_video,
     },
     {
         "name": "navegar_leer",
@@ -1380,6 +1650,69 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": desactivar_modo_code,
+    },
+    # --- Modo redes (dashboard YouTube/Instagram/TikTok, ver PLAN "Modo redes") --
+    {
+        "name": "activar_modo_redes",
+        "description": (
+            "Activa el Modo redes: abre en el HUD el dashboard de YouTube/"
+            "Instagram/TikTok (cuentas conectadas, métricas y tips). Úsalo cuando "
+            "detectes que el usuario quiere ver el panorama de sus redes sociales "
+            "('ponme en modo redes', 'quiero ver mis estadísticas de redes', "
+            "'abre el dashboard de redes'). Si no está claro, pregúntale antes en "
+            "lugar de activarlo."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": activar_modo_redes,
+    },
+    {
+        "name": "desactivar_modo_redes",
+        "description": (
+            "Desactiva el Modo redes y vuelve al HUD normal. Úsalo cuando el "
+            "usuario dé por terminada la consulta de sus redes ('ya está', "
+            "'salgamos de modo redes', 'volvamos a lo normal')."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": desactivar_modo_redes,
+    },
+    # --- Modo Control Total (Fase 4: ratón/teclado autónomos) -------------------
+    {
+        "name": "activar_control_total",
+        "description": (
+            "Activa el Modo Control Total: a partir de ahora CRISTOPHER toma el "
+            "ratón y el teclado del PC de forma autónoma y continua para "
+            "conseguir el objetivo que le des, con guardarraíles de seguridad "
+            "(para y pide confirmación ante pagos, borrados irreversibles, "
+            "contraseñas y CAPTCHAs) y un atajo físico de emergencia (Ctrl+F3) "
+            "siempre activo. Es la herramienta MÁS DELICADA de todas: actívala "
+            "SOLO cuando el usuario lo pida de forma clara e inequívoca ('toma "
+            "el control', 'modo control total', 'hazlo tú con el ratón y el "
+            "teclado'). Si hay la mínima duda sobre si es esto lo que quiere, o "
+            "sobre cuál es el objetivo exacto, PREGÚNTALE antes — nunca la "
+            "actives por iniciativa propia ni interpretando de más."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "objetivo": {
+                    "type": "string",
+                    "description": "Qué debe conseguir operando el PC, en una frase concreta y accionable.",
+                },
+            },
+            "required": ["objetivo"],
+        },
+        "fn": activar_control_total,
+    },
+    {
+        "name": "desactivar_control_total",
+        "description": (
+            "Desactiva el Modo Control Total: para el bucle en marcha (si lo "
+            "hay) y cierra el widget/borde azul. Úsalo cuando el usuario dé la "
+            "tarea por terminada o pida parar ('ya está', 'para', 'suéltalo', "
+            "'sal del modo control total')."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": desactivar_control_total,
     },
     # --- Pantalla y portapapeles (Módulo C — utilidades, Tanda A) --------------
     {

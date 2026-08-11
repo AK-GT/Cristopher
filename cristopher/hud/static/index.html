@@ -31,6 +31,7 @@
       <button type="button" id="agentes-toggle" class="edit-toggle" title="Modo agentes (sesiones Claude Code)">🤖</button>
       <button type="button" id="autoarreglos-toggle" class="edit-toggle" title="Auto-arreglos en curso">🛠️</button>
       <button type="button" id="code-toggle" class="edit-toggle" title="Modo code (gestión de sesiones)">🔴</button>
+      <button type="button" id="redes-toggle" class="edit-toggle" title="Modo redes (YouTube/Instagram/TikTok)">🟣</button>
       <button type="button" id="edit-toggle" class="edit-toggle" title="Editar distribución (E)">⚙</button>
     </header>
 
@@ -253,6 +254,44 @@
         </div>
       </div>
     </div>
+
+    <!-- Modo redes: pantalla dedicada del dashboard YouTube/Instagram/TikTok, solo
+         visible con body[data-modo="redes"] (ver PLAN "Modo redes"). Mutuamente
+         excluyente con Modo code (misma pantalla, distinto contenido). -->
+    <div class="hud-redes">
+      <div class="redes-cuentas panel">
+        <i class="bracket"></i>
+        <div class="widget-drag" aria-hidden="true">⠿</div>
+        <div class="widget-resize" aria-hidden="true"></div>
+        <button type="button" class="widget-remove" aria-hidden="true" tabindex="-1" title="Ocultar">×</button>
+        <div class="redes-toolbar">
+          <div class="panel-title" style="margin:0">CUENTAS</div>
+          <div class="redes-toolbar-acciones">
+            <span class="redes-actualizado" id="redes-actualizado"></span>
+            <button type="button" class="redes-refrescar" id="redes-refrescar">Actualizar ahora</button>
+          </div>
+        </div>
+        <div class="redes-lista" id="redes-lista"><div class="empty">sin cuentas conectadas</div></div>
+      </div>
+
+      <div class="redes-detalle panel">
+        <i class="bracket"></i>
+        <div class="widget-drag" aria-hidden="true">⠿</div>
+        <div class="widget-resize" aria-hidden="true"></div>
+        <button type="button" class="widget-remove" aria-hidden="true" tabindex="-1" title="Ocultar">×</button>
+        <div class="panel-title">DETALLE</div>
+        <div class="redes-detalle-cuerpo" id="redes-detalle-cuerpo"><div class="empty">selecciona una cuenta</div></div>
+      </div>
+
+      <div class="redes-tips panel">
+        <i class="bracket"></i>
+        <div class="widget-drag" aria-hidden="true">⠿</div>
+        <div class="widget-resize" aria-hidden="true"></div>
+        <button type="button" class="widget-remove" aria-hidden="true" tabindex="-1" title="Ocultar">×</button>
+        <div class="panel-title">TIPS</div>
+        <div class="redes-tips-lista" id="redes-tips-lista"><div class="empty">sin avisos</div></div>
+      </div>
+    </div>
   </div>
 
   <!-- Toolbar de distribuciones (solo visible en modo edición) -->
@@ -337,6 +376,7 @@
   <script src="app.js"></script>
   <script src="widgets.js"></script>
   <script src="code.js"></script>
+  <script src="redes.js"></script>
   <script src="bg.js"></script>
 </body>
 </html>

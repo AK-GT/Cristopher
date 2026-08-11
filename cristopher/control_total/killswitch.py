@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from typing import Callable, Optional
 
 from cristopher.config import CONTROL_TOTAL_HOTKEY
 from cristopher.control_total import log
@@ -37,6 +38,8 @@ _DETENIDO = threading.Event()
 
 _listener = None
 _listener_lock = threading.Lock()
+
+_on_disparo_extra: Optional[Callable[[], None]] = None
 
 
 def disparado() -> bool:
@@ -49,9 +52,23 @@ def reset() -> None:
     _DETENIDO.clear()
 
 
+def set_on_disparo_extra(callback: Optional[Callable[[], None]]) -> None:
+    """Fase 4 registra aquí `desactivar_control_total` para que el kill-switch deje
+    el widget/borde/HUD coherentes, no solo el flag de bajo nivel del driver."""
+    global _on_disparo_extra
+    _on_disparo_extra = callback
+
+
 def _on_disparo() -> None:
     _DETENIDO.set()
     log.warning("Kill-switch disparado (%s) — Modo Control Total detenido.", CONTROL_TOTAL_HOTKEY)
+    if _on_disparo_extra is not None:
+        try:
+            _on_disparo_extra()
+        except Exception as exc:
+            # Un suscriptor roto NUNCA debe impedir que el disparo real (el flag de
+            # arriba, ya puesto) surta efecto — mismo criterio que sesiones.py/bucle.py.
+            log.warning("on_disparo_extra falló: %s", exc)
 
 
 def iniciar_killswitch() -> None:

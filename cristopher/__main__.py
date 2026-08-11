@@ -35,9 +35,13 @@ BANNER = f"""{CYAN}{BOLD}
 
 
 def main() -> int:
-    print(BANNER)
-    print(f"{CYAN}{BOLD}CRISTOPHER ›{RESET} {saludo_arranque()}\n")
-    print(f"{DIM}Levantando el command-center (HUD) en http://localhost:{HUD_PORT} …{RESET}")
+    # Bajo pythonw (lanzado sin consola, p. ej. desde escucha.py al detectar 2 palmadas)
+    # sys.stdout es None y print() revienta con AttributeError (bpo-13120) antes de
+    # llegar a levantar el HUD. Con consola real, se imprime como siempre.
+    if sys.stdout is not None:
+        print(BANNER)
+        print(f"{CYAN}{BOLD}CRISTOPHER ›{RESET} {saludo_arranque()}\n")
+        print(f"{DIM}Levantando el command-center (HUD) en http://localhost:{HUD_PORT} …{RESET}")
     # El HUD es el sistema vivo completo: agente + demonio proactivo + métricas + voz.
     from cristopher.hud.__main__ import main as hud_main
 

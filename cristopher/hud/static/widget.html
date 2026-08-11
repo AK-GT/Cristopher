@@ -25,6 +25,20 @@
     <input type="text" id="w-entrada" autocomplete="off" placeholder="Escribe aquí…" />
     <button type="submit">▶</button>
   </form>
+
+  <!-- Modal de confirmación (Fase 4): versión mínima de la del HUD grande, sin
+       fila de texto libre — guardarraíles.py solo usa confirmar_accion (sí/no),
+       nunca la variante con texto. Mismo endpoint POST /confirmar. -->
+  <div class="w-confirm-overlay" id="w-confirm-overlay" hidden>
+    <div class="w-confirm-box">
+      <p id="w-confirm-body"></p>
+      <div class="w-confirm-botones">
+        <button type="button" id="w-confirm-cancel">Cancelar</button>
+        <button type="button" id="w-confirm-ok">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
   <script src="widget.js"></script>
 </body>
 </html>
