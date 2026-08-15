@@ -544,7 +544,7 @@
   // de las correcciones al plan), así que basta este override en animate().
   let modoCode = false;
   const CODE_COL = 0xE24B4A;
-  // Modo redes (dashboard YouTube/Instagram/TikTok, ver PLAN "Modo redes"): mismo
+  // Modo redes (dashboard YouTube/Instagram/TikTok, ver CLAUDE.md): mismo
   // mecanismo que modoCode, color morado. Backend garantiza que modoCode y
   // modoRedes nunca están a true a la vez (exclusión mutua en hud/__main__.py),
   // así que el orden de precedencia de abajo es solo defensivo.
@@ -663,7 +663,7 @@
     _actualizarDatasetModo();
     window.__hudCodeSetModo && window.__hudCodeSetModo(modoCode);
   }
-  // Modo redes (ver PLAN "Modo redes"): mismo mecanismo que setModo. redes.js
+  // Modo redes (ver CLAUDE.md): mismo mecanismo que setModo. redes.js
   // escucha este mismo cambio para arrancar sus propios widgets si hace falta.
   function setModoRedes(activo) {
     modoRedes = !!activo;
@@ -711,7 +711,32 @@
     alertBox.prepend(d);
   }
   const logEl = $("log");
+
+  // ---------- Respuesta en vivo (streaming) ----------
+  // Burbuja provisional que se va rellenando con los trozos que manda el modelo. Es
+  // efímera: cuando llega el evento `answer` definitivo (el que sí va al historial),
+  // se borra y la pinta addLog como siempre. Así el log queda idéntico a antes de
+  // haber streaming, y al recargar no se ven fragmentos.
+  let vivaEl = null;
+  let vivaTexto = "";
+  function borrarViva() {
+    if (vivaEl) { vivaEl.remove(); vivaEl = null; vivaTexto = ""; }
+  }
+  function addDelta(trozo) {
+    if (!vivaEl) {
+      vivaEl = document.createElement("div");
+      vivaEl.className = "l answer viva";
+      logEl.appendChild(vivaEl);
+      vivaTexto = "";
+    }
+    vivaTexto += trozo;
+    vivaEl.innerHTML = `<span class="t"></span><b>CRIS</b> <span>${esc(vivaTexto)}</span>`;
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
   function addLog(e) {
+    // La respuesta definitiva sustituye a la que se estaba pintando en vivo.
+    if (e.kind === "answer") borrarViva();
     // Cada entrada viene etiquetada con el modo en que se generó (bus.py::log). Las
     // de modo code se pintan en su propia consola (code.js), no en la de aquí, para
     // no mezclar las dos conversaciones (corrección §2 al plan original).
@@ -756,6 +781,8 @@
         case "snapshot": applySnapshot(m.datos); break;
         case "estado": setEstado(m.datos); break;
         case "log": addLog(m.datos); break;
+        case "answer_delta": addDelta(m.datos); break;
+        case "answer_reset": borrarViva(); break;
         case "metricas": setMetricas(m.datos); break;
         case "tarea": setTarea(m.datos); break;
         case "subagentes": setRoster(m.datos); break;

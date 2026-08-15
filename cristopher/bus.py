@@ -37,6 +37,7 @@ _estado: dict[str, Any] = {
     "modo_voz": estado_voz.esta_activo(),
     "control_total": False,       # snapshot de estado_control_total.esta_activo() (Fase 4)
     "control_total_actividad": "reposo",  # "reposo"|"trabajando" del bucle (Fase 2)
+    "seguro": {"activo": False, "fase": "INACTIVO"},  # snapshot de seguro.estado_actual()
 }
 _log: deque = deque(maxlen=200)   # trazas recientes: [{kind, text, hora}]
 _subs: list[queue.Queue] = []     # colas de suscriptores SSE
@@ -167,10 +168,34 @@ def set_concentracion(snapshot: dict) -> None:
     _emit("concentracion", snapshot)
 
 
+def set_seguro(snapshot: dict) -> None:
+    """Snapshot del Modo Seguro (activo/fase de la FSM/estado de la cámara)."""
+    with _LOCK:
+        _estado["seguro"] = snapshot
+    _emit("seguro", snapshot)
+
+
 def add_sesion_entrada(nombre: str, entrada: dict) -> None:
     """Nueva entrada de transcript de una sesión, para pintarla en vivo en el HUD.
     Efímera (no se guarda en el snapshot), igual que `pedir_confirmacion`."""
     _emit("sesion_entrada", {"nombre": nombre, "entrada": entrada})
+
+
+def answer_delta(texto: str) -> None:
+    """Trozo de la respuesta final según la va escribiendo el modelo (streaming).
+
+    EFÍMERO a propósito — solo `_emit`, nunca `_log`, igual que `add_sesion_entrada`:
+    el deque `_log` tiene tope de 200 entradas y guardar aquí los fragmentos lo
+    llenaría de basura, además de hacer que un navegador que se reconecta reprodujera
+    la respuesta a trocitos desde `snapshot()`. La entrada canónica e histórica sigue
+    siendo el `log("answer", ...)` de siempre, que se emite al terminar el turno."""
+    _emit("answer_delta", texto)
+
+
+def answer_reset() -> None:
+    """Descarta la respuesta que se estaba pintando en vivo (el stream se cortó a
+    medias y el reintento va a repintarla desde cero)."""
+    _emit("answer_reset", None)
 
 
 def pedir_confirmacion(texto: str, permite_texto: bool = False) -> None:

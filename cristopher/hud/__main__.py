@@ -72,6 +72,14 @@ def _guardar_imagen_adjunta(raw: bytes, mime: str) -> str | None:
 
 
 def _on_step(kind: str, text: str) -> None:
+    # Los trozos del streaming van por su propio canal efímero, NO al log: son
+    # fragmentos, y el log es el historial canónico (ver bus.answer_delta).
+    if kind == "answer_delta":
+        bus.answer_delta(text)
+        return
+    if kind == "answer_reset":
+        bus.answer_reset()
+        return
     bus.log(kind, text)
     if kind == "tool_call" and text.startswith("delegar_a_claude"):
         bus.add_subagente("claude-code", text)
@@ -498,7 +506,7 @@ def _modo_voz_set(activo: bool) -> dict:
     return {"ok": True, "activo": activo}
 
 
-# --- Modo redes: dashboard de YouTube/Instagram/TikTok (ver PLAN "Modo redes") ----
+# --- Modo redes: dashboard de YouTube/Instagram/TikTok (ver CLAUDE.md) ----
 # Mismo mecanismo que Modo code (arriba), en espejo. Al activar, dispara un refresco
 # en un hilo aparte para no dejar la pantalla vacía mientras responde /modo_redes;
 # el hilo de sondeo (_redes_poll_loop) se encarga de mantenerlo fresco mientras el
@@ -899,7 +907,7 @@ _REDES_REFRESCO_SEGUNDOS = 5 * 60
 
 def _redes_poll_loop():
     """Sondeo en segundo plano del Modo redes: SOLO refresca mientras el modo está
-    activo (cuida cuota de las 3 APIs con 8 cuentas — ver PLAN "Modo redes"),
+    activo (cuida cuota de las 3 APIs con 8 cuentas — ver CLAUDE.md),
     cada `_REDES_REFRESCO_SEGUNDOS`. Duerme en tramos cortos para reaccionar rápido
     cuando el modo se activa/desactiva por chat o por botón."""
     from cristopher import estado_redes, redes_dashboard

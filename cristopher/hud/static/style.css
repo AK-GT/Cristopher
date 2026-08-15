@@ -385,6 +385,12 @@ body[data-estado="pensando"] .core{
 .log b{display:inline-block; min-width:34px; margin-right:8px; opacity:.9; font-weight:500}
 .log .user{color:var(--text-hi)}
 .log .answer{color:var(--cyan-glow)}
+/* Respuesta que aún se está escribiendo (streaming): cursor parpadeante al final
+   para que se vea que sigue llegando y no parezca una respuesta ya terminada. */
+.log .viva > span:last-child::after{
+  content:"▋"; margin-left:2px; opacity:.65; animation:viva-cursor 1s steps(2) infinite;
+}
+@keyframes viva-cursor{50%{opacity:0}}
 .log .thought{color:var(--steel); opacity:.72; font-style:italic}
 .log .tool_call{color:var(--cyan)}
 .log .observation{color:var(--steel-2); opacity:.82}

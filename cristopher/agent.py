@@ -462,7 +462,70 @@ class Cristopher:
             )
         return RuntimeError(f"Error del modelo de Gemini ({code}).")
 
-    def _generate(self, contents: list[types.Content], max_retries: int = 4):
+    def _consumir_stream(self, model: str, contents: list[types.Content]) -> types.Content:
+        """Consume la respuesta de un modelo EN STREAMING y devuelve el Content
+        completo del paso, tal y como lo espera el bucle ReAct.
+
+        Streaming solo por LATENCIA PERCIBIDA: el trabajo total es el mismo, pero el
+        usuario deja de mirar una pantalla vacía (medido: primera palabra a 1,02s en
+        vez de 4,28s en una respuesta de tres párrafos). El bucle no se entera de que
+        esto es un stream — sigue recibiendo el paso entero, con su texto y sus
+        function_call, así que la selección de herramientas es idéntica (verificado:
+        `apuntar({'texto': 'Comprar pan'})` llega igual troceado).
+
+        Solo se emiten los trozos POSTERIORES a RESPONSE_MARKER: lo anterior es el
+        pensamiento, que en el turno final sigue sin mostrarse, igual que antes de
+        haber streaming. El marcador puede llegar partido entre dos trozos, así que se
+        busca sobre el texto acumulado, no sobre el trozo suelto."""
+        texto: list[str] = []
+        # Los Part con function_call se guardan TAL CUAL llegan, sin reconstruirlos:
+        # Gemini les adjunta un `thought_signature` y, si se rearma el Part a mano, se
+        # pierde y la siguiente vuelta del bucle muere con un 400 ("Function call is
+        # missing a thought_signature in functionCall parts"). Verificado en real.
+        partes_fc: list[types.Part] = []
+        emitidos = 0  # caracteres de la respuesta ya enviados al HUD
+        try:
+            for chunk in self._client.models.generate_content_stream(
+                model=model, contents=contents, config=self._config
+            ):
+                candidato = (chunk.candidates or [None])[0]
+                partes = (candidato.content.parts if candidato and candidato.content else None) or []
+                for parte in partes:
+                    if parte.function_call:
+                        partes_fc.append(parte)
+                    if getattr(parte, "text", None):
+                        texto.append(parte.text)
+                completo = "".join(texto)
+                corte = completo.find(RESPONSE_MARKER)
+                if corte < 0:
+                    continue
+                # lstrip: el modelo mete un salto de línea tras el marcador y la
+                # burbuja no debe empezar en blanco. Una vez hay texto real, el
+                # resultado solo crece, así que el contador de emitidos es estable.
+                listo = completo[corte + len(RESPONSE_MARKER):].lstrip()
+                nuevo = listo[emitidos:]
+                if nuevo:
+                    self._emit("answer_delta", nuevo)
+                    emitidos = len(listo)
+        except Exception:
+            # El stream murió a media respuesta y ya habíamos pintado texto: hay que
+            # borrar la burbuja viva antes de que el reintento/fallback repinte desde
+            # cero, o se vería la respuesta duplicada a trozos.
+            if emitidos:
+                self._emit("answer_reset", "")
+            raise
+
+        # El texto SÍ se fusiona en un único Part: llega en decenas de trozos y `send`
+        # une los text_bits con "\n", así que dejarlos sueltos metería saltos de línea
+        # falsos en mitad de la respuesta.
+        partes_final: list[types.Part] = []
+        completo = "".join(texto)
+        if completo:
+            partes_final.append(types.Part(text=completo))
+        partes_final.extend(partes_fc)
+        return types.Content(role="model", parts=partes_final)
+
+    def _generate(self, contents: list[types.Content], max_retries: int = 4) -> types.Content:
         """Llama a Gemini con reintentos ante errores transitorios (429/500/503) y
         CADENA DE FALLBACK entre cerebros: si un modelo agota reintentos, cae al de
         respaldo (FALLBACK_MODEL, otro Gemini con function calling — nunca Gemma) y
@@ -474,7 +537,10 @@ class Cristopher:
         límites por minuto sin gastar demasiado tiempo cuando el límite es diario.
 
         Si el principal ya degradó hoy, se arranca directo en el respaldo (sin los
-        reintentos + backoff del principal) hasta que cambie el día."""
+        reintentos + backoff del principal) hasta que cambie el día.
+
+        Devuelve el Content del paso ya agregado desde el stream (ver
+        `_consumir_stream`), no el objeto de respuesta crudo del SDK."""
         today = datetime.date.today()
         start = 1 if (self._degraded_date == today and len(self._models) > 1) else 0
         if start > 0:
@@ -493,11 +559,7 @@ class Cristopher:
             attempts = 2 if has_next else max_retries
             for attempt in range(attempts):
                 try:
-                    return self._client.models.generate_content(
-                        model=model,
-                        contents=contents,
-                        config=self._config,
-                    )
+                    return self._consumir_stream(model, contents)
                 except errors.APIError as exc:
                     code = getattr(exc, "code", None)
                     last_code = code
@@ -604,10 +666,8 @@ class Cristopher:
             # mismo turno o de uno previo) llamó a personalidad_agregar/quitar, la
             # próxima llamada al modelo ya debe reflejarlo — sin reiniciar el proceso.
             self._config = self._build_config()
-            response = self._generate(contents)
-
-            candidate = response.candidates[0]
-            content = candidate.content
+            # _generate ya devuelve el Content del paso, agregado desde el stream.
+            content = self._generate(contents)
             contents.append(content)
 
             parts = content.parts or []
