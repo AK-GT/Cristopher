@@ -236,13 +236,16 @@ def _procesar(
                 get_programador().marcar_error(prog_id, str(exc))
             return
         _, respuesta = split_final(answer)
+        # El texto ANTES de hablar: voz.hablar() bloquea este worker en sd.wait() hasta
+        # que termina de sonar, así que loguear después dejaría la consola en blanco
+        # durante toda la locución.
+        bus.log("answer", respuesta)
         if estado.esta_activo():
             bus.set_estado("hablando")
             try:
                 voz.hablar(respuesta)
             except Exception as exc:
                 bus.log("error", f"voz: {exc}")
-        bus.log("answer", respuesta)
         if es_whatsapp:
             try:
                 from cristopher import whatsapp_client
@@ -479,6 +482,22 @@ def _modo_code_set(activo: bool) -> dict:
     return {"ok": True, "activo": activo}
 
 
+# --- Modo voz (respuesta hablada): toggle 🔊 del HUD -----------------------------
+# Mismo razonamiento que _modo_code_set: `estado` es un flag sin lock propio, seguro de
+# mutar desde el hilo HTTP. Es la respuesta HABLADA (TTS), independiente del modo de
+# ENTRADA (texto/pulsando/libre), que vive solo en el frontend.
+def _modo_voz_set(activo: bool) -> dict:
+    if activo:
+        estado.activar()
+    else:
+        estado.desactivar()
+        # Si estaba hablando ahora mismo, callarlo: apagar el altavoz y seguir oyéndolo
+        # hasta el final del párrafo sería absurdo.
+        voz.detener_habla()
+    bus.set_modo_voz(activo)
+    return {"ok": True, "activo": activo}
+
+
 # --- Modo redes: dashboard de YouTube/Instagram/TikTok (ver PLAN "Modo redes") ----
 # Mismo mecanismo que Modo code (arriba), en espejo. Al activar, dispara un refresco
 # en un hilo aparte para no dejar la pantalla vacía mientras responde /modo_redes;
@@ -686,6 +705,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_modo_code()
         if self.path == "/modo_redes":
             return self._post_modo_redes()
+        if self.path == "/modo_voz":
+            return self._post_modo_voz()
         if self.path == "/redes/refrescar":
             return self._json(_redes_refrescar_json())
         return self.send_error(404)
@@ -852,6 +873,10 @@ class Handler(BaseHTTPRequestHandler):
     def _post_modo_redes(self):
         data = self._body_json()
         self._json(_modo_redes_set(bool(data.get("activo"))))
+
+    def _post_modo_voz(self):
+        data = self._body_json()
+        self._json(_modo_voz_set(bool(data.get("activo"))))
 
 
 def _muestreo_metricas():

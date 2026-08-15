@@ -21,8 +21,11 @@ Agente personal orquestado (tipo Jarvis) sobre Gemini. Este archivo manda: léel
 - **SO:** Windows (terminal cmd/PowerShell).
 - **Node.js LTS** (segundo runtime, opcional): solo lo necesita el servicio de WhatsApp
   (`whatsapp/`, Baileys). El resto del proyecto es 100% Python.
-- **Cerebro:** API de Google Gemini, principal `gemini-flash-latest`, con function calling nativo. (Se probó `gemini-pro-latest` como cabeza más potente: dio 429 en el 100% de las pruebas en esta cuenta — cuota gratuita insuficiente, nunca llegó a responder — así que se descartó por ahora.)
-- **Fallback:** OTRO modelo Gemini (`gemini-flash-lite-latest`) cuando el principal toca el límite diario (429) — **nunca Gemma**: Gemma vía esta API no soporta `tools`/`system_instruction`, y como esa config se reutiliza tal cual al caer al fallback (`agent.py::_generate`), respondería con un 400 no reintentable y rompería la degradación con elegancia (§8). Backoff + reintento ante 429 antes de caer al fallback.
+- **Cerebro:** API de Google Gemini, principal `gemini-3.1-flash-lite`, con function calling nativo. (Se probó `gemini-pro-latest` como cabeza más potente: dio 429 en el 100% de las pruebas en esta cuenta — cuota gratuita insuficiente, nunca llegó a responder — así que se descartó por ahora.)
+- **Versiones EXPLÍCITAS, nunca alias `-latest`:** el alias lo mueve Google sin avisar y ya nos cambió el cerebro por debajo a peor. `gemini-flash-latest` pasó a resolver a `gemini-3.6-flash` (modelo de razonamiento, 5 req/min en free tier, ~3s por paso del bucle) y `gemini-flash-lite-latest` a `gemini-3.5-flash-lite`. Se acepta el riesgo contrario — un 404 el día que Google retire la versión fijada — porque es un fallo ruidoso y trivial de arreglar, frente a una degradación silenciosa que nadie ve. Al cambiar de modelo, medir SIEMPRE el enrutado contra el registro `TOOLS` real, no solo la latencia (ver el punto siguiente).
+- **Fallback:** OTRO modelo Gemini (`gemini-3.1-flash-lite-preview`) cuando el principal agota cuota (429) — **nunca Gemma**: Gemma vía esta API no soporta `tools`/`system_instruction`, y como esa config se reutiliza tal cual al caer al fallback (`agent.py::_generate`), respondería con un 400 no reintentable y rompería la degradación con elegancia (§8). **Y nunca `gemini-3.5-flash-lite`** (ni el alias que hoy apunta ahí): verificado con la config real del bucle, ante "apunta que tengo que comprar pan" no llama a ninguna herramienta y contesta "Anotado, señor" — no apunta nada, finge el éxito, violando la esencia §1. Un modelo puede ser rápido y aun así ser inservible como cerebro de un agente.
+- **Al elegir modelo, medir la CUOTA, no solo latencia y enrutado.** Regla aprendida a base de fallo: se puso `gemini-3.5-flash` de fallback por su buen enrutado y resultó tener **20 peticiones al día** (igual que `gemini-3.6-flash`) — inservible, porque un turno ReAct gasta de 2 a 4. En este free tier las cuotas generosas están en la gama `flash-lite` (15 req/min, sin tope diario a la vista), no en la `flash`. El propio 429 lo dice: `quotaId` y `quotaValue` en el cuerpo del error.
+- **429 por minuto ≠ 429 diario** (`agent.py::_generate`, vía `quotaId` del error). Por minuto: se cambia de modelo al instante, porque cada modelo tiene su PROPIO cubo de cuota — esperar cuesta ~43s y cambiar es gratis — y **no** se marca el día como degradado. Diario: se cae al respaldo y sí se marca. El backoff con espera queda reservado a 500/503, donde el problema es del servicio y cambiar de modelo no ayuda.
 - **Key:** `GEMINI_API_KEY` como variable de entorno. **Nunca** en el código, en commits ni en logs.
 - **Lenguaje:** Python. Idioma del asistente hacia el usuario: **español**.
 
@@ -193,6 +196,28 @@ CRISTOPHER. Frontend rediseñado en `hud/static/` (`widgets.js` — paneles movi
 redimensionables; `bg.js` + `three.min.js` — fondo interactivo y el orbe central como
 red neuronal 3D) sobre el mismo `app.js` que sondea `/musica`, `/notas`, `/concentracion`
 y `/sesiones` y consume el SSE de `/eventos`.
+
+**Entrada por voz en el HUD:** la barra de la consola tiene un selector de **modo de
+entrada** (`#modo-entrada` en `app.js`) con tres opciones — *texto*, *audio pulsando* y
+*audio libre*. En "audio pulsando", mantener **`H`** (o mantener pulsado el 🎤, el respaldo
+para cuando el cursor está dentro del cuadro de texto) graba, y al soltar el audio se
+manda solo por `/enviar_media` — la ruta que ya transcribía los adjuntos, sin backend
+nuevo. Se descartó `E` porque `widgets.js` ya la usa para el modo edición. El modo se
+guarda en `localStorage` y el `MediaRecorder` reutiliza un stream cacheado (pedir el
+micro en cada pulsación añadía 100-300 ms al principio de cada frase); las pulsaciones
+de menos de 350 ms se descartan para no mandarle ruido a Whisper. **"Audio libre"** no
+lleva backend nuevo tampoco: es un VAD en el navegador (`vadTick` en `app.js`, un
+`AnalyserNode` muestreado cada 60 ms) que calibra ~1 s contra el ruido real de la sala
+—umbral fijo o salta con el ventilador o no te oye, mismo criterio que `escucha.py` con
+las palmadas—, abre turno al superar ese umbral y lo cierra y manda tras 800 ms de
+silencio (con tope duro de 20 s). Mientras el HUD está en estado `hablando` el micro
+**no cuenta** y se tira lo capturado: por el altavoz se oiría a sí mismo y se
+contestaría en bucle. El coste asumido es que **en modo libre no hay barge-in** (en
+"pulsando" sí, vía `voz.detener_habla()` desde `/enviar_media`). Aparte, y a propósito
+independiente, el toggle 🔊 (`POST /modo_voz`) mueve el flag de respuesta hablada de
+`estado.py` — el mismo que tocan las tools `activar_modo_voz`/`desactivar_modo_voz`, que
+por eso publican también a `bus.set_modo_voz` para que el botón no mienta cuando lo
+cambia el propio CRISTOPHER por intención.
 
 **Módulos de soporte:**
 - `memory.py` — hechos en SQLite + embeddings de Gemini con similitud coseno en Python

@@ -17,7 +17,7 @@ from typing import Any, Callable
 from google import genai
 from google.genai import errors, types
 
-from cristopher import estado_code, estado_diario, personalidad
+from cristopher import estado_code, estado_diario, personalidad, voz
 from cristopher.config import FALLBACK_MODEL, MODEL, get_api_key
 from cristopher.episodica import get_episodica
 from cristopher.memory import get_memory
@@ -265,6 +265,29 @@ def _code_block() -> str:
     )
 
 
+def _voz_block() -> str:
+    """Bloque de política de voz: solo cuando ElevenLabs es el proveedor activo (ver
+    voz.proveedor_actual), para que un 'cambia de voz'/'pon otra' genérico no salte a
+    Piper por defecto sin que el usuario lo pida — Piper es el respaldo, no la
+    primera opción, mientras ElevenLabs esté activo y funcionando. No hace falta este
+    bloque cuando Piper ya es el proveedor: ahí no hay ambigüedad que resolver."""
+    if voz.proveedor_actual() != "elevenlabs":
+        return ""
+    return (
+        "# VOZ ACTIVA: ElevenLabs\n"
+        "Tu voz activa ahora mismo es de ElevenLabs, no Piper. Si el usuario pide "
+        "cambiar de voz sin decir explícitamente 'Piper'/'local' (p. ej. 'pon otra "
+        "voz', 'cambia la voz', 'prueba otra'), quédate DENTRO de ElevenLabs: usa "
+        "primero voz_listar_elevenlabs (las que ya tiene en la cuenta, sin coste "
+        "extra) y, si ninguna encaja o quiere explorar más, voz_buscar_elevenlabs. "
+        "Usa Piper (voz_elegir/voz_usar_piper) SOLO si el usuario lo pide "
+        "explícitamente ('voz local', 'la de Piper', 'vuelve a la local') o si "
+        "ElevenLabs no tiene ninguna alternativa real (falla, la cuenta no tiene más "
+        "voces disponibles, el plan no permite añadir de la Voice Library...) — en "
+        "ese caso, dile que caes a Piper y por qué, nunca lo hagas en silencio."
+    )
+
+
 def build_system_prompt() -> str:
     """Compone el system prompt: identidad + capacidades AUTO-GENERADAS desde el
     registro TOOLS + personalidad (base fija + directivas adaptables que CRISTOPHER
@@ -285,6 +308,9 @@ def build_system_prompt() -> str:
     code_block = _code_block()
     if code_block:
         parts.append(code_block)
+    voz_block = _voz_block()
+    if voz_block:
+        parts.append(voz_block)
     return "\n\n".join(parts)
 
 
@@ -405,13 +431,29 @@ class Cristopher:
     _RETRYABLE = {429, 500, 503}
 
     @staticmethod
-    def _clean_error(code) -> RuntimeError:
+    def _es_cuota_diaria(exc) -> bool:
+        """True si el 429 es por la cuota DIARIA y no por el límite POR MINUTO.
+
+        La API lo dice explícitamente en el cuerpo del error, en `quotaId`:
+        `GenerateRequestsPerDayPerProjectPerModel-FreeTier` frente a
+        `...PerMinutePerProjectPerModel-...`. Confundirlos salía caro (ver
+        `_generate`): gastaba un backoff inútil y daba por perdido el día entero
+        por una ráfaga de treinta segundos."""
+        return "PerDay" in str(exc)
+
+    @staticmethod
+    def _clean_error(code, diaria: bool = False) -> RuntimeError:
         """Mensaje claro para el usuario en vez de un traceback opaco (§1)."""
         if code == 429:
+            causa = (
+                "Es la cuota DIARIA del free tier: no se recupera hasta mañana."
+                if diaria
+                else "Es el límite POR MINUTO, no el diario: en un minuto vuelve a ir."
+            )
             return RuntimeError(
-                "Cuota de Gemini agotada (429) en el modelo principal y el de respaldo. "
-                "El free tier tiene límite diario; reintenta más tarde o ajusta "
-                "CRISTOPHER_MODEL / CRISTOPHER_FALLBACK_MODEL."
+                "Cuota de Gemini agotada (429) en el modelo principal y el de "
+                f"respaldo. {causa} Si se repite a menudo, ajusta CRISTOPHER_MODEL / "
+                "CRISTOPHER_FALLBACK_MODEL."
             )
         if code in (500, 503):
             return RuntimeError(
@@ -442,10 +484,12 @@ class Cristopher:
                 f"uso directo {self._models[start]}",
             )
         last_code = None
+        last_diaria = False
         for mi, model in enumerate(self._models[start:], start=start):
             has_next = mi < len(self._models) - 1
-            # Con fallback disponible, el 429 solo reintenta 1 vez aquí (probable límite
-            # diario); en el último modelo agota max_retries (probable límite por minuto).
+            # Con respaldo disponible, el 429 solo reintenta 1 vez aquí (cambiar de
+            # modelo es otro cubo de cuota y sale más barato que esperar); en el último
+            # modelo agota max_retries, porque ya no hay a dónde caer.
             attempts = 2 if has_next else max_retries
             for attempt in range(attempts):
                 try:
@@ -459,12 +503,22 @@ class Cristopher:
                     last_code = code
                     if code not in self._RETRYABLE:
                         raise  # error duro (400, permisos…): cambiar de modelo no ayuda
-                    if attempt < attempts - 1:
-                        # Backoff: respeta el retryDelay sugerido (o exponencial), con tope.
-                        # Con fallback disponible el tope es bajo (probable límite diario:
-                        # no merece la pena esperar mucho antes de caer al respaldo).
+                    diaria = code == 429 and self._es_cuota_diaria(exc)
+                    last_diaria = diaria
+                    # Ante un 429 con respaldo disponible NO se espera nada: cada modelo
+                    # tiene su PROPIO cubo de cuota, así que cambiar es inmediato y
+                    # gratis, mientras que esperar cuesta los ~43s que pide la API. El
+                    # backoff se reserva para 500/503 (ahí el problema es del servicio,
+                    # no de la cuota, y cambiar de modelo no lo arregla).
+                    esperar = not (code == 429 and has_next)
+                    if attempt < attempts - 1 and esperar:
+                        # Backoff: respeta el retryDelay sugerido (o exponencial), con
+                        # tope. En el ÚLTIMO modelo ya no hay a dónde caer, así que el
+                        # tope debe cubrir de verdad lo que pide la API ante un límite
+                        # por minuto (~43s medidos): con los 20s de antes el reintento
+                        # estaba condenado a fallar y el turno moría por una ráfaga.
                         m = re.search(r"(\d+(?:\.\d+)?)\s*s", str(exc))
-                        cap = 5.0 if has_next else 20.0
+                        cap = 5.0 if has_next else 60.0
                         delay = min(float(m.group(1)) if m else 2 ** attempt, cap)
                         self._emit(
                             "observation",
@@ -474,17 +528,20 @@ class Cristopher:
                         continue
                     # Agotados los reintentos de este modelo.
                     if has_next:
-                        if mi == 0:
+                        if mi == 0 and diaria:
                             # Marca la degradación de HOY: los próximos _generate
-                            # arrancarán directo en el respaldo (ver arriba).
+                            # arrancarán directo en el respaldo (ver arriba). SOLO ante
+                            # cuota diaria: hacerlo también ante un 429 por minuto
+                            # condenaba el resto del día al modelo de respaldo por una
+                            # ráfaga pasajera.
                             self._degraded_date = today
                         self._emit(
                             "observation",
                             f"[fallback] {model}: {code} → {self._models[mi + 1]}",
                         )
                         break
-                    raise self._clean_error(code) from exc
-        raise self._clean_error(last_code)
+                    raise self._clean_error(code, diaria) from exc
+        raise self._clean_error(last_code, last_diaria)
 
     def _registrar_episodio_turno(self, user_message: str) -> None:
         """Registra el turno del usuario como episodio en la línea de tiempo, sin

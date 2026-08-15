@@ -414,6 +414,37 @@ body[data-estado="pensando"] .core{
 .input button:active{transform:translateY(1px)}
 .input button.grabando{border-color:var(--amber-bright); color:var(--amber-bright); animation:pulse-rec 1.1s ease-in-out infinite}
 @keyframes pulse-rec{0%,100%{opacity:1}50%{opacity:.5}}
+
+/* Selector de modo de entrada (texto | pulsando | libre): control segmentado, más
+   apretado que los botones sueltos de la barra. El modo activo va encendido en cian. */
+.modo-entrada{display:flex; gap:0; border:1px solid var(--line); border-radius:var(--r); overflow:hidden}
+.modo-entrada button{
+  background:transparent; border:none; border-radius:0; padding:9px 11px;
+  font-size:13px; letter-spacing:0; color:var(--steel-2); opacity:.75;
+}
+.modo-entrada button + button{border-left:1px solid var(--line)}
+.modo-entrada button:hover:not(:disabled){background:rgba(34,211,238,.12); box-shadow:none; opacity:1}
+.modo-entrada button.sel{
+  background:linear-gradient(180deg, rgba(34,211,238,.26), rgba(34,211,238,.12));
+  color:var(--cyan-glow); opacity:1;
+}
+.modo-entrada button:disabled{opacity:.28; cursor:not-allowed}
+/* Mientras hablas, el cuadro de texto se apaga para que se vea que manda el micro. */
+body[data-modo-entrada="pulsando"] .input input,
+body[data-modo-entrada="libre"] .input input{opacity:.55}
+body[data-modo-entrada="pulsando"] .input input:focus,
+body[data-modo-entrada="libre"] .input input:focus{opacity:1}
+/* Micro armado (modo libre): latido lento en cian, para distinguirlo del ámbar rápido
+   de "grabando ahora mismo" — de un vistazo se sabe si te está capturando o esperando. */
+body[data-modo-entrada="libre"] #btn-grabar:not(.grabando){
+  border-color:var(--line-cyan); color:var(--cyan-glow);
+  animation:pulse-armado 2.4s ease-in-out infinite;
+}
+@keyframes pulse-armado{0%,100%{opacity:.5}50%{opacity:1}}
+
+#btn-tts{padding:9px 12px; font-size:13px; letter-spacing:0; opacity:.7}
+#btn-tts.sel{opacity:1; border-color:var(--cyan-glow); box-shadow:0 0 14px -3px rgba(34,211,238,.55)}
+
 .adjunto-nombre{
   color:var(--steel-2); font-family:var(--mono); font-size:11px; max-width:120px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -787,9 +818,17 @@ body[data-modo="redes"]{
   --line-cyan:rgba(177,92,255,.28);
 }
 body[data-modo="redes"] .hud-normal-widget{display:none !important}
+/* La insignia del núcleo va abajo a la derecha, no arriba: la rejilla de cuentas
+   apila desde arriba (align-content:start), así que esa esquina es la que queda
+   libre y el orbe no se come la barra de estado ni la primera fila de tarjetas. */
 body[data-modo="redes"] .core{
-  position:fixed; top:66px; right:18px; width:150px; height:150px; z-index:3;
+  position:fixed; bottom:20px; right:20px; top:auto; width:132px; height:132px; z-index:3;
   padding:0; border:none; background:none; box-shadow:none; pointer-events:none;
+  /* widgets.js deja un `grid-area` INLINE en .core, y para un elemento posicionado
+     que es hijo de un grid, el bloque contenedor es esa celda: sin esto, `right:18px`
+     se mide contra la celda y la insignia aterriza en mitad de la pantalla (encima de
+     una tarjeta), no en la esquina. Solo `!important` gana a un estilo inline. */
+  grid-area:auto !important;
 }
 body[data-modo="redes"] .core .bracket,
 body[data-modo="redes"] .core::before,
@@ -799,68 +838,193 @@ body[data-modo="redes"] .core .widget-resize,
 body[data-modo="redes"] .core .widget-remove,
 body[data-modo="redes"] .core .core-caption{display:none}
 
-/* Pantalla dedicada del Modo redes: mismo hueco de rejilla que deja Modo code. */
+/* Pantalla dedicada del Modo redes: ocupa el mismo hueco de rejilla que deja Modo
+   code, pero por dentro NO es una cuadrícula de widgets fijos — es una barra de
+   estado fina + una rejilla donde cada cuenta es su propia tarjeta. Las cuentas se
+   conectan y desconectan, así que la rejilla se recoloca sola (auto-fill) en lugar
+   de guardar un layout arrastrable que se rompería al cambiar el número de cuentas. */
 .hud-redes{display:none; grid-column:1/13; grid-row:2/15}
 body[data-modo="redes"] .hud-redes{
-  display:grid; grid-template-columns:repeat(12, 1fr); grid-template-rows:repeat(13, 1fr);
-  gap:var(--gap);
+  display:flex; flex-direction:column; gap:var(--gap); min-height:0;
 }
-.redes-cuentas{grid-column:1/5; grid-row:1/14; display:flex; flex-direction:column; min-height:0}
-.redes-detalle{grid-column:5/13; grid-row:1/9; display:flex; flex-direction:column; min-height:0}
-.redes-tips{grid-column:5/13; grid-row:9/14; display:flex; flex-direction:column; min-height:0}
 
-.redes-toolbar{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; flex-wrap:wrap}
-.redes-toolbar-acciones{display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; margin-left:auto}
-.redes-actualizado{font-family:var(--mono); font-size:10px; color:var(--steel); opacity:.75; white-space:nowrap}
+/* ---- Barra de estado (una sola línea: qué hay · avisos · frescura · refrescar) ---- */
+.redes-barra{display:flex; align-items:center; gap:16px; padding:11px 17px; flex:0 0 auto}
+.redes-barra-titulo{
+  font-size:10px; font-weight:600; letter-spacing:.30em; color:var(--steel);
+  text-transform:uppercase; flex:0 0 auto;
+}
+.redes-resumen{font-family:var(--mono); font-size:11.5px; color:var(--text); min-width:0}
+.redes-avisos{
+  font-family:var(--mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--amber-bright); border:1px solid rgba(245,185,66,.34); border-radius:var(--r);
+  padding:3px 9px; flex:0 0 auto;
+}
+.redes-avisos[hidden]{display:none}
+.redes-actualizado{
+  margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--steel);
+  opacity:.75; white-space:nowrap;
+}
 .redes-refrescar{
-  font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;
-  padding:6px 12px; border-radius:var(--r); cursor:pointer;
-  background:transparent; border:1px solid var(--line-cyan); color:var(--cyan-glow);
-  transition:background .2s var(--ease);
+  flex:0 0 auto; width:28px; height:28px; font-size:14px; line-height:1; cursor:pointer;
+  border-radius:var(--r); background:transparent; border:1px solid var(--line);
+  color:var(--steel-2); transition:border-color .2s var(--ease), color .2s var(--ease);
 }
-.redes-refrescar:hover{background:rgba(177,92,255,.14)}
-.redes-refrescar:disabled{opacity:.5; cursor:not-allowed}
+.redes-refrescar:hover{border-color:var(--line-cyan); color:var(--cyan-glow)}
+.redes-refrescar:disabled{opacity:.4; cursor:not-allowed}
+.redes-refrescar.girando{animation:redes-giro .9s linear infinite}
+@keyframes redes-giro{to{transform:rotate(360deg)}}
 
-.redes-plataforma-titulo{
-  font-family:var(--mono); text-transform:uppercase; font-size:9.5px; letter-spacing:.16em;
-  color:var(--steel); margin:12px 0 6px;
+/* ---- Rejilla de cuentas ---- */
+.redes-grid{
+  flex:1; min-height:0; overflow-y:auto; display:grid; align-content:start;
+  grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:var(--gap);
+  padding-right:4px;
 }
-.redes-plataforma-titulo:first-child{margin-top:0}
-.redes-lista{flex:1; overflow-y:auto; min-height:0}
+.redes-grid > .empty{grid-column:1/-1; color:var(--steel); font-size:11px; font-style:italic}
+
+/* ---- Barra de conversación (abajo) ----
+   El hueco de la derecha no es un descuido: ahí flota la insignia del núcleo, que
+   es de posición fija; sin este padding el input se metería debajo del orbe. */
+.redes-chat{flex:0 0 auto; display:flex; flex-direction:column; padding:12px 16px; padding-right:168px}
+.redes-chat-log{flex:0 1 auto; max-height:160px; font-size:11.5px}
+.redes-chat-log:empty{display:none}
+.redes-chat-log:not(:empty){margin-bottom:11px; padding-bottom:11px; border-bottom:1px solid var(--line)}
+.redes-chat .input{margin-top:0; border-top:none; padding-top:0}
+
+/* ---- Tarjeta de cuenta (widget autónomo) ----
+   El acento de plataforma es lo ÚNICO que rompe el morado del modo, y solo en dos
+   sitios: el distintivo y la hairline superior que ya trae .panel. Sin logos. */
 .redes-tarjeta{
-  font-family:var(--mono); font-size:11px; color:var(--steel-2); cursor:pointer;
-  padding:9px 10px; border-left:2px solid var(--steel); border-radius:0 var(--r) var(--r) 0;
-  margin-bottom:6px; transition:background .15s var(--ease), border-color .15s var(--ease);
+  --acento:var(--cyan);
+  display:flex; flex-direction:column; padding:14px 16px;
+  transition:border-color .18s var(--ease), box-shadow .18s var(--ease);
 }
-.redes-tarjeta:hover{background:rgba(177,92,255,.08)}
-.redes-tarjeta.sel{border-color:var(--cyan); background:rgba(177,92,255,.12)}
-.redes-tarjeta b{color:var(--cyan-glow); display:block}
-.redes-tarjeta small{opacity:.65; display:block; margin-top:2px}
-.redes-tarjeta.con-error{border-color:var(--amber); color:var(--amber-bright)}
-.redes-lista .empty{color:var(--steel); font-size:11px; font-style:italic}
+.redes-tarjeta[data-plataforma="youtube"]{--acento:#FF4D4D}
+.redes-tarjeta[data-plataforma="instagram"]{--acento:#F05C9B}
+.redes-tarjeta[data-plataforma="tiktok"]{--acento:#25F4EE}
+.redes-tarjeta::after{background:linear-gradient(90deg, transparent, var(--acento), transparent); opacity:.55}
+.redes-tarjeta:hover{border-color:var(--line-cyan)}
 
-.redes-detalle-cuerpo{flex:1; overflow-y:auto; min-height:0}
-.redes-detalle-resumen{
-  font-family:var(--mono); font-size:12px; color:var(--text); line-height:1.6;
-  padding-bottom:10px; margin-bottom:10px; border-bottom:1px solid var(--line);
+.redes-cabecera{display:flex; align-items:center; gap:9px; margin-bottom:14px}
+.redes-plataforma{
+  font-family:var(--mono); font-size:8.5px; letter-spacing:.20em; text-transform:uppercase;
+  color:var(--acento); border:1px solid currentColor; border-radius:2px; padding:2px 6px;
+  opacity:.85; flex:0 0 auto;
 }
-.redes-detalle-resumen b{color:var(--cyan-glow)}
+.redes-nombre{
+  font-size:13px; font-weight:500; color:var(--text-hi); min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.redes-alias{
+  font-family:var(--mono); font-size:10px; color:var(--steel); flex:0 0 auto;
+  margin-left:auto; padding-left:8px;
+}
+
+/* Cifra principal + variación desde el refresco anterior + sparkline */
+.redes-metrica{display:flex; align-items:flex-end; gap:10px}
+.redes-cifra{
+  font-family:var(--mono); font-size:28px; font-weight:500; line-height:1;
+  color:var(--text-hi); font-variant-numeric:tabular-nums; text-shadow:var(--glow-cyan);
+}
+.redes-delta{font-family:var(--mono); font-size:11px; color:var(--steel); padding-bottom:3px}
+.redes-delta.sube{color:#8FD19E}
+.redes-delta.baja{color:var(--danger)}
+.redes-spark{margin-left:auto; opacity:.65; padding-bottom:2px; flex:0 0 auto}
+.redes-etiqueta{
+  font-size:9.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--steel); margin-top:7px;
+}
+
+/* Métricas secundarias + antigüedad de la última publicación */
+.redes-chips{
+  display:flex; flex-wrap:wrap; gap:5px 16px; margin-top:15px;
+  font-family:var(--mono); font-size:10.5px; color:var(--steel);
+}
+.redes-chips b{color:var(--text); font-weight:500}
+.redes-frescura{
+  display:flex; align-items:center; gap:7px; margin-top:11px;
+  font-family:var(--mono); font-size:10.5px; color:var(--steel-2);
+}
+.redes-frescura::before{content:""; width:5px; height:5px; border-radius:50%; background:var(--steel); flex:0 0 auto}
+.redes-frescura.viejo{color:var(--amber-bright)}
+.redes-frescura.viejo::before{background:var(--amber); box-shadow:0 0 7px var(--amber)}
+
+/* Avisos: viven DENTRO de la tarjeta a la que se refieren (los tips del backend ya
+   traen plataforma+alias), no en un panel aparte descontextualizado. */
+.redes-aviso{
+  font-family:var(--mono); font-size:10.5px; line-height:1.45; color:var(--amber-bright);
+  margin-top:11px; padding:6px 9px; border-left:2px solid var(--amber);
+  border-radius:0 var(--r) var(--r) 0; background:rgba(245,185,66,.06);
+}
+.redes-tarjeta.con-error{border-color:rgba(245,185,66,.45)}
+.redes-tarjeta.con-error::after{background:linear-gradient(90deg, transparent, var(--amber), transparent)}
+.redes-error{font-family:var(--mono); font-size:11px; line-height:1.5; color:var(--amber-bright); word-break:break-word}
+
+/* Plataforma sin ninguna cuenta conectada: hueco informativo, no interactivo. */
+.redes-tarjeta.fantasma{
+  opacity:.5; background:none; box-shadow:none;
+  border:1px dashed rgba(90,124,158,.20);
+  justify-content:center; min-height:118px; pointer-events:none;
+}
+.redes-tarjeta.fantasma::after,
+.redes-tarjeta.fantasma::before,
+.redes-tarjeta.fantasma > .bracket{display:none}
+.redes-sinconectar{font-family:var(--mono); font-size:10px; letter-spacing:.10em; color:var(--steel); margin-top:9px}
+
+/* ---- Ampliación en el sitio ----
+   La tarjeta pasa a ocupar la fila entera y despliega el detalle en vivo debajo. Se
+   abre al pasar el ratón (con retardo de intención, ver redes.js) y un clic la FIJA
+   para poder leer las publicaciones sin que se cierre al salir el ratón. */
+.redes-tarjeta.abierta{
+  grid-column:1/-1; flex-direction:row; align-items:stretch;
+  border-color:var(--line-cyan); box-shadow:0 0 40px -16px var(--acento), var(--shadow);
+}
+/* Ampliada = dos columnas: la cara se queda igual a la izquierda (sigue siendo la
+   misma tarjeta, no otra pantalla) y el detalle ocupa el ancho ganado a su derecha. */
+.redes-cara{display:flex; flex-direction:column; min-width:0}
+.redes-tarjeta.abierta .redes-cara{flex:0 0 288px; padding-right:24px; border-right:1px solid var(--line)}
+/* Marca de "fijada" en texto y no en emoji: los emoji se pintan con su color propio
+   (un chincheta roja) y rompen la paleta del HUD. */
+.redes-pin{
+  position:absolute; top:11px; right:13px; z-index:1; opacity:0; pointer-events:none;
+  font-family:var(--mono); font-size:8px; letter-spacing:.18em; text-transform:uppercase;
+  color:var(--cyan-glow); border:1px solid var(--line-cyan); border-radius:2px;
+  padding:2px 6px; transition:opacity .18s var(--ease);
+}
+.redes-tarjeta.fijada .redes-pin{opacity:.9}
+
+.redes-detalle{flex:1; min-width:0; padding-left:24px; display:flex; flex-direction:column}
+.redes-detalle-titulo{
+  font-size:9px; letter-spacing:.22em; text-transform:uppercase; color:var(--steel);
+  margin-bottom:6px;
+}
+.redes-detalle-resumen{display:flex; flex-wrap:wrap; gap:12px 30px; margin-bottom:14px}
+.redes-dato{display:flex; flex-direction:column; gap:4px}
+.redes-dato b{
+  font-family:var(--mono); font-size:15px; font-weight:500; color:var(--cyan-glow);
+  font-variant-numeric:tabular-nums;
+}
+.redes-dato span{font-size:9px; letter-spacing:.14em; text-transform:uppercase; color:var(--steel)}
+.redes-destacado{
+  font-family:var(--mono); font-size:10.5px; color:var(--steel-2); margin-bottom:12px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.redes-pubs{max-height:34vh; overflow-y:auto}
 .redes-detalle-item{
-  font-family:var(--mono); font-size:11px; color:var(--steel-2);
-  padding:7px 0; border-bottom:1px solid var(--line);
+  display:flex; align-items:baseline; gap:14px; padding:8px 0;
+  border-bottom:1px solid var(--line-soft);
 }
 .redes-detalle-item:last-child{border-bottom:none}
-.redes-detalle-item .t{color:var(--text); display:block; margin-bottom:3px}
-.redes-detalle-item small{opacity:.7}
-.redes-detalle .empty{color:var(--steel); font-size:11px; font-style:italic}
-
-.redes-tips-lista{flex:1; overflow-y:auto; min-height:0}
-.redes-tips-lista .item{
-  font-family:var(--mono); font-size:11px; color:var(--amber-bright);
-  padding:7px 9px; border-left:2px solid var(--amber); border-radius:0 var(--r) var(--r) 0;
-  margin-bottom:6px; background:rgba(245,185,66,.06);
+.redes-detalle-item .t{
+  flex:1; min-width:0; font-size:12px; color:var(--text);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
-.redes-tips-lista .empty{color:var(--steel); font-size:11px; font-style:italic}
+.redes-detalle-item .m{font-family:var(--mono); font-size:10.5px; color:var(--steel-2); flex:0 0 auto}
+.redes-detalle-item .f{
+  font-family:var(--mono); font-size:10px; color:var(--steel); flex:0 0 auto;
+  font-variant-numeric:tabular-nums;
+}
+.redes-detalle .empty{color:var(--steel); font-size:11px; font-style:italic}
 
 /* ---------- 13. Accesibilidad / responsive ---------- */
 @media (prefers-reduced-motion:reduce){
@@ -876,4 +1040,18 @@ body[data-modo="redes"] .hud-redes{
   .edit-toggle,#layout-toolbar{display:none !important}
   body[data-edit="1"] .panel{outline:none}
   .brand .sub{display:none}
+  /* Modo redes: una columna. Sin hover aquí, la tarjeta se amplía solo al tocarla
+     (redes.js ya trata el clic como "fijar"), y el .panel de arriba le quita el
+     grid-column, así que .abierta no necesita nada extra. */
+  .redes-grid{grid-template-columns:1fr}
+  .redes-barra{flex-wrap:wrap; gap:10px}
+  /* Sin ancho de sobra no se le regala un hueco al orbe: que lo tape, es decorativo. */
+  .redes-chat{padding-right:16px}
+  .redes-chat-log{max-height:110px}
+  /* Sin ancho que repartir, la ampliación vuelve a ser cara arriba / detalle debajo. */
+  .redes-tarjeta.abierta{flex-direction:column}
+  .redes-tarjeta.abierta .redes-cara{flex:0 0 auto; padding-right:0; border-right:none}
+  .redes-tarjeta.abierta .redes-detalle{
+    padding-left:0; margin-top:14px; padding-top:12px; border-top:1px solid var(--line);
+  }
 }

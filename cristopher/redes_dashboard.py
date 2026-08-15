@@ -83,19 +83,49 @@ def _guardar_historial(plataforma: str, alias: str, seguidores, ultima_publicaci
 
 
 def _historial_anterior(plataforma: str, alias: str) -> Optional[dict]:
-    """Penúltima fila guardada (la anterior al refresco que se está calculando
-    ahora mismo), o None si todavía no hay suficiente historial para comparar."""
+    """Datos del refresco ANTERIOR, o None si todavía no hay historial que comparar.
+
+    Es la última fila de la tabla: en `refrescar_todo` esta función se llama antes
+    de `_guardar_historial`, así que el refresco en curso todavía no está guardado.
+    (Antes se devolvía la penúltima, lo que comparaba en realidad contra dos
+    refrescos atrás y no cuadraba con el `delta` que pinta la tarjeta del HUD.)
+    """
+    with _DB_LOCK:
+        conn = _db()
+        row = conn.execute(
+            "SELECT seguidores, ultima_publicacion FROM redes_historial "
+            "WHERE plataforma=? AND alias=? ORDER BY id DESC LIMIT 1",
+            (plataforma, alias),
+        ).fetchone()
+    if row is None:
+        return None
+    return {"seguidores": row[0], "ultima_publicacion": row[1]}
+
+
+def serie_historial(plataforma: str, alias: str, n: int = 12) -> list[int]:
+    """Últimos `n` valores de seguidores guardados, en orden cronológico: es lo que
+    dibuja el sparkline de la tarjeta en el HUD. Sale del SQLite que ya se escribe
+    en cada refresco — cero llamadas nuevas a las APIs."""
     with _DB_LOCK:
         conn = _db()
         rows = conn.execute(
-            "SELECT seguidores, ultima_publicacion FROM redes_historial "
-            "WHERE plataforma=? AND alias=? ORDER BY id DESC LIMIT 2",
-            (plataforma, alias),
+            "SELECT seguidores FROM redes_historial "
+            "WHERE plataforma=? AND alias=? AND seguidores IS NOT NULL "
+            "ORDER BY id DESC LIMIT ?",
+            (plataforma, alias, max(1, int(n))),
         ).fetchall()
-    if len(rows) < 2:
+    return [r[0] for r in reversed(rows)]
+
+
+def _delta(seguidores, anterior: Optional[dict]) -> Optional[int]:
+    """Variación de seguidores respecto al refresco anterior, o None si no hay con
+    qué comparar (primera vez, o la plataforma devolvió '?')."""
+    if not anterior or anterior.get("seguidores") is None or seguidores is None:
         return None
-    seguidores, ultima_publicacion = rows[1]
-    return {"seguidores": seguidores, "ultima_publicacion": ultima_publicacion}
+    try:
+        return int(seguidores) - int(anterior["seguidores"])
+    except (TypeError, ValueError):
+        return None
 
 
 def _fetchers_resumen() -> dict:
@@ -204,11 +234,13 @@ def refrescar_todo() -> dict:
             else:
                 item.update(datos)
                 tips.extend(_calcular_tips(plataforma, alias, datos))
-                _guardar_historial(
-                    plataforma, alias,
-                    datos.get("suscriptores", datos.get("seguidores")),
-                    datos.get("ultima_publicacion"),
-                )
+                seguidores = datos.get("suscriptores", datos.get("seguidores"))
+                # El delta se calcula ANTES de guardar (si no, se compararía la fila
+                # nueva consigo misma); la serie DESPUÉS, para incluir este refresco.
+                anterior = _historial_anterior(plataforma, alias)
+                _guardar_historial(plataforma, alias, seguidores, datos.get("ultima_publicacion"))
+                item["delta"] = _delta(seguidores, anterior)
+                item["serie"] = serie_historial(plataforma, alias)
             cuentas_out[plataforma].append(item)
 
     with _LOCK:

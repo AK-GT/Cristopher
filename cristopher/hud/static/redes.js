@@ -1,14 +1,18 @@
 /* CRISTOPHER HUD — Modo redes (dashboard YouTube/Instagram/TikTok, ver PLAN "Modo
-   redes"): entrada/salida del modo, tarjetas de cuenta (sondeo del caché del
-   backend), detalle en vivo al pinchar una cuenta, tips por reglas (ya calculados
-   en el backend, aquí solo se pintan) y un motor de drag/resize propio para los 3
-   widgets — mismo mecanismo simplificado que el de code.js, sin chat propio: para
-   hablar con CRISTOPHER se usa el widget flotante de siempre. */
+   redes"): entrada/salida del modo y una rejilla donde CADA CUENTA es su propia
+   tarjeta-widget con toda su información (métrica principal, variación desde el
+   refresco anterior, sparkline, métricas secundarias, antigüedad de la última
+   publicación y sus avisos). Al pasar el ratón por encima, la tarjeta se amplía en
+   el sitio y despliega el detalle en vivo; un clic la fija para poder leerla.
+
+   Sin chat propio (se usa el widget flotante de siempre) y sin motor de drag/resize:
+   la rejilla es auto-fill y se recoloca sola, porque las cuentas se conectan y
+   desconectan y un layout guardado se rompería al cambiar su número. */
 (function () {
   "use strict";
 
   const $ = (id) => document.getElementById(id);
-  function esc(s) { return String(s == null ? "" : s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
   // ---------- Entrada/salida de modo (botón; la entrada por chat llega vía SSE) ----------
   const toggleBtn = $("redes-toggle");
@@ -22,26 +26,54 @@
     });
   }
   // Hook que app.js llama al cambiar de modo (botón, chat, o snapshot al recargar).
-  // Nada que hacer aquí: la visibilidad la resuelve el CSS de data-modo; el sondeo
-  // de /redes/dashboard corre siempre, igual que /tareas en code.js.
-  window.__hudRedesSetModo = function () {};
+  // La visibilidad la resuelve el CSS de data-modo y el sondeo corre siempre (igual
+  // que /tareas en code.js); lo único que hay que hacer es soltar la tarjeta fijada
+  // al salir, para no volver a entrar con una cuenta abierta de la sesión anterior.
+  window.__hudRedesSetModo = function (activo) { if (!activo) cerrar(); };
 
-  // ---------- Tarjetas de cuenta (por plataforma) ----------
-  const listaEl = $("redes-lista");
-  const actualizadoEl = $("redes-actualizado");
-  const PLATAFORMAS = [
-    { id: "youtube", titulo: "YouTube" },
-    { id: "instagram", titulo: "Instagram" },
-    { id: "tiktok", titulo: "TikTok" },
-  ];
-  let cuentaSeleccionada = null; // {plataforma, alias}
+  // ---------- Barra de conversación ----------
+  // Mismo /enviar y mismo hilo que la consola normal (que aquí está oculta): esto es
+  // un espejo, no una conversación aparte como la de modo code.
+  const chatLog = $("redes-chat-log");
+  const MAX_LINEAS = 80;   // el historial completo vive en la consola normal
+  const PREFIJO = { user: "tú", answer: "CRIS", thought: "···", tool_call: "→", observation: "obs", error: "!!" };
 
-  function metricaPrincipal(c) {
-    const n = c.plataforma === "youtube" ? c.suscriptores : c.seguidores;
-    const etiqueta = c.plataforma === "youtube" ? "suscriptores" : "seguidores";
-    return (n == null ? "?" : n) + " " + etiqueta;
+  window.__hudRedesLog = function (e) {
+    if (!chatLog) return;
+    const d = document.createElement("div");
+    d.className = "l " + e.kind;
+    d.innerHTML = `<span class="t">${esc(e.hora || "")}</span><b>${esc(PREFIJO[e.kind] || e.kind)}</b> `
+      + `<span>${esc(e.text)}</span>`;
+    chatLog.appendChild(d);
+    while (chatLog.childElementCount > MAX_LINEAS) chatLog.removeChild(chatLog.firstElementChild);
+    chatLog.scrollTop = chatLog.scrollHeight;
+  };
+
+  const chatForm = $("redes-form");
+  if (chatForm) {
+    chatForm.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const input = $("redes-entrada");
+      const texto = input.value.trim();
+      if (!texto) return;
+      input.value = "";
+      fetch("/enviar", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ texto }),
+      }).catch(() => {});
+    });
   }
 
+  // ---------- Formato ----------
+  const FMT = new Intl.NumberFormat("es", { notation: "compact", maximumFractionDigits: 1 });
+  function compacto(n) {
+    const v = Number(n);
+    return Number.isFinite(v) && n !== "" && n != null ? FMT.format(v) : "?";
+  }
+  function exacto(n) {
+    const v = Number(n);
+    return Number.isFinite(v) && n !== "" && n != null ? v.toLocaleString("es") : "";
+  }
   function hace(ts) {
     if (!ts) return "";
     const seg = Math.max(0, Math.floor(Date.now() / 1000 - ts));
@@ -52,38 +84,334 @@
     if (h < 24) return `hace ${h}h`;
     return `hace ${Math.floor(h / 24)}d`;
   }
+  // Mismo umbral que redes_dashboard._DIAS_SIN_PUBLICAR_AVISO: por encima, en ámbar.
+  const DIAS_AVISO = 14;
+  function diasDesde(iso) {
+    if (!iso) return null;
+    const t = Date.parse(iso);
+    return Number.isNaN(t) ? null : Math.max(0, Math.floor((Date.now() - t) / 86400000));
+  }
 
-  function pintarCuentas(data) {
-    if (actualizadoEl) actualizadoEl.textContent = data.actualizado_en ? "actualizado " + hace(data.actualizado_en) : "";
-    if (!listaEl) return;
+  // Sparkline de seguidores a partir de la serie que manda el backend (tabla
+  // redes_historial). Con menos de 2 puntos no hay línea que dibujar.
+  function sparkline(serie) {
+    if (!Array.isArray(serie) || serie.length < 2) return "";
+    const w = 64, h = 18;
+    const min = Math.min.apply(null, serie), max = Math.max.apply(null, serie);
+    const span = max - min || 1;
+    const puntos = serie.map((v, i) => {
+      const x = (i / (serie.length - 1)) * (w - 2) + 1;
+      const y = h - 1 - ((v - min) / span) * (h - 2);
+      return x.toFixed(1) + "," + y.toFixed(1);
+    }).join(" ");
+    return `<svg class="redes-spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">`
+      + `<polyline points="${puntos}" fill="none" stroke="var(--acento)" stroke-width="1.2"`
+      + ` stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+  }
+
+  // ---------- Qué pinta cada plataforma ----------
+  const PLATAFORMAS = [
+    { id: "youtube", titulo: "YouTube", metrica: "suscriptores", etiqueta: "suscriptores",
+      chips: [["vistas_7d", "vistas · 7 d"]] },
+    { id: "instagram", titulo: "Instagram", metrica: "seguidores", etiqueta: "seguidores",
+      chips: [["reach_7d", "alcance · 7 d"]] },
+    { id: "tiktok", titulo: "TikTok", metrica: "seguidores", etiqueta: "seguidores",
+      chips: [["likes_totales", "likes"], ["videos", "vídeos"]] },
+  ];
+  // Solo lo que NO está ya en la cara de la tarjeta: ampliar tiene que AÑADIR
+  // información, no repetir la que ya estás mirando (el grueso de lo que aporta el
+  // detalle son las publicaciones).
+  const CAMPOS_RESUMEN = {
+    youtube: [],
+    instagram: [["username", "usuario"]],
+    tiktok: [],
+  };
+  const CAMPOS_PUBLICACION = {
+    youtube: { titulo: "titulo", fecha: "publicado",
+      extra: [["vistas", "vistas"], ["likes", "likes"], ["comentarios", "com."]] },
+    instagram: { titulo: "caption", fecha: "fecha",
+      extra: [["likes", "likes"], ["comentarios", "com."], ["alcance", "alcance"], ["guardados", "guard."]] },
+    tiktok: { titulo: "titulo", fecha: "fecha",
+      extra: [["vistas", "vistas"], ["likes", "likes"], ["comentarios", "com."], ["compartidos", "comp."]] },
+  };
+
+  // ---------- Tarjetas ----------
+  const gridEl = $("redes-grid");
+  const resumenEl = $("redes-resumen");
+  const avisosEl = $("redes-avisos");
+  const actualizadoEl = $("redes-actualizado");
+
+  function delta(d) {
+    if (d == null || d === 0) return "";
+    const sube = d > 0;
+    return `<span class="redes-delta ${sube ? "sube" : "baja"}">${sube ? "▲" : "▼"} ${esc(compacto(Math.abs(d)))}</span>`;
+  }
+
+  function cuerpoTarjeta(p, c) {
+    if (c.error) return `<div class="redes-error">${esc(c.error)}</div>`;
+    const chips = p.chips
+      .filter(([k]) => c[k] != null)
+      .map(([k, etiqueta]) => `<span><b>${esc(compacto(c[k]))}</b> ${esc(etiqueta)}</span>`)
+      .join("");
+    const dias = diasDesde(c.ultima_publicacion);
+    const frescura = dias == null ? ""
+      : `<div class="redes-frescura${dias >= DIAS_AVISO ? " viejo" : ""}">`
+        + `última publicación hace ${dias} d</div>`;
+    return `
+      <div class="redes-metrica">
+        <span class="redes-cifra" title="${esc(exacto(c[p.metrica]))}">${esc(compacto(c[p.metrica]))}</span>
+        ${delta(c.delta)}
+        ${sparkline(c.serie)}
+      </div>
+      <div class="redes-etiqueta">${esc(p.etiqueta)}</div>
+      ${chips ? `<div class="redes-chips">${chips}</div>` : ""}
+      ${frescura}`;
+  }
+
+  function tarjeta(p, c, tips) {
+    const avisos = tips.map((t) => `<div class="redes-aviso">${esc(t.texto)}</div>`).join("");
+    // La "cara" va envuelta aparte porque al ampliar la tarjeta pasa a dos columnas:
+    // la cara se queda a la izquierda y el detalle se despliega a su derecha.
+    return `<article class="redes-tarjeta panel${c.error ? " con-error" : ""}"
+        data-plataforma="${esc(c.plataforma)}" data-alias="${esc(c.alias)}">
+      <i class="bracket"></i>
+      <span class="redes-pin" aria-hidden="true">fijada</span>
+      <div class="redes-cara">
+        <div class="redes-cabecera">
+          <span class="redes-plataforma">${esc(p.titulo)}</span>
+          <span class="redes-nombre" title="${esc(c.nombre || c.alias)}">${esc(c.nombre || c.alias)}</span>
+          <span class="redes-alias">${esc(c.alias)}</span>
+        </div>
+        ${cuerpoTarjeta(p, c)}${avisos}
+      </div>
+    </article>`;
+  }
+
+  // Plataforma sin ninguna cuenta: hueco informativo (dice qué falta por conectar,
+  // que se sigue haciendo por chat con redes_auth, no desde aquí).
+  function fantasma(p) {
+    return `<article class="redes-tarjeta panel fantasma" data-plataforma="${esc(p.id)}">
+      <div class="redes-cabecera"><span class="redes-plataforma">${esc(p.titulo)}</span></div>
+      <div class="redes-sinconectar">sin cuentas conectadas</div>
+    </article>`;
+  }
+
+  // Los tips del backend ya traen plataforma+alias, así que cada uno se pinta dentro
+  // de SU tarjeta en vez de en un panel aparte.
+  function agruparTips(tips) {
+    const m = new Map();
+    (tips || []).forEach((t) => {
+      const clave = t.plataforma + "|" + t.alias;
+      if (!m.has(clave)) m.set(clave, []);
+      m.get(clave).push(t);
+    });
+    return m;
+  }
+
+  function pintar(data) {
+    if (!gridEl) return;
     const cuentas = data.cuentas || {};
-    const total = PLATAFORMAS.reduce((n, p) => n + ((cuentas[p.id] || []).length), 0);
-    if (!total) { listaEl.innerHTML = '<div class="empty">sin cuentas conectadas</div>'; return; }
-
-    listaEl.innerHTML = PLATAFORMAS.map((p) => {
+    const tipsPorCuenta = agruparTips(data.tips);
+    let total = 0, seguidores = 0;
+    // Las cuentas reales primero y los huecos al final: si no, con una sola cuenta
+    // conectada la única tarjeta con datos quedaba enterrada detrás de dos fantasmas.
+    const tarjetas = [], huecos = [];
+    PLATAFORMAS.forEach((p) => {
       const items = cuentas[p.id] || [];
-      if (!items.length) return "";
-      const tarjetas = items.map((c) => {
-        const sel = cuentaSeleccionada && cuentaSeleccionada.plataforma === c.plataforma && cuentaSeleccionada.alias === c.alias;
-        const conError = !!c.error;
-        const detalle = conError ? c.error : metricaPrincipal(c);
-        return `
-        <div class="redes-tarjeta${sel ? " sel" : ""}${conError ? " con-error" : ""}"
-             data-plataforma="${esc(c.plataforma)}" data-alias="${esc(c.alias)}">
-          <b>${esc(c.nombre || c.alias)}</b>
-          <small>${esc(c.alias)} · ${esc(detalle)}</small>
-        </div>`;
-      }).join("");
-      return `<div class="redes-plataforma-titulo">${esc(p.titulo)}</div>${tarjetas}`;
-    }).join("");
+      if (!items.length) { huecos.push(fantasma(p)); return; }
+      total += items.length;
+      items.forEach((c) => {
+        const n = Number(c[p.metrica]);
+        if (Number.isFinite(n)) seguidores += n;
+        tarjetas.push(tarjeta(p, c, tipsPorCuenta.get(p.id + "|" + c.alias) || []));
+      });
+    });
+    gridEl.innerHTML = tarjetas.join("") + huecos.join("");
+    pintarBarra(data, total, seguidores);
+  }
 
-    listaEl.querySelectorAll(".redes-tarjeta").forEach((el) => {
-      el.addEventListener("click", () => seleccionarCuenta(el.dataset.plataforma, el.dataset.alias));
+  function pintarBarra(data, total, seguidores) {
+    if (resumenEl) {
+      resumenEl.textContent = total
+        ? `${total} cuenta${total === 1 ? "" : "s"} · ${compacto(seguidores)} seguidores`
+        : "ninguna cuenta conectada";
+    }
+    const tips = data.tips || [];
+    if (avisosEl) {
+      avisosEl.hidden = !tips.length;
+      avisosEl.textContent = `${tips.length} aviso${tips.length === 1 ? "" : "s"}`;
+      avisosEl.title = tips.map((t) => t.texto).join("\n");
+    }
+    if (actualizadoEl) {
+      actualizadoEl.textContent = data.actualizado_en ? "actualizado " + hace(data.actualizado_en) : "";
+    }
+  }
+
+  // ---------- Detalle en vivo ----------
+  function dato(k, etiqueta, resumen) {
+    const v = resumen[k];
+    if (v == null) return "";
+    const n = Number(v);
+    const numerico = Number.isFinite(n) && v !== "";
+    return `<div class="redes-dato"><b title="${esc(numerico ? exacto(n) : "")}">`
+      + `${esc(numerico ? compacto(n) : v)}</b><span>${esc(etiqueta)}</span></div>`;
+  }
+
+  function pintarPublicacion(plataforma, p) {
+    const map = CAMPOS_PUBLICACION[plataforma] || {};
+    const titulo = p[map.titulo] || "(sin título)";
+    const extra = (map.extra || []).map(([k, etiqueta]) => `${compacto(p[k])} ${etiqueta}`).join(" · ");
+    return `<div class="redes-detalle-item">
+      <span class="t" title="${esc(titulo)}">${esc(titulo)}</span>
+      <span class="m">${esc(extra)}</span>
+      <span class="f">${esc(p[map.fecha] || "?")}</span>
+    </div>`;
+  }
+
+  function pintarDetalle(plataforma, d) {
+    if (d.error) return `<div class="redes-detalle"><div class="empty">${esc(d.error)}</div></div>`;
+    const resumen = d.resumen || {};
+    const datos = (CAMPOS_RESUMEN[plataforma] || []).map(([k, e]) => dato(k, e, resumen)).join("");
+    const destacado = plataforma === "youtube" && resumen.top_titulo
+      ? `<div class="redes-destacado">más visto: ${esc(resumen.top_titulo)} · ${esc(compacto(resumen.top_vistas))} vistas</div>`
+      : "";
+    const pubs = d.publicaciones || [];
+    const lista = pubs.length
+      ? pubs.map((p) => pintarPublicacion(plataforma, p)).join("")
+      : '<div class="empty">sin publicaciones</div>';
+    return `<div class="redes-detalle">
+      ${datos ? `<div class="redes-detalle-resumen">${datos}</div>` : ""}
+      ${destacado}
+      <div class="redes-detalle-titulo">últimas publicaciones</div>
+      <div class="redes-pubs">${lista}</div>
+    </div>`;
+  }
+
+  // ---------- Ampliación por hover (con clic para fijar) ----------
+  // /redes/detalle hace fetch EN VIVO a la API de la plataforma, así que el hover no
+  // puede llamar por cada roce del ratón: retardo de intención antes de abrir, caché
+  // por cuenta con TTL, y retardo al cerrar para no parpadear entre tarjetas.
+  const RETARDO_ABRIR = 280, RETARDO_CERRAR = 220, TTL_CACHE = 90000;
+  const cacheDetalle = new Map();   // "plataforma|alias" -> {ts, html}
+  let abierta = null;               // {plataforma, alias}
+  let fijada = false;
+  let tAbrir = null, tCerrar = null;
+  let datosPendientes = null;       // sondeo llegado con una tarjeta abierta
+
+  const clave = (o) => o.plataforma + "|" + o.alias;
+
+  function tarjetaDe(plataforma, alias) {
+    return Array.from(gridEl.querySelectorAll(".redes-tarjeta")).find(
+      (el) => el.dataset.plataforma === plataforma && el.dataset.alias === alias) || null;
+  }
+
+  function inyectar(el, html) {
+    const viejo = el.querySelector(".redes-detalle");
+    if (viejo) viejo.remove();
+    el.insertAdjacentHTML("beforeend", html);
+  }
+
+  function abrir(el) {
+    const plataforma = el.dataset.plataforma, alias = el.dataset.alias;
+    if (abierta) cerrarDom();
+    abierta = { plataforma, alias };
+    el.classList.add("abierta");
+    el.classList.toggle("fijada", fijada);
+
+    const k = clave(abierta);
+    const guardado = cacheDetalle.get(k);
+    if (guardado && Date.now() - guardado.ts < TTL_CACHE) { inyectar(el, guardado.html); return; }
+
+    inyectar(el, '<div class="redes-detalle"><div class="empty">cargando…</div></div>');
+    fetch("/redes/detalle?plataforma=" + encodeURIComponent(plataforma) + "&alias=" + encodeURIComponent(alias))
+      .then((r) => r.json())
+      .then((d) => {
+        const html = pintarDetalle(plataforma, d);
+        if (!d.error) cacheDetalle.set(k, { ts: Date.now(), html });  // un error no se cachea
+        // El ratón puede haber cambiado de tarjeta mientras respondía la API.
+        if (abierta && clave(abierta) === k) inyectar(el, html);
+      })
+      .catch(() => {
+        if (abierta && clave(abierta) === k) {
+          inyectar(el, '<div class="redes-detalle"><div class="empty">error al cargar el detalle</div></div>');
+        }
+      });
+  }
+
+  function cerrarDom() {
+    if (!gridEl) return;
+    const el = gridEl.querySelector(".redes-tarjeta.abierta");
+    if (!el) return;
+    el.classList.remove("abierta", "fijada");
+    const d = el.querySelector(".redes-detalle");
+    if (d) d.remove();
+  }
+
+  function cerrar() {
+    clearTimeout(tAbrir); clearTimeout(tCerrar);
+    tAbrir = tCerrar = null;
+    cerrarDom();
+    abierta = null;
+    fijada = false;
+    if (datosPendientes) { const d = datosPendientes; datosPendientes = null; pintar(d); }
+  }
+
+  if (gridEl) {
+    gridEl.addEventListener("pointerover", (ev) => {
+      if (ev.pointerType === "touch") return;   // en táctil manda el clic
+      const el = ev.target.closest(".redes-tarjeta");
+      if (!el || el.classList.contains("fantasma")) return;
+      clearTimeout(tCerrar); tCerrar = null;
+      if (abierta && clave(abierta) === el.dataset.plataforma + "|" + el.dataset.alias) return;
+      if (fijada) return;                       // una tarjeta fijada manda hasta soltarla
+      clearTimeout(tAbrir);
+      tAbrir = setTimeout(() => abrir(el), RETARDO_ABRIR);
+    });
+
+    gridEl.addEventListener("pointerout", (ev) => {
+      if (ev.pointerType === "touch") return;
+      const el = ev.target.closest(".redes-tarjeta");
+      if (!el) return;
+      if (ev.relatedTarget && el.contains(ev.relatedTarget)) return;  // movimiento interno
+      clearTimeout(tAbrir); tAbrir = null;
+      if (fijada) return;
+      clearTimeout(tCerrar);
+      tCerrar = setTimeout(cerrar, RETARDO_CERRAR);
+    });
+
+    // Clic = fijar/soltar. Sin esto, mover el ratón para leer las publicaciones
+    // cerraría la tarjeta; es además el único camino en táctil (no hay hover).
+    gridEl.addEventListener("click", (ev) => {
+      const el = ev.target.closest(".redes-tarjeta");
+      if (!el || el.classList.contains("fantasma")) return;
+      const k = el.dataset.plataforma + "|" + el.dataset.alias;
+      if (abierta && clave(abierta) === k) {
+        fijada = !fijada;
+        el.classList.toggle("fijada", fijada);
+        if (!fijada) { clearTimeout(tCerrar); tCerrar = setTimeout(cerrar, RETARDO_CERRAR); }
+        return;
+      }
+      clearTimeout(tAbrir); clearTimeout(tCerrar);
+      fijada = true;
+      abrir(el);
     });
   }
 
+  document.addEventListener("click", (ev) => {
+    if (!fijada || ev.target.closest(".redes-tarjeta")) return;
+    cerrar();
+  });
+
+  // ---------- Sondeo ----------
+  function recibir(d) {
+    // Con una tarjeta ampliada NO se repinta la rejilla bajo el ratón: se guarda el
+    // sondeo y se aplica al cerrarla (son datos de un ciclo de 30 s, no urgen).
+    if (abierta) { datosPendientes = d; return; }
+    pintar(d);
+  }
+
   function redesTick() {
-    fetch("/redes/dashboard").then((r) => r.json()).then((d) => { pintarCuentas(d); pintarTips(d.tips); }).catch(() => {});
+    fetch("/redes/dashboard").then((r) => r.json()).then(recibir).catch(() => {});
   }
   redesTick();
   setInterval(redesTick, 30000);
@@ -92,216 +420,24 @@
   const btnRefrescar = $("redes-refrescar");
   if (btnRefrescar) {
     btnRefrescar.addEventListener("click", () => {
+      const previa = abierta, eraFijada = fijada;
       btnRefrescar.disabled = true;
+      btnRefrescar.classList.add("girando");
+      cacheDetalle.clear();               // aquí sí se quiere dato fresco, no cacheado
       fetch("/redes/refrescar", { method: "POST" })
         .then((r) => r.json())
         .then((d) => {
-          pintarCuentas(d);
-          pintarTips(d.tips);
-          if (cuentaSeleccionada) seleccionarCuenta(cuentaSeleccionada.plataforma, cuentaSeleccionada.alias);
+          datosPendientes = null;
+          cerrarDom();
+          abierta = null; fijada = false;
+          pintar(d);
+          if (previa) {
+            const el = tarjetaDe(previa.plataforma, previa.alias);
+            if (el) { fijada = eraFijada; abrir(el); }
+          }
         })
         .catch(() => {})
-        .finally(() => { btnRefrescar.disabled = false; });
+        .finally(() => { btnRefrescar.disabled = false; btnRefrescar.classList.remove("girando"); });
     });
   }
-
-  // ---------- Detalle en vivo (al pinchar una tarjeta) ----------
-  const detalleEl = $("redes-detalle-cuerpo");
-
-  const CAMPOS_RESUMEN = {
-    youtube: [["suscriptores", "suscriptores"], ["vistas_7d", "vistas (7 días)"], ["top_titulo", "vídeo más visto"]],
-    instagram: [["username", "usuario"], ["seguidores", "seguidores"], ["reach_7d", "alcance (7 días)"]],
-    tiktok: [["display_name", "nombre"], ["seguidores", "seguidores"], ["likes_totales", "likes totales"], ["videos", "vídeos"]],
-  };
-  const CAMPOS_PUBLICACION = {
-    youtube: { titulo: "titulo", fecha: "publicado", extra: ["vistas", "likes", "comentarios"] },
-    instagram: { titulo: "caption", fecha: "fecha", extra: ["likes", "comentarios", "alcance", "guardados"] },
-    tiktok: { titulo: "titulo", fecha: "fecha", extra: ["vistas", "likes", "comentarios", "compartidos"] },
-  };
-
-  function pintarResumen(plataforma, resumen) {
-    const campos = CAMPOS_RESUMEN[plataforma] || [];
-    return campos.map(([k, etiqueta]) => `<b>${esc(etiqueta)}:</b> ${esc(resumen[k])}`).join("<br>");
-  }
-
-  function pintarPublicacion(plataforma, p) {
-    const map = CAMPOS_PUBLICACION[plataforma] || {};
-    const titulo = p[map.titulo] || "(sin título)";
-    const fecha = p[map.fecha] || "?";
-    const extra = (map.extra || []).map((k) => `${esc(p[k])} ${esc(k)}`).join(" · ");
-    return `<div class="redes-detalle-item"><span class="t">${esc(titulo)}</span><small>${esc(fecha)} · ${extra}</small></div>`;
-  }
-
-  function seleccionarCuenta(plataforma, alias) {
-    cuentaSeleccionada = { plataforma, alias };
-    listaEl && listaEl.querySelectorAll(".redes-tarjeta").forEach((el) => {
-      el.classList.toggle("sel", el.dataset.plataforma === plataforma && el.dataset.alias === alias);
-    });
-    if (!detalleEl) return;
-    detalleEl.innerHTML = '<div class="empty">cargando…</div>';
-    fetch("/redes/detalle?plataforma=" + encodeURIComponent(plataforma) + "&alias=" + encodeURIComponent(alias))
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.error) { detalleEl.innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
-        const resumenHtml = `<div class="redes-detalle-resumen">${pintarResumen(plataforma, d.resumen || {})}</div>`;
-        const pubs = d.publicaciones || [];
-        const pubsHtml = pubs.length
-          ? pubs.map((p) => pintarPublicacion(plataforma, p)).join("")
-          : '<div class="empty">sin publicaciones</div>';
-        detalleEl.innerHTML = resumenHtml + pubsHtml;
-      })
-      .catch(() => { detalleEl.innerHTML = '<div class="empty">error al cargar el detalle</div>'; });
-  }
-
-  // ---------- Tips (calculados en el backend por reglas, aquí solo se pintan) ----------
-  const tipsEl = $("redes-tips-lista");
-  function pintarTips(tips) {
-    if (!tipsEl) return;
-    if (!tips || !tips.length) { tipsEl.innerHTML = '<div class="empty">sin avisos</div>'; return; }
-    tipsEl.innerHTML = tips.map((t) => `<div class="item">${esc(t.texto)}</div>`).join("");
-  }
-
-  // ---------- Motor mínimo de drag/resize para los 3 widgets de redes ----------
-  // Calco recortado del widgetsCode() de code.js: mismo mecanismo (Pointer Events,
-  // imán a la cuadrícula, colisión), un único layout autoguardado propio.
-  (function widgetsRedes() {
-    const cont = document.querySelector(".hud-redes");
-    if (!cont) return;
-    const COLS = 12, ROWS = 13;
-    const STORAGE_KEY = "cristopher-hud-layout-redes";
-    const IDS = ["redes-cuentas", "redes-detalle", "redes-tips"];
-    const MIN = {
-      "redes-cuentas": { w: 2, h: 4 }, "redes-detalle": { w: 3, h: 4 }, "redes-tips": { w: 3, h: 2 },
-    };
-    const DEFAULT = [
-      { id: "redes-cuentas", x: 0, y: 0, w: 4, h: 13, hidden: false },
-      { id: "redes-detalle", x: 4, y: 0, w: 8, h: 8, hidden: false },
-      { id: "redes-tips", x: 4, y: 8, w: 8, h: 5, hidden: false },
-    ];
-    const EL = {};
-    IDS.forEach((id) => { EL[id] = document.querySelector("." + id); });
-
-    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-    function cloneLayout(l) { return l.map((w) => Object.assign({}, w)); }
-    function isValid(layout) {
-      if (!Array.isArray(layout) || layout.length !== IDS.length) return false;
-      const seen = new Set();
-      for (const w of layout) {
-        if (!w || typeof w.id !== "string" || seen.has(w.id) || IDS.indexOf(w.id) === -1) return false;
-        seen.add(w.id);
-        if (![w.x, w.y, w.w, w.h].every(Number.isInteger)) return false;
-        if (w.x < 0 || w.y < 0 || w.w < 1 || w.h < 1 || w.x + w.w > COLS || w.y + w.h > ROWS) return false;
-      }
-      return seen.size === IDS.length;
-    }
-
-    let layout;
-    try {
-      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      layout = isValid(raw) ? raw : cloneLayout(DEFAULT);
-    } catch (_) { layout = cloneLayout(DEFAULT); }
-
-    function save() {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(layout)); } catch (_) { /* cuota/privado: se ignora */ }
-    }
-
-    function applyWidget(w) {
-      const el = EL[w.id];
-      if (!el) return;
-      el.style.display = w.hidden ? "none" : "";
-      el.style.gridColumn = (w.x + 1) + " / span " + w.w;
-      el.style.gridRow = (w.y + 1) + " / span " + w.h;
-    }
-    function applyLayout() { layout.forEach(applyWidget); }
-    applyLayout();
-
-    function collides(a, b) {
-      return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-    }
-    function isValidPlacement(cand) {
-      if (cand.x < 0 || cand.y < 0 || cand.x + cand.w > COLS || cand.y + cand.h > ROWS) return false;
-      for (const w of layout) if (w.id !== cand.id && !w.hidden && collides(cand, w)) return false;
-      return true;
-    }
-
-    function getCellMetrics() {
-      const rect = cont.getBoundingClientRect();
-      const cs = getComputedStyle(cont);
-      const gap = parseFloat(cs.columnGap || cs.gap) || 0;
-      const padL = parseFloat(cs.paddingLeft) || 0, padR = parseFloat(cs.paddingRight) || 0;
-      const padT = parseFloat(cs.paddingTop) || 0, padB = parseFloat(cs.paddingBottom) || 0;
-      const innerW = rect.width - padL - padR, innerH = rect.height - padT - padB;
-      return { stepW: (innerW + gap) / COLS, stepH: (innerH + gap) / ROWS };
-    }
-
-    function widgetIdOf(panel) {
-      for (const id of IDS) if (panel.classList.contains(id)) return id;
-      return null;
-    }
-
-    let dragState = null;
-    cont.addEventListener("pointerdown", (ev) => {
-      if (document.body.dataset.edit !== "1" || window.innerWidth <= 760) return;
-      if (ev.target.closest(".widget-remove")) return;
-      const panel = ev.target.closest(".panel");
-      const id = panel && widgetIdOf(panel);
-      const widget = id && layout.find((w) => w.id === id && !w.hidden);
-      if (!widget) return;
-      const resizeHandle = ev.target.closest(".widget-resize");
-      ev.preventDefault();
-      const captureEl = resizeHandle || panel;
-      captureEl.setPointerCapture(ev.pointerId);
-      const mode = resizeHandle ? "resize" : "drag";
-      panel.classList.add(mode === "drag" ? "dragging" : "resizing");
-      dragState = {
-        mode, id, handle: captureEl, panel,
-        metrics: getCellMetrics(), startX: ev.clientX, startY: ev.clientY,
-        orig: Object.assign({}, widget), min: MIN[id] || { w: 1, h: 1 },
-      };
-      document.addEventListener("pointermove", onMove);
-      document.addEventListener("pointerup", onUp);
-    });
-
-    function onMove(ev) {
-      if (!dragState) return;
-      const { mode, id, metrics, orig, min } = dragState;
-      const dCol = Math.round((ev.clientX - dragState.startX) / metrics.stepW);
-      const dRow = Math.round((ev.clientY - dragState.startY) / metrics.stepH);
-      let cand;
-      if (mode === "drag") {
-        cand = { id, x: clamp(orig.x + dCol, 0, COLS - orig.w), y: clamp(orig.y + dRow, 0, ROWS - orig.h), w: orig.w, h: orig.h };
-      } else {
-        const w = Math.min(Math.max(min.w, orig.w + dCol), COLS - orig.x);
-        const h = Math.min(Math.max(min.h, orig.h + dRow), ROWS - orig.y);
-        cand = { id, x: orig.x, y: orig.y, w, h };
-      }
-      if (isValidPlacement(cand)) {
-        const idx = layout.findIndex((w) => w.id === id);
-        layout[idx] = Object.assign({}, layout[idx], cand);
-        applyWidget(layout[idx]);
-        dragState.panel.classList.remove("invalid-placement");
-      } else {
-        dragState.panel.classList.add("invalid-placement");
-      }
-    }
-    function onUp(ev) {
-      if (!dragState) return;
-      try { dragState.handle.releasePointerCapture(ev.pointerId); } catch (_) { /* ya liberado */ }
-      dragState.panel.classList.remove("dragging", "resizing", "invalid-placement");
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", onUp);
-      save();
-      dragState = null;
-    }
-
-    cont.addEventListener("click", (ev) => {
-      if (document.body.dataset.edit !== "1") return;
-      const btn = ev.target.closest(".widget-remove");
-      if (!btn) return;
-      const panel = btn.closest(".panel");
-      const id = panel && widgetIdOf(panel);
-      const w = id && layout.find((x) => x.id === id);
-      if (w) { w.hidden = true; applyWidget(w); save(); }
-    });
-  })();
 })();

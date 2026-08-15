@@ -716,6 +716,10 @@
     // de modo code se pintan en su propia consola (code.js), no en la de aquí, para
     // no mezclar las dos conversaciones (corrección §2 al plan original).
     if (e.modo === "code") { window.__hudCodeLog && window.__hudCodeLog(e); return; }
+    // Modo redes NO tiene conversación propia (a diferencia de code): su barra de
+    // abajo es un espejo del mismo hilo, porque allí la consola normal está oculta.
+    // Por eso se refleja Y se sigue pintando abajo, sin el `return` de arriba.
+    window.__hudRedesLog && window.__hudRedesLog(e);
     const d = document.createElement("div");
     d.className = "l " + e.kind;
     const pref = { user: "tú", answer: "CRIS", thought: "···", tool_call: "→", observation: "obs", error: "!!" }[e.kind] || e.kind;
@@ -729,6 +733,7 @@
     setEstado(s.estado || "reposo");
     setModo(s.modo_code);
     setModoRedes(s.modo_redes);
+    setModoVoz(s.modo_voz);
     setModoControlTotal(s.control_total);
     if (s.metricas) setMetricas(s.metricas);
     setTarea(s.tarea); setRoster(s.subagentes);
@@ -765,6 +770,7 @@
         case "concentracion": setConcentracion(m.datos); break;
         case "modo_code": setModo(m.datos); break;
         case "modo_redes": setModoRedes(m.datos); break;
+        case "modo_voz": setModoVoz(m.datos); break;
         case "sesion_entrada":
           panelAgentes.onEntrada(m.datos);
           panelAutoArreglos.onEntrada(m.datos);
@@ -803,39 +809,6 @@
     mostrarAdjunto(`📎 ${file.name}`);
   });
 
-  // Grabación de audio desde el propio navegador (MediaRecorder) — alternativa a
-  // elegir un archivo ya existente. audio/webm lo decodifica faster-whisper sin
-  // conversión aparte (ver voz.py::transcribir_archivo).
-  let mediaRecorder = null;
-  let grabando = false;
-  const btnGrabar = $("btn-grabar");
-
-  btnGrabar.addEventListener("click", async () => {
-    if (grabando) { mediaRecorder && mediaRecorder.stop(); return; }
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      mostrarAdjunto("⚠️ sin acceso al micrófono");
-      return;
-    }
-    const chunks = [];
-    mediaRecorder = new MediaRecorder(stream);
-    mediaRecorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
-    mediaRecorder.onstop = () => {
-      stream.getTracks().forEach((t) => t.stop());
-      grabando = false;
-      btnGrabar.classList.remove("grabando");
-      const blob = new Blob(chunks, { type: "audio/webm" });
-      adjuntoPendiente = { tipo: "audio", mime: "audio/webm", blob };
-      mostrarAdjunto("🎤 audio grabado");
-    };
-    mediaRecorder.start();
-    grabando = true;
-    btnGrabar.classList.add("grabando");
-    mostrarAdjunto("🎤 grabando…");
-  });
-
   function blobToBase64(blob) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -845,18 +818,316 @@
     });
   }
 
-  $("form").addEventListener("submit", async (e) => {
+  // /enviar_media ya transcribe el audio en el servidor y lo encola como si lo hubieras
+  // tecleado (ver hud/__main__.py::_post_enviar_media), así que el push-to-talk y el
+  // adjunto clásico comparten exactamente el mismo camino.
+  function enviarMedia(tipo, mime, blob, texto) {
+    blobToBase64(blob).then((datos_b64) => {
+      fetch("/enviar_media", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tipo, mime, datos_b64, texto }),
+      }).catch(() => {});
+    }).catch(() => {});
+  }
+
+  // ---------- Modo de entrada: texto | pulsando | libre ----------
+  // Cómo le HABLAS. Independiente del toggle 🔊 (respuesta hablada), más abajo.
+  // "libre" (VAD, sin pulsar nada) todavía no está construido: el botón va disabled.
+  const MODO_ENTRADA_KEY = "cristopher.modo_entrada";
+  const PTT_TECLA = "h";        // E no: widgets.js ya la usa para el modo edición
+  const PTT_MIN_MS = 350;       // por debajo de esto es un roce, no una frase
+  let modoEntrada = "texto";
+  let micStream = null;         // stream cacheado: pedirlo en cada pulsación metería
+                                // 100-300 ms de retardo justo al empezar a hablar
+  let mediaRecorder = null;
+  let grabando = false;
+  let arrancando = false;       // hay un iniciarGrabacion() en vuelo (esperando el micro)
+  let soltadoEnVuelo = false;   // ...y ya lo has soltado antes de que llegara
+  let inicioGrabacion = 0;
+  let destinoGrabacion = "adjunto";   // "adjunto" (queda esperando) | "envio" (se manda solo)
+  const btnGrabar = $("btn-grabar");
+
+  async function prepararMicro() {
+    if (micStream) return micStream;
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      micStream = null;
+      mostrarAdjunto("⚠️ sin acceso al micrófono");
+    }
+    return micStream;
+  }
+
+  function soltarMicro() {
+    if (grabando && mediaRecorder) mediaRecorder.stop();
+    if (!micStream) return;
+    micStream.getTracks().forEach((t) => t.stop());
+    micStream = null;
+  }
+
+  async function iniciarGrabacion(destino) {
+    if (grabando || arrancando) return;
+    arrancando = true;
+    soltadoEnVuelo = false;
+    const stream = await prepararMicro();
+    arrancando = false;
+    if (!stream) return;
+    const chunks = [];
+    destinoGrabacion = destino;
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      grabando = false;
+      btnGrabar.classList.remove("grabando");
+      const blob = new Blob(chunks, { type: "audio/webm" });
+      const ms = Date.now() - inicioGrabacion;
+      // En modo texto el micro no se queda abierto: solo se cachea mientras dure un
+      // modo de audio, donde el retardo de pedirlo sí importa.
+      if (modoEntrada === "texto") soltarMicro();
+      if (destinoGrabacion === "descarte") {
+        mostrarAdjunto(etiquetaReposo());
+        return;
+      }
+      if (destinoGrabacion === "envio") {
+        if (ms < PTT_MIN_MS || !blob.size) {
+          // Un roce de tecla manda ruido a Whisper y CRIS acaba contestando a una
+          // transcripción inventada. Mejor no mandar nada.
+          mostrarAdjunto("⚠️ muy corto");
+          setTimeout(() => mostrarAdjunto(etiquetaReposo()), 1500);
+          return;
+        }
+        mostrarAdjunto(etiquetaReposo());
+        enviarMedia("audio", "audio/webm", blob, "");
+        return;
+      }
+      adjuntoPendiente = { tipo: "audio", mime: "audio/webm", blob };
+      mostrarAdjunto("🎤 audio grabado");
+    };
+    inicioGrabacion = Date.now();
+    mediaRecorder.start();
+    grabando = true;
+    btnGrabar.classList.add("grabando");
+    mostrarAdjunto(destino === "envio" ? "🎤 escuchando…" : "🎤 grabando…");
+    // Si soltaste mientras se pedía el micro (la primera vez sale el diálogo de
+    // permiso y tarda), el parar llegó antes que esto: cerrar ya, o se quedaría
+    // grabando para siempre.
+    if (soltadoEnVuelo) pararGrabacion();
+  }
+
+  function pararGrabacion() {
+    if (arrancando) { soltadoEnVuelo = true; return; }
+    if (grabando && mediaRecorder) mediaRecorder.stop();
+  }
+
+  // Cortar tirando lo grabado (no se manda nada): lo usa el modo libre cuando CRIS
+  // arranca a hablar en mitad de una captura.
+  function abortarGrabacion() {
+    if (!grabando || !mediaRecorder) return;
+    destinoGrabacion = "descarte";
+    mediaRecorder.stop();
+  }
+
+  // Etiqueta de la barra cuando no está grabando: en modo libre hay que recordar que
+  // el micro sigue armado, o no se distingue de estar apagado.
+  function etiquetaReposo() {
+    return modoEntrada === "libre" && vadTimer ? "🎧 escuchando" : "";
+  }
+
+  // ---------- Modo libre: detección de voz (VAD) en el navegador ----------
+  // Sin pulsar nada: la energía del micro por encima del ruido de fondo abre el turno
+  // y ~800 ms de silencio lo cierran y lo mandan. Todo en el navegador — el backend no
+  // se entera, le llega el mismo /enviar_media que en push-to-talk.
+  const VAD_SILENCIO_MS = 800;    // silencio que da la frase por terminada
+  const VAD_MAX_MS = 20000;       // tope duro: en una sala ruidosa, no grabar sin fin
+  const VAD_ECO_MS = 600;         // margen tras hablar CRIS, para la cola del altavoz
+  let vadCtx = null, vadAnalyser = null, vadBuf = null;
+  let vadTimer = null, vadCal = null;
+  let vadUmbral = 0.02, vadUltimoSonido = 0, vadFinHabla = 0;
+
+  function rmsActual() {
+    if (!vadAnalyser) return 0;
+    vadAnalyser.getFloatTimeDomainData(vadBuf);
+    let s = 0;
+    for (let i = 0; i < vadBuf.length; i++) s += vadBuf[i] * vadBuf[i];
+    return Math.sqrt(s / vadBuf.length);
+  }
+
+  async function arrancarVad() {
+    if (vadTimer || vadCal) return;
+    const stream = await prepararMicro();
+    if (!stream || modoEntrada !== "libre") return;
+    try {
+      vadCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (vadCtx.state === "suspended") await vadCtx.resume();
+      vadAnalyser = vadCtx.createAnalyser();
+      vadAnalyser.fftSize = 1024;
+      vadBuf = new Float32Array(vadAnalyser.fftSize);
+      vadCtx.createMediaStreamSource(stream).connect(vadAnalyser);
+    } catch (_) {
+      mostrarAdjunto("⚠️ no pude analizar el micrófono");
+      return;
+    }
+    // Calibrado corto contra el ruido REAL de la sala: con un umbral fijo, o salta con
+    // el ventilador o no te oye. Mismo criterio que escucha.py con las palmadas.
+    mostrarAdjunto("🎧 calibrando…");
+    let pico = 0, n = 0;
+    vadCal = setInterval(() => {
+      pico = Math.max(pico, rmsActual());
+      if (++n < 16) return;   // ~1 s
+      clearInterval(vadCal); vadCal = null;
+      vadUmbral = Math.max(pico * 2.5, 0.015);
+      mostrarAdjunto("🎧 escuchando");
+      vadTimer = setInterval(vadTick, 60);
+    }, 60);
+  }
+
+  function pararVad() {
+    if (vadCal) { clearInterval(vadCal); vadCal = null; }
+    if (vadTimer) { clearInterval(vadTimer); vadTimer = null; }
+    abortarGrabacion();
+    if (vadCtx) { try { vadCtx.close(); } catch (_) { /* ya cerrado */ } vadCtx = null; }
+    vadAnalyser = null; vadBuf = null;
+    mostrarAdjunto("");
+  }
+
+  function vadTick() {
+    // Mientras CRIS habla, el micro NO cuenta: por el altavoz se oiría a sí mismo y
+    // acabaría contestándose en bucle. Coste asumido: en modo libre no hay barge-in
+    // (para cortarle, cambia a pulsando o teclea).
+    if (document.body.dataset.estado === "hablando") {
+      abortarGrabacion();
+      vadFinHabla = Date.now();
+      return;
+    }
+    if (Date.now() - vadFinHabla < VAD_ECO_MS) return;
+    const ahora = Date.now();
+    const rms = rmsActual();
+    if (!grabando) {
+      if (rms > vadUmbral && !arrancando) {
+        vadUltimoSonido = ahora;
+        iniciarGrabacion("envio");
+      }
+      return;
+    }
+    if (rms > vadUmbral) vadUltimoSonido = ahora;
+    if (ahora - vadUltimoSonido > VAD_SILENCIO_MS || ahora - inicioGrabacion > VAD_MAX_MS) {
+      pararGrabacion();
+    }
+  }
+
+  function aplicarModoEntrada(modo) {
+    modoEntrada = modo;
+    document.body.dataset.modoEntrada = modo;
+    for (const b of $("modo-entrada").querySelectorAll("button")) {
+      b.classList.toggle("sel", b.dataset.modo === modo);
+    }
+    btnGrabar.title = { texto: "Grabar audio",
+                        pulsando: "Mantener H (o este botón) para hablar",
+                        libre: "Micro armado: habla cuando quieras" }[modo];
+    if (modo === "texto") {
+      pararVad();
+      soltarMicro();
+      return;
+    }
+    // Sin foco en el cuadro, H dispara desde el primer momento (dentro escribiría una
+    // letra). Y se pide el micro ya, no en mitad de la primera frase.
+    $("entrada").blur();
+    if (modo === "libre") {
+      arrancarVad();
+    } else {
+      pararVad();
+      prepararMicro();
+    }
+  }
+
+  $("modo-entrada").addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button[data-modo]");
+    if (!btn || btn.disabled) return;
+    aplicarModoEntrada(btn.dataset.modo);
+    try { localStorage.setItem(MODO_ENTRADA_KEY, btn.dataset.modo); } catch (_) { /* cuota/privado: se ignora */ }
+  });
+
+  // El 🎤: en modo texto sigue siendo click-para-adjuntar (como siempre); en modo
+  // audio es mantener-para-hablar, el respaldo para cuando el cursor está dentro del
+  // cuadro de texto y H escribe letras.
+  btnGrabar.addEventListener("click", () => {
+    if (modoEntrada !== "texto") return;
+    if (grabando) { pararGrabacion(); return; }
+    iniciarGrabacion("adjunto");
+  });
+  // Solo en "pulsando": en libre manda el VAD y una pulsación manual se le cruzaría.
+  btnGrabar.addEventListener("pointerdown", (ev) => {
+    if (modoEntrada !== "pulsando") return;
+    ev.preventDefault();
+    iniciarGrabacion("envio");
+  });
+  for (const ev of ["pointerup", "pointercancel", "pointerleave"]) {
+    btnGrabar.addEventListener(ev, () => { if (modoEntrada === "pulsando") pararGrabacion(); });
+  }
+
+  // Push-to-talk por teclado: mantener H mientras hablas, soltar para enviar.
+  function escribiendo() {
+    const tag = (document.activeElement && document.activeElement.tagName) || "";
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  }
+  document.addEventListener("keydown", (ev) => {
+    if (modoEntrada !== "pulsando") return;
+    if (ev.key !== PTT_TECLA && ev.key !== PTT_TECLA.toUpperCase()) return;
+    // ev.repeat: mantener una tecla dispara keydown en bucle, y solo el primero cuenta.
+    if (ev.repeat || escribiendo() || ev.ctrlKey || ev.altKey || ev.metaKey) return;
+    ev.preventDefault();
+    iniciarGrabacion("envio");
+  });
+  document.addEventListener("keyup", (ev) => {
+    if (ev.key !== PTT_TECLA && ev.key !== PTT_TECLA.toUpperCase()) return;
+    pararGrabacion();   // sin mirar el modo: si cambió a media pulsación, hay que soltar igual
+  });
+
+  let modoGuardado = "texto";
+  try { modoGuardado = localStorage.getItem(MODO_ENTRADA_KEY) || "texto"; } catch (_) { /* privado: se ignora */ }
+  aplicarModoEntrada(["pulsando", "libre"].includes(modoGuardado) ? modoGuardado : "texto");
+
+  // Al restaurar "libre" en una recarga no hay gesto del usuario todavía, y el
+  // navegador deja el AudioContext suspendido: el análisis daría 0 y nunca saltaría.
+  // Al primer clic o tecla, se rearma.
+  function rearmarTrasGesto() {
+    if (modoEntrada !== "libre") return;
+    if (vadCtx && vadCtx.state === "suspended") vadCtx.resume().catch(() => {});
+    else if (!vadCtx && !vadCal) arrancarVad();
+  }
+  document.addEventListener("click", rearmarTrasGesto);
+  document.addEventListener("keydown", rearmarTrasGesto);
+
+  // ---------- Respuesta hablada (TTS) ----------
+  // Ajuste aparte del modo de entrada: puedes teclear y que te conteste hablando, o
+  // hablarle y leerlo. Mueve el mismo flag (estado.py) que las tools activar_modo_voz /
+  // desactivar_modo_voz, así que el SSE lo repinta si lo cambia el propio CRISTOPHER.
+  const btnTts = $("btn-tts");
+  let ttsActivo = false;
+  function setModoVoz(activo) {
+    ttsActivo = !!activo;
+    btnTts.textContent = ttsActivo ? "🔊" : "🔇";
+    btnTts.classList.toggle("sel", ttsActivo);
+    btnTts.title = ttsActivo ? "Respuesta hablada: activada" : "Respuesta hablada: desactivada";
+  }
+  btnTts.addEventListener("click", () => {
+    const activo = !ttsActivo;
+    setModoVoz(activo);   // optimista; el SSE confirma o corrige
+    fetch("/modo_voz", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ activo }),
+    }).catch(() => setModoVoz(!activo));
+  });
+  setModoVoz(false);
+
+  $("form").addEventListener("submit", (e) => {
     e.preventDefault();
     const input = $("entrada"); const texto = input.value.trim();
     if (adjuntoPendiente) {
       const { tipo, mime, blob } = adjuntoPendiente;
       input.value = "";
       limpiarAdjunto();
-      const datos_b64 = await blobToBase64(blob);
-      fetch("/enviar_media", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tipo, mime, datos_b64, texto }),
-      }).catch(() => {});
+      enviarMedia(tipo, mime, blob, texto);
       return;
     }
     if (!texto) return;

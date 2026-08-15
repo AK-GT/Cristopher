@@ -174,9 +174,13 @@ from cristopher.tools.voz_tools import (
     activar_modo_voz,
     desactivar_modo_voz,
     voz_actual,
+    voz_buscar_elevenlabs,
     voz_catalogo,
     voz_elegir,
+    voz_elegir_elevenlabs,
+    voz_listar_elevenlabs,
     voz_listar_voces,
+    voz_usar_piper,
 )
 from cristopher.tools.whatsapp_tools import whatsapp_check_new, whatsapp_read, whatsapp_send
 from cristopher.tools.youtube_tools import (
@@ -1013,9 +1017,10 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "voz_listar_voces",
         "description": (
-            "Lista las voces Piper YA instaladas (listas para usar sin descargar "
-            "nada). Úsala cuando el usuario pregunte qué voces tienes o pida cambiar "
-            "de voz sin dar un nombre concreto."
+            "Lista las voces PIPER (local, gratis) YA instaladas (listas para usar "
+            "sin descargar nada). Úsala cuando el usuario pregunte qué voces locales "
+            "tienes o pida cambiar de voz Piper sin dar un nombre concreto. Para "
+            "ElevenLabs usa voz_listar_elevenlabs/voz_buscar_elevenlabs."
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": voz_listar_voces,
@@ -1023,9 +1028,10 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "voz_catalogo",
         "description": (
-            "Lista TODAS las voces del catálogo conocido (instaladas o no), marcando "
-            "cuáles ya están instaladas. Úsala cuando el usuario pregunte qué otras "
-            "voces existen o podría descargar, más allá de las que ya tiene."
+            "Lista TODAS las voces del catálogo PIPER (local) conocido (instaladas o "
+            "no), marcando cuáles ya están instaladas. Úsala cuando el usuario "
+            "pregunte qué otras voces Piper existen o podría descargar. Para "
+            "ElevenLabs usa voz_buscar_elevenlabs."
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": voz_catalogo,
@@ -1033,23 +1039,86 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "voz_elegir",
         "description": (
-            "Cambia la voz activa a `nombre` (nombre exacto del catálogo, ver "
-            "voz_catalogo/voz_listar_voces). Si esa voz no está instalada, la "
-            "descarga primero (puede tardar unos segundos por la red). Úsala cuando "
-            "el usuario pida claramente cambiar de voz."
+            "Cambia la voz activa a `nombre`, una voz PIPER (local, gratis) exacta "
+            "del catálogo (ver voz_catalogo/voz_listar_voces). Si esa voz no está "
+            "instalada, la descarga primero (puede tardar unos segundos por la red). "
+            "Úsala cuando el usuario pida claramente cambiar a una voz Piper/local. "
+            "Para una voz de ElevenLabs usa voz_elegir_elevenlabs."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "nombre": {"type": "string", "description": "Nombre exacto de la voz del catálogo."},
+                "nombre": {"type": "string", "description": "Nombre exacto de la voz Piper del catálogo."},
             },
             "required": ["nombre"],
         },
         "fn": voz_elegir,
     },
     {
+        "name": "voz_usar_piper",
+        "description": (
+            "Vuelve a hablar con Piper (voz local, gratis) sin cambiar cuál era la "
+            "última voz Piper elegida. Úsala cuando el usuario quiera volver a la voz "
+            "local, por ejemplo tras un fallo de ElevenLabs (créditos agotados, sin red...)."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": voz_usar_piper,
+    },
+    {
+        "name": "voz_listar_elevenlabs",
+        "description": (
+            "Lista las voces de ElevenLabs YA disponibles en la cuenta (requiere "
+            "ELEVENLABS_API_KEY configurada). Úsala cuando el usuario pregunte qué "
+            "voces de ElevenLabs tiene o pida cambiar sin dar un nombre concreto. "
+            "Para explorar voces nuevas usa voz_buscar_elevenlabs."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": voz_listar_elevenlabs,
+    },
+    {
+        "name": "voz_buscar_elevenlabs",
+        "description": (
+            "Busca voces en la Voice Library PÚBLICA de ElevenLabs (no solo las que "
+            "ya están en la cuenta). IMPORTANTE: `query` debe ir en INGLÉS y corto "
+            "(acento, género, tono o uso — p. ej. 'male mexican narrator', 'female "
+            "young energetic') o un nombre propio: el índice solo etiqueta sus voces "
+            "en inglés, una frase en español no encuentra nada. Si el usuario pide en "
+            "español, tradúcelo tú a esas palabras clave antes de llamar. Requiere "
+            "ELEVENLABS_API_KEY configurada. Las voces encontradas se pueden activar "
+            "con voz_elegir_elevenlabs, que las añade a la cuenta automáticamente si "
+            "hace falta. Úsala cuando el usuario quiera explorar/probar voces de "
+            "ElevenLabs nuevas."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Palabras clave EN INGLÉS (acento, género, tono, uso) o un nombre propio."},
+            },
+            "required": ["query"],
+        },
+        "fn": voz_buscar_elevenlabs,
+    },
+    {
+        "name": "voz_elegir_elevenlabs",
+        "description": (
+            "Cambia la voz activa a una de ElevenLabs, identificada por nombre o "
+            "voice_id (de la cuenta o de una búsqueda reciente con "
+            "voz_buscar_elevenlabs). Si la voz no está en la cuenta todavía, la añade "
+            "primero. Úsala cuando el usuario pida claramente una voz de ElevenLabs. "
+            "Para volver a Piper usa voz_usar_piper o voz_elegir."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nombre_o_id": {"type": "string", "description": "Nombre o voice_id exacto de la voz de ElevenLabs."},
+            },
+            "required": ["nombre_o_id"],
+        },
+        "fn": voz_elegir_elevenlabs,
+    },
+    {
         "name": "voz_actual",
-        "description": "Dice cuál es la voz activa ahora mismo. Úsala cuando el usuario pregunte qué voz tienes puesta.",
+        "description": "Dice cuál es la voz activa ahora mismo (Piper o ElevenLabs). Úsala cuando el usuario pregunte qué voz tienes puesta.",
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": voz_actual,
     },

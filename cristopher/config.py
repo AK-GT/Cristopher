@@ -18,17 +18,47 @@ ROOT = Path(__file__).resolve().parent.parent
 # Carga .env de la raíz si existe (no pisa variables ya definidas en el sistema).
 load_dotenv(ROOT / ".env")
 
-# Modelo del cerebro. Usamos el alias `-latest` para no quedar clavados a una versión
-# concreta que Google pueda retirar (404). Soporta function calling + multimodal.
+# Modelo del cerebro. VERSIÓN EXPLÍCITA a propósito, NO un alias `-latest`: el alias
+# lo mueve Google sin avisar y eso ya nos cambió el cerebro por debajo, a peor —
+# `gemini-flash-latest` pasó a resolver a gemini-3.6-flash (modelo de razonamiento,
+# 5 req/min en free tier, ~3s por paso del bucle) y `gemini-flash-lite-latest` a
+# gemini-3.5-flash-lite, que directamente FINGE el éxito (ver FALLBACK_MODEL abajo).
+# El precio de fijar versión es un 404 el día que Google la retire: es un fallo
+# ruidoso y trivial de arreglar, muy preferible a una degradación silenciosa.
+#
+# gemini-3.1-flash-lite, medido contra las 146 herramientas del registro con un test
+# de enrutado de 10 casos reales: 9/10 aciertos, mediana 0,86s y CERO tokens de
+# pensamiento — frente a 2,98s del anterior principal. Sin pasada de razonamiento no
+# hay nada que recortar para ir rápido en lo sencillo, y su cuota por minuto es
+# holgada, así que un turno ReAct de varios pasos deja de provocar 429.
 # Sobrescribible con la variable de entorno CRISTOPHER_MODEL.
-MODEL = os.getenv("CRISTOPHER_MODEL", "gemini-flash-latest")
+MODEL = os.getenv("CRISTOPHER_MODEL", "gemini-3.1-flash-lite")
 
 # Cerebro de respaldo: si el principal agota su cuota (429), CRISTOPHER cae a este y
 # sigue funcionando (§8 "degrada con elegancia"). Debe ser OTRO modelo Gemini que
 # soporte function calling + system_instruction + visión (la misma config del bucle se
 # reutiliza tal cual): un modelo sin FC — p. ej. Gemma — la rechazaría con 400. Poner
 # "" para desactivarlo.
-FALLBACK_MODEL = os.getenv("CRISTOPHER_FALLBACK_MODEL", "gemini-flash-lite-latest")
+#
+# NUNCA gemini-3.5-flash-lite (ni el alias gemini-flash-lite-latest, que hoy resuelve
+# ahí): verificado con la config real del bucle, ante "apunta que tengo que comprar
+# pan" o "pon música de los Beatles" NO llama a ninguna herramienta y responde
+# "Anotado, señor" / "Pongo a los Beatles a sonar". No apunta nada ni suena nada:
+# finge el éxito, que es justo lo que prohíbe la esencia §1. Enrutado medido: 3/10.
+#
+# Y NUNCA gemini-3.5-flash ni gemini-3.6-flash pese a que ambos enrutan bien: en el
+# free tier tienen **20 peticiones AL DÍA** (verificado leyendo el quotaValue del
+# propio 429). Un turno ReAct con herramientas gasta de 2 a 4, así que se agotan en
+# media docena de turnos. Regla aprendida a base de fallo: al elegir modelo hay que
+# medir la CUOTA, no solo la latencia y el enrutado — en este free tier las cuotas
+# generosas están en la gama `flash-lite`, no en la `flash`.
+#
+# gemini-3.1-flash-lite-preview: enrutado 4/4 con la config real, ~0,8s, y cuota
+# propia de 15 req/min sin tope diario a la vista. Es un modelo DISTINTO del
+# principal, así que tiene su PROPIO cubo de cuota: cuando el principal choca con su
+# límite por minuto, cambiar aquí sale gratis y al instante, sin esperar ni bajar de
+# calidad (es el mismo modelo de la familia del principal).
+FALLBACK_MODEL = os.getenv("CRISTOPHER_FALLBACK_MODEL", "gemini-3.1-flash-lite-preview")
 
 # Modo de salida: "texto" (REPL) o "voz" (Fase 6). En voz, el pensamiento intermedio
 # NO se verbaliza: solo se habla la respuesta final. El flag deja esto preparado.
@@ -184,7 +214,13 @@ LEAD_MINUTOS = int(os.getenv("CRISTOPHER_LEAD", "15"))    # antelación para avi
 # Hora local (0-23) a partir de la que avisa si el usuario no ha hecho su diario de hoy.
 DIARIO_HORA_AVISO = int(os.getenv("CRISTOPHER_DIARIO_HORA", "20"))
 # Mini-modelo que clasifica la prioridad (1-3) de cada aviso. Fallback: FALLBACK_MODEL.
-CLASSIFIER_MODEL = os.getenv("CRISTOPHER_CLASSIFIER_MODEL", "gemini-flash-lite-latest")
+# Versión explícita por el mismo motivo que MODEL (los alias derivan solos). Aquí SÍ
+# vale gemini-3.5-flash-lite pese a lo dicho arriba: sus tres usos en proactivo.py son
+# de solo texto (clasificar un dígito, redactar una propuesta, resumir una sesión) y
+# nunca declaran `tools`, así que el fallo de fingir la llamada a una herramienta no
+# puede darse. Y a propósito NO es el mismo modelo que MODEL: el demonio proactivo
+# consulta cada POLL_SEGUNDOS, y compartir modelo le comería la cuota al cerebro.
+CLASSIFIER_MODEL = os.getenv("CRISTOPHER_CLASSIFIER_MODEL", "gemini-3.5-flash-lite")
 GMAIL_QUERY_PROACTIVO = os.getenv("CRISTOPHER_GMAIL_QUERY", "is:unread")
 
 # Correo de destino para avisos urgentes (nivel 3) que deben llegar aunque no estés
@@ -199,6 +235,13 @@ WHISPER_DIR = VOICE_DIR / "whisper"          # caché del modelo faster-whisper
 STT_MODEL = os.getenv("CRISTOPHER_STT_MODEL", "small")  # tamaño de faster-whisper
 STT_LANG = "es"
 VOZ_DEFECTO = "es_ES-davefx-medium"  # nombre de la voz Piper por defecto
+
+# --- Voz ElevenLabs (TTS en la nube, opcional) --------------------------------
+# Sin esta key, CRISTOPHER sigue hablando solo con Piper (100% local), igual que
+# TAVILY_API_KEY degrada a DuckDuckGo sin key.
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "").strip()
+ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_flash_v2_5")
+ELEVENLABS_CACHE_DIR = VOICE_DIR / "elevenlabs_cache"  # audio ya sintetizado, por hash de texto+voz+modelo
 
 # --- Arranque por 2 palmadas + música ----------------------------------------
 # Escucha ambiental ligera (cristopher/escucha.py): 2 palmadas despiertan el HUD y

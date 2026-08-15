@@ -16,6 +16,7 @@ Carga perezosa de modelos. Errores explícitos si falta micro/altavoz o un model
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -28,7 +29,17 @@ from typing import Any, Optional
 
 import numpy as np
 
-from cristopher.config import DATA, STT_LANG, STT_MODEL, VOICE_DIR, VOZ_DEFECTO, WHISPER_DIR
+from cristopher.config import (
+    DATA,
+    ELEVENLABS_API_KEY,
+    ELEVENLABS_CACHE_DIR,
+    ELEVENLABS_MODEL,
+    STT_LANG,
+    STT_MODEL,
+    VOICE_DIR,
+    VOZ_DEFECTO,
+    WHISPER_DIR,
+)
 
 SR = 16000  # tasa de muestreo para el micrófono / STT
 
@@ -170,7 +181,26 @@ def voz_actual_nombre() -> str:
 
 
 def _guardar_voz_actual(nombre: str) -> None:
-    _escribir_voz_json({"voz": nombre})
+    # También fija proveedor="piper": si estaba activo ElevenLabs, elegir una voz
+    # Piper explícitamente debe volver a hablarse con Piper, no dejar la elección
+    # sin efecto audible.
+    _escribir_voz_json({"voz": nombre, "proveedor": "piper"})
+
+
+def proveedor_actual() -> str:
+    """'piper' o 'elevenlabs', según lo persistido en data/voz.json (por defecto
+    'piper' si la clave no existe todavía, para compatibilidad con un voz.json viejo)."""
+    with _VOZ_LOCK:
+        p = _leer_voz_json().get("proveedor")
+        return p if p in ("piper", "elevenlabs") else "piper"
+
+
+def _leer_voz_elevenlabs_activa() -> tuple[Optional[str], Optional[str]]:
+    """(voice_id, nombre) de la voz ElevenLabs activa, o (None, None) si no hay ninguna
+    elegida todavía."""
+    with _VOZ_LOCK:
+        data = _leer_voz_json()
+        return data.get("voz_elevenlabs_id"), data.get("voz_elevenlabs_nombre")
 
 
 def _entrada_catalogo(nombre: str) -> Optional[dict[str, str]]:
@@ -262,6 +292,196 @@ def sintetizar(texto: str) -> tuple[np.ndarray, int]:
     return data, sr
 
 
+# --- TTS ElevenLabs (nube, opcional) -------------------------------------------
+# Segundo backend de voz, en paralelo a Piper. Se activa solo si el usuario/agente
+# elige una voz de ElevenLabs (`voz_elegir_elevenlabs` en tools/voz_tools.py), que
+# persiste `proveedor: "elevenlabs"` en data/voz.json — `hablar()` es el único punto
+# que decide con qué backend sintetizar (ver más abajo), así voz_repl.py y el HUD no
+# necesitan saber que este backend existe.
+ELEVEN_API_BASE = "https://api.elevenlabs.io/v1"
+ELEVEN_SR = 24000  # pcm_24000: PCM crudo sin cabecera, 16 bits, mono
+
+# Última búsqueda en la Voice Library pública (voz.py::elevenlabs_buscar_voces), clave
+# nombre-en-minúsculas y voice_id -> {"voice_id", "owner_id", "nombre", ...}. Permite
+# que voz_elegir_elevenlabs añada a la cuenta una voz recién encontrada, sin tenerla
+# ya instalada — equivalente en espíritu a `_piper_cache`, pero de metadatos, no de
+# modelo cargado.
+_eleven_busqueda_cache: dict[str, dict] = {}
+
+
+def _eleven_headers() -> dict[str, str]:
+    if not ELEVENLABS_API_KEY:
+        raise VozError(
+            "No tengo ElevenLabs configurado: falta ELEVENLABS_API_KEY en .env "
+            "(ver .env.example). Mientras tanto puedo seguir hablando con Piper."
+        )
+    return {"xi-api-key": ELEVENLABS_API_KEY}
+
+
+def _eleven_mensaje_error(resp) -> str:
+    """Extrae el mensaje de error del cuerpo JSON de ElevenLabs si lo hay (créditos
+    agotados, rate limit, key inválida...); si no, recorta el texto crudo."""
+    try:
+        cuerpo = resp.json()
+        detalle = cuerpo.get("detail") if isinstance(cuerpo, dict) else None
+        if isinstance(detalle, dict):
+            return str(detalle.get("message") or detalle.get("status") or detalle)
+        if detalle:
+            return str(detalle)
+    except Exception:
+        pass
+    return (resp.text or "").strip()[:200] or f"HTTP {resp.status_code}"
+
+
+def elevenlabs_listar_voces() -> list[dict[str, str]]:
+    """Voces YA disponibles en la cuenta ElevenLabs del usuario (GET /v1/voices)."""
+    import requests
+
+    headers = _eleven_headers()
+    try:
+        resp = requests.get(f"{ELEVEN_API_BASE}/voices", headers=headers, timeout=15)
+        if not resp.ok:
+            raise VozError(f"ElevenLabs no listó las voces de tu cuenta: {_eleven_mensaje_error(resp)}")
+        data = resp.json()
+    except VozError:
+        raise
+    except Exception as exc:
+        raise VozError(f"No pude contactar con ElevenLabs: {exc}") from exc
+    return [
+        {"voice_id": v.get("voice_id", ""), "nombre": v.get("name", ""), "categoria": v.get("category", "")}
+        for v in data.get("voices", [])
+    ]
+
+
+def _eleven_shared_voices_request(params: dict) -> list[dict]:
+    import requests
+
+    headers = _eleven_headers()
+    try:
+        resp = requests.get(f"{ELEVEN_API_BASE}/shared-voices", headers=headers, params=params, timeout=15)
+        if not resp.ok:
+            raise VozError(f"ElevenLabs no pudo buscar voces: {_eleven_mensaje_error(resp)}")
+        return resp.json().get("voices", [])
+    except VozError:
+        raise
+    except Exception as exc:
+        raise VozError(f"No pude contactar con ElevenLabs: {exc}") from exc
+
+
+def elevenlabs_buscar_voces(query: str) -> list[dict[str, str]]:
+    """Busca voces en la Voice Library PÚBLICA de ElevenLabs (no solo las de la
+    cuenta). `query` debe ser un término corto en INGLÉS (acento, género, tono, uso —
+    p. ej. "male mexican narrator") o un nombre: el índice de ElevenLabs solo etiqueta
+    sus voces en inglés, una frase libre en español no encuentra nada (verificado).
+    Sesga a español por defecto (`language=es`), ya que CRISTOPHER solo habla español.
+    Si la búsqueda con `query` no da resultados, reintenta solo con el filtro de
+    idioma para no devolver la lista vacía por un término que no matchea ningún
+    campo. Cachea los resultados en memoria para que voz_elegir_elevenlabs pueda
+    añadir a la cuenta una voz recién encontrada."""
+    voces = _eleven_shared_voices_request({"search": query, "language": "es", "page_size": 10})
+    if not voces:
+        voces = _eleven_shared_voices_request({"language": "es", "page_size": 10})
+
+    resultados = []
+    for v in voces:
+        entrada = {
+            "voice_id": v.get("voice_id", ""),
+            "owner_id": v.get("public_owner_id") or v.get("owner_id", ""),
+            "nombre": v.get("name", ""),
+            "idioma": v.get("language", ""),
+            "descripcion": v.get("description", ""),
+        }
+        resultados.append(entrada)
+        _eleven_busqueda_cache[entrada["nombre"].lower()] = entrada
+        _eleven_busqueda_cache[entrada["voice_id"]] = entrada
+    return resultados
+
+
+def _eleven_anadir_voz(owner_id: str, voice_id: str, nombre: str) -> str:
+    """Añade a la cuenta una voz de la Voice Library pública (POST
+    /v1/voices/add/{owner_id}/{voice_id}). Devuelve el voice_id ya usable para
+    síntesis (ElevenLabs conserva el mismo voice_id al añadirla)."""
+    import requests
+
+    headers = _eleven_headers()
+    try:
+        resp = requests.post(
+            f"{ELEVEN_API_BASE}/voices/add/{owner_id}/{voice_id}",
+            headers=headers,
+            json={"new_name": nombre},
+            timeout=30,
+        )
+        if not resp.ok:
+            raise VozError(f"No pude añadir la voz '{nombre}' a tu cuenta: {_eleven_mensaje_error(resp)}")
+        data = resp.json()
+    except VozError:
+        raise
+    except Exception as exc:
+        raise VozError(f"No pude contactar con ElevenLabs: {exc}") from exc
+    return data.get("voice_id") or voice_id
+
+
+def _eleven_resolver(nombre_o_id: str) -> tuple[str, str]:
+    """Resuelve un nombre o voice_id a (voice_id, nombre) usable para síntesis.
+    Orden: (1) ya está en la cuenta -> úsala directo; (2) apareció en la última
+    búsqueda de la Voice Library -> añádela a la cuenta primero; (3) nada encontrado
+    -> error explícito pidiendo buscar antes."""
+    nombre_o_id = (nombre_o_id or "").strip()
+    clave = nombre_o_id.lower()
+
+    for v in elevenlabs_listar_voces():
+        if v["voice_id"] == nombre_o_id or v["nombre"].lower() == clave:
+            return v["voice_id"], v["nombre"]
+
+    encontrada = _eleven_busqueda_cache.get(clave) or _eleven_busqueda_cache.get(nombre_o_id)
+    if encontrada:
+        voice_id = _eleven_anadir_voz(encontrada["owner_id"], encontrada["voice_id"], encontrada["nombre"])
+        return voice_id, encontrada["nombre"]
+
+    raise VozError(
+        f"'{nombre_o_id}' no es una voz que conozca de ElevenLabs. Prueba primero "
+        "voz_buscar_elevenlabs o voz_listar_elevenlabs."
+    )
+
+
+def _eleven_cache_ruta(texto: str, voice_id: str) -> Path:
+    clave = f"{texto}|{voice_id}|{ELEVENLABS_MODEL}".encode("utf-8")
+    return ELEVENLABS_CACHE_DIR / f"{hashlib.sha256(clave).hexdigest()}.pcm"
+
+
+def _sintetizar_elevenlabs(texto: str, voice_id: str) -> tuple[np.ndarray, int]:
+    """Devuelve (audio int16 mono, sample_rate) de `texto` con la voz ElevenLabs
+    `voice_id`. Cachea en disco por hash de (texto, voz, modelo) — ElevenLabs cobra
+    por carácter, a diferencia de Piper; sin invalidación (MVP, mismo criterio ya
+    aceptado en el repo para data/whatsapp/media/)."""
+    ruta = _eleven_cache_ruta(texto, voice_id)
+    if ruta.exists():
+        return np.frombuffer(ruta.read_bytes(), dtype=np.int16), ELEVEN_SR
+
+    import requests
+
+    headers = {**_eleven_headers(), "Accept": "audio/pcm", "Content-Type": "application/json"}
+    try:
+        resp = requests.post(
+            f"{ELEVEN_API_BASE}/text-to-speech/{voice_id}",
+            headers=headers,
+            params={"output_format": f"pcm_{ELEVEN_SR}"},
+            json={"text": texto, "model_id": ELEVENLABS_MODEL},
+            timeout=60,
+        )
+        if not resp.ok:
+            raise VozError(f"ElevenLabs no pudo sintetizar el audio: {_eleven_mensaje_error(resp)}")
+        audio_bytes = resp.content
+    except VozError:
+        raise
+    except Exception as exc:
+        raise VozError(f"No pude contactar con ElevenLabs: {exc}") from exc
+
+    ELEVENLABS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    ruta.write_bytes(audio_bytes)
+    return np.frombuffer(audio_bytes, dtype=np.int16), ELEVEN_SR
+
+
 # --- Limpieza de Markdown antes de hablar --------------------------------------
 # Las respuestas del agente vienen formateadas en Markdown (el HUD las renderiza así),
 # pero un TTS no debe LEER los símbolos de marcado en voz alta — solo el texto que
@@ -319,15 +539,33 @@ def detener_habla() -> None:
 
 
 def hablar(texto: str) -> None:
-    """Sintetiza y reproduce `texto` por el altavoz con la voz Piper activa (100%
-    local/offline). Limpia el Markdown antes de sintetizar (§ TTS) y puede
-    interrumpirse desde otro hilo con `detener_habla()` — tanto durante la síntesis
-    (se salta la reproducción entera) como durante la reproducción misma."""
+    """Sintetiza y reproduce `texto` por el altavoz con la voz activa (Piper local o
+    ElevenLabs en la nube, según `proveedor_actual()`). Limpia el Markdown antes de
+    sintetizar (§ TTS) y puede interrumpirse desde otro hilo con `detener_habla()` —
+    tanto durante la síntesis (se salta la reproducción entera) como durante la
+    reproducción misma. Único punto de integración de ambos backends: voz_repl.py y
+    el HUD llaman esto sin saber cuál está activo."""
     texto = _limpiar_markdown_para_voz(texto or "")
     if not texto:
         return
     _detener_evento.clear()
-    data, sr = sintetizar(texto)
+    if proveedor_actual() == "elevenlabs":
+        voice_id, _ = _leer_voz_elevenlabs_activa()
+        if not voice_id:
+            raise VozError(
+                "Modo ElevenLabs activo pero sin voz elegida todavía. Usa "
+                "voz_elegir_elevenlabs para elegir una."
+            )
+        try:
+            data, sr = _sintetizar_elevenlabs(texto, voice_id)
+        except VozError as exc:
+            raise VozError(
+                f"No pude hablar con ElevenLabs ({exc}). Dime si quieres que use "
+                "Piper como respaldo (lo hago con voz_usar_piper) o prefieres que "
+                "me quede en silencio hasta que se solucione (desactivar_modo_voz)."
+            ) from exc
+    else:
+        data, sr = sintetizar(texto)
     if _detener_evento.is_set():
         return  # se pidió cortar mientras se sintetizaba: no reproducir ya un audio obsoleto
     try:

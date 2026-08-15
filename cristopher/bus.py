@@ -15,6 +15,8 @@ from datetime import datetime
 from typing import Any
 
 from cristopher import estado_code
+# Alias: `estado` a secas chocaría con el parámetro de set_estado() de más abajo.
+from cristopher import estado as estado_voz
 
 _LOCK = threading.Lock()
 
@@ -30,6 +32,9 @@ _estado: dict[str, Any] = {
     "concentracion": {"activo": False},  # snapshot de concentracion.estado_actual()
     "modo_code": False,           # snapshot de estado_code.esta_activo() (Cristopher Code)
     "modo_redes": False,          # snapshot de estado_redes.esta_activo() (Modo redes)
+    # Arranca leyendo el flag real (CRISTOPHER_MODO_SALIDA=voz lo pone a True), no un
+    # False fijo: el toggle del HUD debe reflejar el estado, no imponerlo.
+    "modo_voz": estado_voz.esta_activo(),
     "control_total": False,       # snapshot de estado_control_total.esta_activo() (Fase 4)
     "control_total_actividad": "reposo",  # "reposo"|"trabajando" del bucle (Fase 2)
 }
@@ -120,6 +125,15 @@ def set_modo_redes(activo: bool) -> None:
     with _LOCK:
         _estado["modo_redes"] = activo
     _emit("modo_redes", activo)
+
+
+def set_modo_voz(activo: bool) -> None:
+    """Flag de la respuesta hablada (estado.py). El HUD lo usa para pintar su toggle 🔊,
+    y hay que publicarlo también cuando lo mueve el propio CRISTOPHER por intención
+    (tools/voz_tools.py) o el toggle se quedaría mintiendo."""
+    with _LOCK:
+        _estado["modo_voz"] = activo
+    _emit("modo_voz", activo)
 
 
 def set_control_total(activo: bool) -> None:

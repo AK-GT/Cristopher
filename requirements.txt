@@ -24,6 +24,14 @@ sounddevice>=0.4.6
 numpy>=1.24.0
 pynput>=1.7.0
 
+# Voces ElevenLabs (TTS en la nube, opcional, ver ELEVENLABS_API_KEY en .env.example).
+# A propósito NO se añade el SDK oficial `elevenlabs`: depende de `httpx`, el mismo
+# paquete que ya nos dio un conflicto real de versión con `ghunt` (ver Tanda B más
+# abajo, httpx<0.28 rompía google-genai/ddgs). La superficie usada aquí es pequeña
+# (listar voces, buscar en la Voice Library, añadir una voz, sintetizar) y se cubre
+# entera con `requests` puro (ya dependencia transitiva, igual que Tavily) — ver
+# voz.py::elevenlabs_listar_voces/elevenlabs_buscar_voces/_sintetizar_elevenlabs.
+
 # Fase 8 — HUD. Métricas de sistema. three.js va vendorizado en
 # cristopher/hud/static/three.min.js (offline, sin CDN).
 psutil>=5.9.0

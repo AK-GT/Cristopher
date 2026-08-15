@@ -143,6 +143,14 @@
         <input id="entrada" type="text" placeholder="Habla con CRISTOPHER…" />
         <span id="adjunto-nombre" class="adjunto-nombre" hidden></span>
         <input id="adjunto-file" type="file" accept="image/*,audio/*" hidden />
+        <!-- Modo de ENTRADA (cómo le hablas). Independiente del toggle 🔊, que es la
+             respuesta hablada. -->
+        <div class="modo-entrada" id="modo-entrada" role="group" aria-label="Modo de entrada">
+          <button type="button" data-modo="texto" title="Escribir">⌨</button>
+          <button type="button" data-modo="pulsando" title="Mantener H (o el 🎤) para hablar">🎙</button>
+          <button type="button" data-modo="libre" title="Audio libre: habla sin pulsar nada">♾</button>
+        </div>
+        <button type="button" id="btn-tts" title="Respuesta hablada">🔇</button>
         <button type="button" id="btn-adjuntar" title="Adjuntar imagen o audio">📎</button>
         <button type="button" id="btn-grabar" title="Grabar audio">🎤</button>
         <button type="submit">enviar</button>
@@ -257,39 +265,33 @@
 
     <!-- Modo redes: pantalla dedicada del dashboard YouTube/Instagram/TikTok, solo
          visible con body[data-modo="redes"] (ver PLAN "Modo redes"). Mutuamente
-         excluyente con Modo code (misma pantalla, distinto contenido). -->
+         excluyente con Modo code (misma pantalla, distinto contenido).
+         Una barra de estado fina + una rejilla donde CADA CUENTA es su propia
+         tarjeta-widget: todo el contenido lo pinta redes.js, aquí solo el hueco. -->
     <div class="hud-redes">
-      <div class="redes-cuentas panel">
+      <div class="redes-barra panel">
         <i class="bracket"></i>
-        <div class="widget-drag" aria-hidden="true">⠿</div>
-        <div class="widget-resize" aria-hidden="true"></div>
-        <button type="button" class="widget-remove" aria-hidden="true" tabindex="-1" title="Ocultar">×</button>
-        <div class="redes-toolbar">
-          <div class="panel-title" style="margin:0">CUENTAS</div>
-          <div class="redes-toolbar-acciones">
-            <span class="redes-actualizado" id="redes-actualizado"></span>
-            <button type="button" class="redes-refrescar" id="redes-refrescar">Actualizar ahora</button>
-          </div>
-        </div>
-        <div class="redes-lista" id="redes-lista"><div class="empty">sin cuentas conectadas</div></div>
+        <span class="redes-barra-titulo">REDES</span>
+        <span class="redes-resumen" id="redes-resumen"></span>
+        <span class="redes-avisos" id="redes-avisos" hidden></span>
+        <span class="redes-actualizado" id="redes-actualizado"></span>
+        <button type="button" class="redes-refrescar" id="redes-refrescar" title="Actualizar ahora">⟳</button>
       </div>
+      <div class="redes-grid" id="redes-grid"><div class="empty">sin cuentas conectadas</div></div>
 
-      <div class="redes-detalle panel">
+      <!-- Barra para hablar con CRISTOPHER sin salir del modo: la consola normal
+           está oculta aquí (.hud-normal-widget). NO es una conversación aparte como
+           la de modo code — va al mismo /enviar y al mismo hilo, y lo que se escribe
+           aquí sigue apareciendo también en la consola normal. Reutiliza las clases
+           .log y .input de §10, que no están acopladas a .console. -->
+      <div class="redes-chat panel">
         <i class="bracket"></i>
-        <div class="widget-drag" aria-hidden="true">⠿</div>
-        <div class="widget-resize" aria-hidden="true"></div>
-        <button type="button" class="widget-remove" aria-hidden="true" tabindex="-1" title="Ocultar">×</button>
-        <div class="panel-title">DETALLE</div>
-        <div class="redes-detalle-cuerpo" id="redes-detalle-cuerpo"><div class="empty">selecciona una cuenta</div></div>
-      </div>
-
-      <div class="redes-tips panel">
-        <i class="bracket"></i>
-        <div class="widget-drag" aria-hidden="true">⠿</div>
-        <div class="widget-resize" aria-hidden="true"></div>
-        <button type="button" class="widget-remove" aria-hidden="true" tabindex="-1" title="Ocultar">×</button>
-        <div class="panel-title">TIPS</div>
-        <div class="redes-tips-lista" id="redes-tips-lista"><div class="empty">sin avisos</div></div>
+        <div class="log redes-chat-log" id="redes-chat-log"></div>
+        <form class="input" id="redes-form" autocomplete="off">
+          <span class="prompt">›</span>
+          <input id="redes-entrada" type="text" placeholder="Habla con CRISTOPHER…" />
+          <button type="submit">enviar</button>
+        </form>
       </div>
     </div>
   </div>
