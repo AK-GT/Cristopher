@@ -182,18 +182,16 @@ class ConexionWhatsApp {
         }
 
         this.estado = "close";
-        if (this._intentos < BACKOFF_MS.length) {
-          const espera = BACKOFF_MS[this._intentos];
-          this._intentos += 1;
-          setTimeout(() => {
-            this.iniciar({ mostrarQr, onQr: this._onQr, onMensaje: this._onMensaje }).catch(
-              () => {
-                this.estado = "close";
-              }
-            );
-          }, espera);
-        }
-        // Agotados los reintentos: se queda en "close" sin bucle infinito.
+        // Backoff creciente hasta agotar BACKOFF_MS y luego reintentar sin parar al
+        // maximo intervalo (32s): un corte de red o una suspension del portatil no
+        // debe dejar el proceso zombi para siempre esperando un reinicio manual.
+        const espera = BACKOFF_MS[Math.min(this._intentos, BACKOFF_MS.length - 1)];
+        this._intentos += 1;
+        setTimeout(() => {
+          this.iniciar({ mostrarQr, onQr: this._onQr, onMensaje: this._onMensaje }).catch(() => {
+            this.estado = "close";
+          });
+        }, espera);
       }
     });
 
