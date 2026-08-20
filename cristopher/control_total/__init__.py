@@ -1,8 +1,8 @@
 """Modo Control Total — CRISTOPHER operando ratón/teclado de forma autónoma.
 
-Ver PLAN_CONTROL_TOTAL_1.md (raíz del repo) para el diseño completo por fases.
-Este paquete arranca aislado (Fase 1: driver.py + killswitch.py) — nada aquí se
-conecta todavía a agent.py ni al registro TOOLS.
+Ver CLAUDE.md ("Modo Control Total") para el contrato de seguridad y el porqué de
+cada pieza. Se construyó por fases: driver.py + killswitch.py (cimientos), bucle.py +
+guardarraíles.py (percepción→decisión→acción) y la integración con agent.py/TOOLS/HUD.
 
 Logging centralizado aquí (una sola vez, al importar el paquete) porque driver.py y
 killswitch.py comparten el mismo logger "cristopher.control_total": cualquiera de

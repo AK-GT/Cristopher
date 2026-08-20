@@ -8,7 +8,7 @@ con PKCE).
 A diferencia de YouTube/Instagram, la Display API de TikTok solo da un snapshot
 ACTUAL de estadísticas de cuenta (seguidores, likes totales, nº de vídeos), no una
 serie histórica por rango de fechas — para eso haría falta la Business API de
-TikTok, descartada en PLAN_R~1.MD. Por eso `tiktok_metricas_cuenta` no lleva
+TikTok, descartada en el diseño (ver CLAUDE.md). Por eso `tiktok_metricas_cuenta` no lleva
 parámetro `dias`.
 
 `tiktok_publicar_video` (fase de publicación) usa la Content Posting API con
@@ -125,7 +125,7 @@ def _datos_resumen_tiktok(alias: str) -> dict:
     — añadirla exigiría una llamada extra a video/list/ en cada refresco del
     dashboard (la Display API de TikTok no expone esa fecha en user/info/), así
     que el tip de "cuenta sin publicar hace N días" no se calcula para TikTok por
-    ahora (ver PLAN "Modo redes")."""
+    ahora (ver CLAUDE.md)."""
     resp = tiktok_api_request(alias, "GET", "user/info/", params={"fields": _CAMPOS_PERFIL})
     perfil = resp.get("data", {}).get("user", {})
     return {

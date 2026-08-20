@@ -1,8 +1,7 @@
 """Autenticación multi-cuenta para redes sociales (Fase 1: YouTube, Fase 2:
 Instagram, Fase 3: TikTok; y fase de publicación: scopes de escritura sobre
 esta misma infraestructura de tokens — deliberadamente NO llamada "Fase 4" para
-no colisionar con el uso ya existente de ese número en el repo, ver PLAN_R~1.MD
-§6 y CLAUDE.md).
+no colisionar con el uso ya existente de ese número en el repo, ver CLAUDE.md).
 
 Analogía deliberada con google_auth.py, pero MULTI-CUENTA: cada alias (canal/cuenta
 que el usuario elige, p. ej. "principal", "humor") tiene su propio token bajo

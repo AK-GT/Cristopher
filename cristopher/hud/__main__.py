@@ -30,6 +30,8 @@ from cristopher.config import (
     HUD_PORT,
     HUD_UPLOADS_DIR,
     POLL_WHATSAPP_COMANDOS,
+    REINICIO_LOG,
+    ROOT,
     WHATSAPP_HEARTBEAT_SEGUNDOS,
 )
 from cristopher.control_total import killswitch
@@ -354,6 +356,26 @@ def _musica_control(accion: str, valor) -> dict:
 # El almacén de notas es thread-safe (su propio lock), así que se consulta DIRECTAMENTE
 # desde el hilo HTTP (no toca el worker/Playwright). Import perezoso para no acoplar el
 # arranque del HUD. El frontend sondea /notas cada pocos segundos.
+def _seguro_estado_json() -> dict:
+    """Estado del Modo Seguro. seguro.py es self-locking (RLock propio, mismo
+    criterio que concentracion.py), así que se llama DIRECTO desde el hilo HTTP."""
+    try:
+        from cristopher import seguro
+        return seguro.estado_actual()
+    except Exception as exc:
+        return {"activo": False, "fase": "INACTIVO", "error": str(exc)}
+
+
+def _seguro_personas_json() -> dict:
+    """Personas autorizadas (lista blanca) para el panel del HUD — misma fuente que
+    seguro_listar_personas(), solo que en JSON."""
+    try:
+        from cristopher import seguro
+        return {"personas": seguro.personas_detalle()}
+    except Exception as exc:
+        return {"personas": [], "error": str(exc)}
+
+
 def _concentracion_estado() -> dict:
     try:
         from cristopher import concentracion
@@ -618,6 +640,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_programadas_listar())
         if self.path == "/concentracion":
             return self._json(_concentracion_estado())
+        if self.path == "/seguro/estado":
+            return self._json(_seguro_estado_json())
+        if self.path == "/seguro/personas":
+            return self._json(_seguro_personas_json())
+        # El <img> del panel le cuelga un `?<timestamp>` para saltarse la caché del
+        # navegador, así que aquí NO vale comparar por igualdad (mismo motivo que
+        # /sesiones más abajo): con la query string no entraba nunca y el stream
+        # acababa en el 404 del fallback de estáticos.
+        if self.path == "/seguro/preview" or self.path.startswith("/seguro/preview?"):
+            return self._seguro_preview_stream()
         if self.path == "/sesiones" or self.path.startswith("/sesiones?"):
             qs = parse_qs(urlparse(self.path).query)
             origen = (qs.get("origen") or [""])[0]
@@ -656,6 +688,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", _CT.get(p.suffix, "application/octet-stream"))
         self.send_header("Content-Length", str(len(data)))
+        # Sin esto, Chrome cachea app.js/style.css heurísticamente y tras editarlos el
+        # HUD sigue corriendo el frontend viejo hasta que alguien se acuerda de hacer
+        # una recarga dura — se pierde más tiempo depurando un cambio que ya estaba
+        # bien que lo que cuesta releer estos ficheros del disco local.
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 
@@ -687,6 +724,42 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             bus.desuscribir(q)
 
+    def _seguro_preview_stream(self):
+        """Stream MJPEG de la vista de cámara del Modo Seguro (panel de verificación
+        del HUD, no la Fase 3 completa). Mismo manejo de desconexión que _sse(): el
+        navegador corta la conexión al cerrar el panel (quitando el `src` del <img>),
+        esto lo detecta como BrokenPipeError y decrementa el contador de
+        suscriptores — así el hilo vigilante deja de dibujar overlay/codificar JPEG
+        en cuanto nadie mira."""
+        from cristopher import seguro
+        e = seguro.estado_actual()
+        # También durante una sesión guiada de enrolamiento con el modo APAGADO: ahí la
+        # cámara la tiene `seguro.enrolar()`, y es justo cuando más falta hace ver la
+        # imagen (te está diciendo cómo colocarte).
+        if not e.get("activo") and not e.get("enrolamiento"):
+            self.send_response(204)
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        seguro.preview_conectar()
+        try:
+            while True:
+                jpg = seguro.obtener_preview_jpg()
+                if jpg:
+                    self.wfile.write(
+                        b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                        + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n"
+                    )
+                    self.wfile.flush()
+                time.sleep(0.2)   # ~5fps de refresco del stream, no ligado a fps_vigilancia
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            pass
+        finally:
+            seguro.preview_desconectar()
+
     # --- POST: entrada del usuario y confirmaciones ---
     def do_POST(self):
         if self.path == "/enviar":
@@ -709,6 +782,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_tareas_estado()
         if self.path == "/programadas/cancelar":
             return self._post_programadas_cancelar()
+        if self.path == "/seguro/desbloquear":
+            return self._post_seguro_desbloquear()
+        if self.path == "/seguro/activar":
+            return self._post_seguro_activar()
+        if self.path == "/seguro/armar":
+            return self._post_seguro_armar()
+        if self.path == "/seguro/desactivar":
+            return self._post_seguro_desactivar()
+        if self.path == "/seguro/enrolar/pausa":
+            return self._post_seguro_pausa()
         if self.path == "/modo_code":
             return self._post_modo_code()
         if self.path == "/modo_redes":
@@ -717,6 +800,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_modo_voz()
         if self.path == "/redes/refrescar":
             return self._json(_redes_refrescar_json())
+        if self.path == "/reiniciar":
+            return self._post_reiniciar()
         return self.send_error(404)
 
     def _post_enviar(self):
@@ -874,6 +959,75 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": "id inválido"})
         self._json(_programadas_cancelar(id_))
 
+    def _post_seguro_desbloquear(self):
+        # Llamado por el overlay de bloqueo (proceso aparte, cristopher/seguro_overlay.py)
+        # con la contraseña que tecleó el usuario. seguro.intentar_desbloqueo es
+        # self-locking, igual que /modo_code — se resuelve directo en el hilo HTTP,
+        # nunca por _JOBS.
+        data = self._body_json()
+        try:
+            from cristopher import seguro
+            resultado = seguro.intentar_desbloqueo(str(data.get("password") or ""))
+        except Exception as exc:
+            resultado = {"ok": False, "mensaje": str(exc)}
+        self._json(resultado)
+
+    def _post_seguro_activar(self):
+        # Clic en el 📷 de la topbar: abre la cámara. Por defecto en VISTA (armado
+        # false), NO armada — un clic no puede tener como efecto que se te bloquee la
+        # sesión de Windows sin haberlo pedido; armar es un segundo gesto explícito
+        # dentro del panel. seguro.activar() es self-locking, va directo en el hilo HTTP.
+        data = self._body_json()
+        armado = bool(data.get("armado"))
+        try:
+            from cristopher import seguro
+            mensaje = seguro.activar(armado=armado)
+            e = seguro.estado_actual()
+        except Exception as exc:
+            return self._json({"activo": False, "armado": False, "mensaje": str(exc)})
+        self._json({"activo": bool(e.get("activo")), "armado": bool(e.get("armado")),
+                    "mensaje": mensaje})
+
+    def _post_seguro_armar(self):
+        # Botón ARMAR/DESARMAR del panel: cambia entre VISTA y VIGILANDO sin cerrar la
+        # cámara. Se niega durante un bloqueo (ver seguro.armar) — desarmar no puede ser
+        # un atajo para saltarse la contraseña.
+        data = self._body_json()
+        try:
+            from cristopher import seguro
+            mensaje = seguro.armar(bool(data.get("armado")))
+            e = seguro.estado_actual()
+        except Exception as exc:
+            return self._json({"activo": False, "armado": False, "mensaje": str(exc)})
+        self._json({"activo": bool(e.get("activo")), "armado": bool(e.get("armado")),
+                    "mensaje": mensaje})
+
+    def _post_seguro_desactivar(self):
+        # Cerrar el panel estando solo en VISTA apaga la cámara: no tiene sentido dejar
+        # la webcam abierta sin que nadie mire ni nada vigile. Hasta ahora no había NINGUNA
+        # forma de apagar el Modo Seguro desde el HUD, solo por chat.
+        try:
+            from cristopher import seguro
+            mensaje = seguro.desactivar()
+            e = seguro.estado_actual()
+        except Exception as exc:
+            return self._json({"activo": False, "mensaje": str(exc)})
+        self._json({"activo": bool(e.get("activo")), "mensaje": mensaje})
+
+    def _post_seguro_pausa(self):
+        # Pausa/reanuda la sesión guiada de enrolamiento. Duplica lo que hace el atajo
+        # global (espacio) a propósito: el atajo solo existe si pynput está disponible,
+        # y con el HUD delante el botón es más descubrible que una tecla. Sin cuerpo,
+        # alterna. seguro es self-locking: va directo en el hilo HTTP.
+        data = self._body_json()
+        try:
+            from cristopher import seguro
+            pausar = data.get("pausar")
+            self._json(seguro.pausar_enrolamiento(
+                None if pausar is None else bool(pausar)))
+        except Exception as exc:
+            self._json({"ok": False, "pausado": False, "mensaje": str(exc)})
+
     def _post_modo_code(self):
         data = self._body_json()
         self._json(_modo_code_set(bool(data.get("activo"))))
@@ -885,6 +1039,14 @@ class Handler(BaseHTTPRequestHandler):
     def _post_modo_voz(self):
         data = self._body_json()
         self._json(_modo_voz_set(bool(data.get("activo"))))
+
+    def _post_reiniciar(self):
+        # Responde ANTES de matar el proceso: si se hiciera al revés, el navegador
+        # se quedaría esperando una respuesta que nunca llega (la conexión muere con
+        # el proceso). El reinicio real ocurre en un hilo aparte para no bloquear
+        # este método de más de lo necesario.
+        self._json({"ok": True})
+        threading.Thread(target=_reiniciar_total, daemon=True).start()
 
 
 def _muestreo_metricas():
@@ -943,6 +1105,20 @@ def _whatsapp_comandos_watcher():
         pass  # degrada con elegancia si no hay Node/WhatsApp vinculado
 
 
+def _seguro_vigilante_thread():
+    """Modo Seguro (Fase 1): hilo daemon dueño único de la webcam. Bloquea en
+    seguro.hilo_vigilante() casi todo el tiempo (duerme en un Event mientras el modo
+    está inactivo, así que la cámara nunca se abre fuera de una sesión activa).
+    seguro.hilo_vigilante() ya nunca muere ni calla por su cuenta (loguea por bus y
+    reintenta); este try/except solo cubre el propio `import cristopher.seguro`, para
+    que si faltan opencv/mediapipe el arranque del HUD no se vea afectado."""
+    try:
+        from cristopher import seguro
+        seguro.hilo_vigilante()
+    except Exception:
+        pass
+
+
 def _otra_instancia_viva() -> bool:
     """True si ya hay un HUD real respondiendo en HUD_PORT.
 
@@ -960,6 +1136,34 @@ def _otra_instancia_viva() -> bool:
             return True
     except OSError:
         return False
+
+
+def _reiniciar_total():
+    """Botón de reinicio del HUD (⟳): mata este proceso entero y lanza uno nuevo
+    desde cero, para cuando se prueban cambios de código y no compensa cerrar la
+    consola y volver a teclear `python -m cristopher` a mano.
+
+    El relanzamiento pasa por un `cmd /c timeout` en vez de un `subprocess.Popen`
+    directo al nuevo proceso: `_otra_instancia_viva()` decide "ya hay un HUD vivo"
+    con solo poder conectar al puerto, así que si el proceso nuevo arrancara antes
+    de que este suelte el socket, se confundiría y se limitaría a reabrir la
+    pestaña en vez de levantar un HUD de verdad. El `timeout` le da margen de sobra
+    (este proceso muere con os._exit casi al instante después de lanzarlo).
+    """
+    time.sleep(0.3)  # deja salir la respuesta HTTP antes de morir
+    try:
+        log = open(REINICIO_LOG, "a", encoding="utf-8")
+        comando = f'timeout /t 2 /nobreak >nul & "{sys.executable}" -m cristopher'
+        subprocess.Popen(
+            ["cmd", "/c", comando],
+            cwd=str(ROOT),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception:
+        pass  # aunque falle el relanzamiento, seguimos matando este proceso
+    os._exit(0)
 
 
 def _chrome_path() -> str | None:
@@ -1013,6 +1217,7 @@ def main() -> int:
     threading.Thread(target=_demonio_proactivo, daemon=True).start()
     threading.Thread(target=_whatsapp_comandos_watcher, daemon=True).start()
     threading.Thread(target=_redes_poll_loop, daemon=True).start()
+    threading.Thread(target=_seguro_vigilante_thread, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", HUD_PORT), Handler)
     url = f"http://localhost:{HUD_PORT}"
     # Mismo guard que cristopher/__main__.py: bajo pythonw (sin consola) sys.stdout es

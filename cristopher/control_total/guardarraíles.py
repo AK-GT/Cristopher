@@ -1,6 +1,6 @@
 """Guardarraíles del Modo Control Total — veto EN CÓDIGO antes de ejecutar cualquier
-primitiva del driver, no una instrucción más de prompt (Fase 2, ver
-PLAN_CONTROL_TOTAL_1.md). `bucle.py` llama a `evaluar()` antes de CADA primitiva, sin
+primitiva del driver, no una instrucción más de prompt (ver CLAUDE.md).
+`bucle.py` llama a `evaluar()` antes de CADA primitiva, sin
 excepción — el modelo no puede "decidir" saltárselo.
 
 El riesgo final es el más severo entre lo que el modelo autoinforma (parámetro

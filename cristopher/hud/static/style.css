@@ -179,6 +179,121 @@ body[data-edit="1"] .topbar .edit-toggle{margin-right:24px}
 #layout-toolbar button:hover{border-color:var(--line-cyan); color:var(--cyan-glow)}
 #layout-toolbar button:disabled{opacity:.4; cursor:not-allowed}
 
+/* Icono de la cámara (topbar) parpadeando mientras el Modo Seguro vigila — mismo
+   keyframe que ya usa el botón de grabar voz (pulse-rec), reutilizado aquí porque
+   el significado ("algo está capturando ahora mismo") es idéntico. */
+#seguro-preview-toggle.sp-vista{
+  border-color:var(--amber-bright); color:var(--amber-bright);
+}
+#seguro-preview-toggle.sp-armado{
+  border-color:#ff6b6b; color:#ff6b6b;
+  animation:pulse-rec 1.1s ease-in-out infinite;
+}
+
+/* Vista de cámara del Modo Seguro (panel flotante de verificación, no un widget
+   arrastrable — mismo patrón fixed/z-index que #layout-toolbar). */
+/* Selector compuesto A PROPÓSITO (.seguro-preview-panel.panel, no solo la primera):
+   la primitiva `.panel` declara position:relative MÁS ABAJO en este mismo fichero y, a
+   igualdad de especificidad, gana la última — el panel se iba al final del flujo del
+   documento, fuera de la pantalla, en vez de flotar. */
+.seguro-preview-panel.panel{
+  /* bottom generoso a propósito: con el vídeo + la lista de detección el panel mide
+     ~390px y a 20px del borde se comía la barra de la consola. */
+  position:fixed; bottom:104px; right:20px; z-index:10; width:360px;
+}
+.seguro-preview-panel[hidden]{display:none}
+.seguro-preview-panel .panel-title{
+  display:flex; align-items:center; justify-content:space-between;
+}
+.sp-close{
+  background:transparent; border:none; color:var(--steel-2); font-size:15px;
+  line-height:1; cursor:pointer; padding:0 2px;
+}
+.sp-close:hover{color:var(--cyan-glow)}
+.sp-video-wrap{
+  position:relative; width:100%; aspect-ratio:4/3; border-radius:var(--r);
+  overflow:hidden; background:#05080c; border:1px solid var(--line);
+}
+.sp-video{width:100%; height:100%; object-fit:cover; display:none}
+.sp-empty{
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  color:var(--steel); font-size:11px; font-style:italic; text-align:center; padding:0 20px;
+}
+.sp-stats{
+  margin-top:9px; font-family:var(--mono); font-size:10.5px; color:var(--steel-2);
+  letter-spacing:.02em;
+}
+/* Sesión guiada de enrolamiento. Tamaños deliberadamente grandes: esto se lee de pie,
+   a un metro largo de la pantalla y mientras te colocas — no es texto de leer sentado. */
+.sp-enrol{
+  margin-top:10px; padding:9px 11px; border-radius:var(--r);
+  border:1px solid var(--amber-bright); background:rgba(255,176,32,.07);
+}
+.sp-enrol[hidden]{display:none}
+.sp-enrol-cab{
+  display:flex; justify-content:space-between; font-family:var(--mono); font-size:9.5px;
+  letter-spacing:.08em; text-transform:uppercase; color:var(--steel-2);
+}
+.sp-enrol-instr{
+  margin-top:5px; font-size:15px; line-height:1.25; font-weight:600; color:var(--amber-bright);
+}
+.sp-enrol-cuenta{
+  font-family:var(--mono); font-size:40px; line-height:1; font-weight:700; text-align:center;
+  color:var(--amber-bright); margin-top:4px;
+}
+.sp-enrol-cuenta.sp-ya{color:#8ef0a0}
+.sp-enrol-cuenta.sp-pausa{color:var(--steel-2); font-size:22px}
+.sp-btn-ancho{width:100%; margin-top:7px}
+/* En pausa el marco deja de ser ámbar "atento" y pasa a apagado: de un vistazo, y a
+   un metro, se distingue "te está contando" de "te está esperando". */
+.sp-enrol.sp-en-pausa{border-color:var(--steel); background:rgba(150,150,150,.06)}
+.sp-enrol.sp-en-pausa .sp-enrol-instr{color:var(--steel-2)}
+.sp-enrol-cuenta.sp-mal{font-size:13px; line-height:1.3; color:#ff9c9c; text-align:left}
+
+/* Barra de armado. El color es semántico, no decorativo: ámbar = solo mira,
+   rojo pulsante = puede bloquearte la sesión. */
+.sp-barra{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  margin-top:10px;
+}
+.sp-modo{
+  font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase;
+  padding:4px 8px; border-radius:var(--r); border:1px solid var(--line);
+  color:var(--amber-bright); border-color:var(--amber-bright);
+}
+.sp-modo.sp-on{
+  color:#ff6b6b; border-color:#ff6b6b; animation:pulse-rec 1.1s ease-in-out infinite;
+}
+.sp-btn{
+  background:transparent; border:1px solid var(--line); color:var(--steel-2);
+  font-family:var(--mono); font-size:10px; letter-spacing:.09em; padding:5px 12px;
+  border-radius:var(--r); cursor:pointer; text-transform:uppercase;
+  transition:border-color .2s var(--ease), color .2s var(--ease);
+}
+.sp-btn:hover{border-color:var(--cyan-glow); color:var(--cyan-glow)}
+.sp-btn:disabled{opacity:.4; cursor:not-allowed}
+.sp-deteccion{
+  margin-top:9px; display:flex; flex-direction:column; gap:4px;
+  max-height:132px; overflow-y:auto;
+}
+/* `.empty` es global y viene con el cuerpo de texto del HUD: aquí dentro tiene que ser
+   una línea discreta, no un titular. */
+.sp-deteccion .empty{
+  font-family:var(--mono); font-size:10px; font-style:italic; color:var(--steel);
+  padding:3px 1px;
+}
+.sp-cara{
+  font-family:var(--mono); font-size:10px; line-height:1.45; padding:5px 7px;
+  border-radius:var(--r); border:1px solid var(--line);
+  border-left-width:3px; background:rgba(255,255,255,.02);
+}
+.sp-cara small{display:block; color:var(--steel); font-size:9.5px; letter-spacing:.02em}
+.sp-cara.sp-autorizado{border-left-color:#50dc64; color:#8ef0a0}
+.sp-cara.sp-desconocido{border-left-color:#ff6b6b; color:#ff9c9c}
+.sp-cara.sp-descartado{border-left-color:var(--steel); color:var(--steel-2)}
+.sp-cara.sp-identificando,
+.sp-cara.sp-enrolando{border-left-color:var(--amber-bright); color:var(--amber-bright)}
+
 /* ---------- 5. Panel (primitiva) ---------- */
 .panel{
   position:relative;

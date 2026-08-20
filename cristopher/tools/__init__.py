@@ -42,6 +42,16 @@ from cristopher.tools.concentracion_tools import (
     concentracion_iniciar,
     concentracion_terminar,
 )
+from cristopher.tools.seguro_tools import (
+    seguro_activar,
+    seguro_configurar,
+    seguro_configurar_contrasena,
+    seguro_desactivar,
+    seguro_enrolar,
+    seguro_estado,
+    seguro_listar_personas,
+    seguro_olvidar_persona,
+)
 from cristopher.tools.browser_tools import (
     buscar_en_google,
     navegador_captura,
@@ -1720,7 +1730,7 @@ TOOLS: list[dict[str, Any]] = [
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": desactivar_modo_code,
     },
-    # --- Modo redes (dashboard YouTube/Instagram/TikTok, ver PLAN "Modo redes") --
+    # --- Modo redes (dashboard YouTube/Instagram/TikTok, ver CLAUDE.md) --
     {
         "name": "activar_modo_redes",
         "description": (
@@ -2421,6 +2431,168 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["nombre"],
         },
         "fn": concentracion_app_distractora_quitar,
+    },
+    # --- Modo Seguro (webcam) ---------------------------------------------------
+    {
+        "name": "seguro_activar",
+        "description": (
+            "Activa el Modo Seguro: CRISTOPHER vigila la webcam y, si detecta una "
+            "cara no autorizada mirando la pantalla, bloquea el PC de verdad "
+            "(sesión de Windows bloqueada + aviso propio) y pide contraseña para "
+            "reanudar. Actívalo SOLO cuando el usuario lo pida de forma clara y "
+            "explícita (p. ej. 'activa el modo seguro', 'vigila la webcam mientras "
+            "no estoy') — nunca por iniciativa propia. Si no hay contraseña "
+            "configurada, se negará a activarse: primero hay que llamar a "
+            "seguro_configurar_contrasena."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": seguro_activar,
+    },
+    {
+        "name": "seguro_desactivar",
+        "description": (
+            "Desactiva el Modo Seguro y libera la cámara de inmediato. Úsala "
+            "cuando el usuario pida pararlo."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": seguro_desactivar,
+    },
+    {
+        "name": "seguro_estado",
+        "description": (
+            "Dice si el Modo Seguro está activo, en qué fase de vigilancia está "
+            "(vigilando, bloqueado, o en gracia tras un desbloqueo reciente) y si "
+            "hay algún problema con la cámara (p. ej. otra app la tiene cogida)."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": seguro_estado,
+    },
+    {
+        "name": "seguro_configurar",
+        "description": (
+            "Ajusta la configuración del Modo Seguro (distancia/ángulo mínimos "
+            "para contar como 'mirando', cuántos frames seguidos hacen falta para "
+            "disparar, tiempo de gracia tras desbloquear, si se bloquea Windows de "
+            "verdad, si se guarda una foto del intruso). Solo cambia los campos "
+            "indicados. No sirve para la contraseña (usa "
+            "seguro_configurar_contrasena) ni para la calibración fina de visión "
+            "(eso se hace con el script de calibración delante de la cámara real)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "min_altura_cara_px": {
+                    "type": "integer",
+                    "description": "Tamaño mínimo de cara en píxeles para contar como 'lo bastante cerca'.",
+                },
+                "yaw_max_grados": {
+                    "type": "number",
+                    "description": "Desviación horizontal máxima de la mirada para seguir contando como 'mirando'.",
+                },
+                "pitch_max_grados": {
+                    "type": "number",
+                    "description": "Igual que yaw_max_grados, en vertical.",
+                },
+                "frames_para_disparar": {
+                    "type": "integer",
+                    "description": "Frames seguidos que tiene que persistir una cara desconocida mirando antes de bloquear.",
+                },
+                "segundos_gracia_tras_desbloqueo": {
+                    "type": "integer",
+                    "description": "Tras desbloquear con la contraseña correcta, cuánto se deja de vigilar antes de poder volver a disparar.",
+                },
+                "segundos_entre_capturas": {
+                    "type": "integer",
+                    "description": "Mínimo de segundos entre dos capturas guardadas del intruso.",
+                },
+                "bloquear_windows": {
+                    "type": "boolean",
+                    "description": "Si además de mostrar el aviso se bloquea la sesión de Windows de verdad.",
+                },
+                "guardar_captura_intruso": {
+                    "type": "boolean",
+                    "description": "Si se guarda una foto del intruso al disparar.",
+                },
+            },
+            "required": [],
+        },
+        "fn": seguro_configurar,
+    },
+    {
+        "name": "seguro_configurar_contrasena",
+        "description": (
+            "Fija o cambia la contraseña que desbloquea el Modo Seguro cuando se "
+            "dispara. Se guarda hasheada, nunca en claro. Nunca repitas la "
+            "contraseña en tu respuesta ni la muestres en el chat."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "password": {
+                    "type": "string",
+                    "description": "La nueva contraseña, en texto plano (se hashea antes de guardarla).",
+                },
+            },
+            "required": ["password"],
+        },
+        "fn": seguro_configurar_contrasena,
+    },
+    {
+        "name": "seguro_enrolar",
+        "description": (
+            "Autoriza a una persona en el Modo Seguro con una sesión GUIADA de 9 poses: "
+            "CRISTOPHER le va diciendo en voz alta cómo colocarse (de frente, girado a "
+            "cada lado, barbilla arriba y abajo, cerca, lejos, con otra luz, con gafas), "
+            "hace una cuenta atrás de 5 antes de cada foto y comprueba que la pose sea la "
+            "que pidió antes de darla por buena. Tarda alrededor de minuto y medio y la "
+            "persona tiene que estar delante de la cámara TODO ese rato siguiendo las "
+            "instrucciones — avísale de eso antes de llamarla. NO hace falta activar el "
+            "Modo Seguro antes (seguro_activar): lo normal es enrolarse primero y activar "
+            "la protección después; si el modo ya está vigilando, reutiliza esa cámara sin "
+            "disparar contra la propia persona mientras se enrola. La primera vez descarga "
+            "el modelo de reconocimiento (~250MB) y puede tardar más. Úsala solo cuando el "
+            "usuario pida explícitamente autorizar a alguien."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nombre": {
+                    "type": "string",
+                    "description": "Nombre de la persona a autorizar.",
+                },
+            },
+            "required": ["nombre"],
+        },
+        "fn": seguro_enrolar,
+    },
+    {
+        "name": "seguro_listar_personas",
+        "description": (
+            "Lista las personas autorizadas en la lista blanca del Modo Seguro y "
+            "cuántas fotos tiene cada una."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": seguro_listar_personas,
+    },
+    {
+        "name": "seguro_olvidar_persona",
+        "description": (
+            "Quita a alguien de la lista blanca del Modo Seguro: borra su embedding "
+            "Y sus fotos de enrolamiento en disco de verdad. Acción IRREVERSIBLE: "
+            "confirma con el usuario en la conversación qué persona exacta vas a "
+            "olvidar antes de llamar a esta tool."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nombre": {
+                    "type": "string",
+                    "description": "Nombre de la persona a olvidar.",
+                },
+            },
+            "required": ["nombre"],
+        },
+        "fn": seguro_olvidar_persona,
     },
     {
         "name": "huella_buscar",

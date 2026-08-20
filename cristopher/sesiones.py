@@ -1,7 +1,7 @@
 """Gestor de sesiones vivas de Claude Code (Fase 1 del "modo agentes").
 
 Cada `Sesion` es un proceso `claude -p` de larga duración (stream-json de entrada Y
-salida, ver PLAN_GESTOR_SESIONES.md §1.0) que trabaja de forma autónoma
+salida) que trabaja de forma autónoma
 (`--permission-mode bypassPermissions`) sobre una carpeta REAL del disco
 (`--add-dir`), confinada a ella. Un hilo lector por sesión consume su stdout y
 mantiene `estado`/`transcript` al día; ninguna operación del gestor

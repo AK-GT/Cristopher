@@ -335,6 +335,14 @@ def saludo_arranque() -> str:
 # (listar → leer varios archivos → sintetizar) sin colgarse.
 MAX_STEPS = 40
 
+# Herramientas cuyo tool_call/observation NO se emite al pensamiento visible —
+# excepción explícita y acotada (no una regla general: el pensamiento SÍ se muestra
+# a propósito, ver decisión de producto en CLAUDE.md). seguro_enrolar abre la cámara
+# y captura fotos en segundo plano; enseñar "seguro_enrolar(nombre=...)" y el
+# resultado técnico en el pensamiento no aporta nada al usuario, que ya ve el
+# resumen en la respuesta final — solo añade ruido de una operación de fondo.
+_HERRAMIENTAS_SIN_TRAZA = {"seguro_enrolar"}
+
 
 def _to_gemini_type(node: Any) -> Any:
     """Convierte un JSON Schema estándar (types en minúscula) al formato que espera
@@ -682,16 +690,26 @@ class Cristopher:
             if not function_calls:
                 return "\n".join(text_bits).strip() or "(sin respuesta)"
 
-            if text_bits:
+            # Si el paso es SOLO herramientas silenciosas (seguro_enrolar y similares:
+            # ver _HERRAMIENTAS_SIN_TRAZA), tampoco se muestra el "pensamiento" de
+            # este paso — evita que el razonamiento visible narre una operación de
+            # fondo ("voy a tomar las fotos...") que el usuario no pidió ver.
+            paso_silencioso = bool(function_calls) and all(
+                fc.name in _HERRAMIENTAS_SIN_TRAZA for fc in function_calls
+            )
+            if text_bits and not paso_silencioso:
                 self._emit("thought", "\n".join(text_bits))
 
             # Ejecuta cada herramienta pedida y adjunta su observación.
             response_parts = []
             for fc in function_calls:
                 args = dict(fc.args or {})
-                self._emit("tool_call", f"{fc.name}({args})")
+                silenciosa = fc.name in _HERRAMIENTAS_SIN_TRAZA
+                if not silenciosa:
+                    self._emit("tool_call", f"{fc.name}({args})")
                 result = call_tool(fc.name, args)
-                self._emit("observation", result)
+                if not silenciosa:
+                    self._emit("observation", result)
                 response_parts.append(
                     types.Part.from_function_response(
                         name=fc.name, response={"result": result}

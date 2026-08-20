@@ -4,7 +4,7 @@ Todas auditables: cada llamada queda registrada (qué, dónde, cuándo, con qué
 resultado) en un deque en memoria (`auditoria()`) y en CONTROL_TOTAL_LOG en disco,
 mismo shape que `Sesion._log` en sesiones.py.
 
-Contrato de seguridad (Fase 1, ver PLAN_CONTROL_TOTAL_1.md): CADA primitiva consulta
+Contrato de seguridad (ver CLAUDE.md): CADA primitiva consulta
 el kill-switch (`killswitch.disparado()`) ANTES de ejecutar, no solo al principio de
 un bucle exterior — es el hombre muerto real. Si está disparado, la primitiva no hace
 nada y lanza ControlDetenido.

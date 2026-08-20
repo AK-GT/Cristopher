@@ -148,8 +148,8 @@ YOUTUBE_SCOPES = [
 
 # --- Redes sociales, Fase 2: Instagram ("Instagram API with Instagram Login",
 # Business Login — SIN página de Facebook vinculada, verificado en la
-# documentación de Meta, ago 2026: mejora sobre el diseño original de
-# PLAN_R~1.MD, que asumía el flujo clásico vía graph.facebook.com + página) ----
+# documentación de Meta, ago 2026: mejora sobre el diseño original del plan de
+# redes, que asumía el flujo clásico vía graph.facebook.com + página) ----
 INSTAGRAM_TOKENS_DIR = REDES_DIR / "instagram"    # cada alias: instagram/<alias>/token.json
 META_APP_ID = os.getenv("META_APP_ID", "").strip()
 META_APP_SECRET = os.getenv("META_APP_SECRET", "").strip()
@@ -181,7 +181,7 @@ TIKTOK_REFRESH_MARGIN_SEGUNDOS = 30 * 60
 
 # --- Redes sociales, fase de publicación (subida): YouTube/Instagram/TikTok --
 # (deliberadamente NO "Fase 4" — ese número ya lo usan Google Calendar/Gmail y
-# Modo Control Total en este repo, ver PLAN_R~1.MD y CLAUDE.md)
+# Modo Control Total en este repo, ver CLAUDE.md)
 #
 # Instagram Content Publishing exige un video_url público que Meta descargue;
 # YouTube (resumable upload) y TikTok (FILE_UPLOAD de bytes) no lo necesitan.
@@ -206,6 +206,10 @@ HUD_PORT = int(os.getenv("CRISTOPHER_HUD_PORT", "8765"))
 # DATA) para que el modelo pueda darle su ruta a tools que necesitan un archivo real
 # (p. ej. huella_buscar_cara) — los bytes solos no bastan para esas tools.
 HUD_UPLOADS_DIR = DATA / "hud" / "uploads"
+# Botón de reinicio total (⚙ del HUD): log del proceso puente que espera a que este
+# proceso suelte el puerto antes de relanzar `python -m cristopher` (ver
+# hud/__main__.py::_reiniciar_total).
+REINICIO_LOG = DATA / "reinicio.log"
 
 # --- Fase 7: proactividad ----------------------------------------------------
 PROACTIVO_DB = DATA / "proactivo.db"          # recordatorios + dedup de avisos
@@ -427,6 +431,9 @@ CONTROL_TOTAL_OVERLAY_COLOR = "#2f8fff"   # azul del borde (mismo tono que el HU
 # --- Fase 4: PID-guard (no abrir un segundo widget/borde si ya hay uno vivo) ----
 CONTROL_TOTAL_WIDGET_PID = DATA / "control_total_widget.pid"
 CONTROL_TOTAL_OVERLAY_PID = DATA / "control_total_overlay.pid"
+
+# --- Fase 1: Modo Seguro (seguro.py) -------------------------------------------
+SEGURO_OVERLAY_PID = DATA / "seguro_overlay.pid"   # PID-guard del overlay de bloqueo
 
 
 class ConfigError(RuntimeError):

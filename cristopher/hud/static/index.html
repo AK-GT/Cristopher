@@ -32,6 +32,8 @@
       <button type="button" id="autoarreglos-toggle" class="edit-toggle" title="Auto-arreglos en curso">🛠️</button>
       <button type="button" id="code-toggle" class="edit-toggle" title="Modo code (gestión de sesiones)">🔴</button>
       <button type="button" id="redes-toggle" class="edit-toggle" title="Modo redes (YouTube/Instagram/TikTok)">🟣</button>
+      <button type="button" id="seguro-preview-toggle" class="edit-toggle" title="Vista de cámara (Modo Seguro)">📷</button>
+      <button type="button" id="reiniciar-toggle" class="edit-toggle" title="Reinicio total (mata y relanza el proceso)">🔁</button>
       <button type="button" id="edit-toggle" class="edit-toggle" title="Editar distribución (E)">⚙</button>
     </header>
 
@@ -85,6 +87,8 @@
       <div class="notas" id="notas"><div class="empty">sin notas</div></div>
       <div class="panel-title" style="margin-top:18px">PROGRAMADAS</div>
       <div class="programadas" id="programadas"><div class="empty">sin tareas programadas</div></div>
+      <div class="panel-title" style="margin-top:18px">MODO SEGURO · PERSONAS</div>
+      <div class="notas" id="seguro-personas"><div class="empty">nadie autorizado todavía</div></div>
     </aside>
 
     <!-- Barra NOW PLAYING: estado real del reproductor de música -->
@@ -307,6 +311,38 @@
     <button type="button" id="edit-exit">Salir edición</button>
     <div class="panel-title" style="margin-top:10px">OCULTOS</div>
     <div id="hidden-list" class="hidden-list"><span class="empty">ninguno</span></div>
+  </div>
+
+  <!-- Vista de cámara del Modo Seguro: panel flotante de verificación, NO forma
+       parte del sistema de widgets arrastrables (widgets.js/WIDGET_IDS) — es una
+       herramienta de depuración puntual, abre/cierra con el botón 📷 de la topbar. -->
+  <div class="seguro-preview-panel panel" id="seguro-preview-panel" hidden>
+    <i class="bracket"></i>
+    <div class="panel-title">MODO SEGURO · CÁMARA
+      <button type="button" id="seguro-preview-close" class="sp-close" title="Cerrar">×</button>
+    </div>
+    <div class="sp-video-wrap">
+      <img id="seguro-preview-img" class="sp-video" alt="vista de la cámara del Modo Seguro" />
+      <div class="sp-empty" id="sp-empty">abriendo la cámara…</div>
+    </div>
+    <!-- Sesión guiada de enrolamiento: instrucción + cuenta atrás, en grande, porque
+         se lee de pie y a un metro de la pantalla. Oculto salvo durante la sesión. -->
+    <div class="sp-enrol" id="sp-enrol" hidden>
+      <div class="sp-enrol-cab"><span id="sp-enrol-quien">—</span><span id="sp-enrol-paso">—</span></div>
+      <div class="sp-enrol-instr" id="sp-enrol-instr">—</div>
+      <div class="sp-enrol-cuenta" id="sp-enrol-cuenta">5</div>
+      <button type="button" id="sp-pausa" class="sp-btn sp-btn-ancho">PAUSA (ESPACIO)</button>
+    </div>
+    <!-- Barra de armado: VISTA (ve y evalúa, no bloquea) vs ARMADO (bloquea de verdad).
+         El estado se pinta en texto Y en color porque de esto depende que el PC se te
+         bloquee o no: no puede quedar ambiguo. -->
+    <div class="sp-barra">
+      <span class="sp-modo" id="sp-modo">vista</span>
+      <button type="button" id="sp-armar" class="sp-btn">ARMAR</button>
+    </div>
+    <!-- Lo que el sistema de detección ve AHORA, cara por cara y con el motivo. -->
+    <div class="sp-deteccion" id="sp-deteccion"><div class="empty">sin caras a la vista</div></div>
+    <div class="sp-stats" id="sp-stats">—</div>
   </div>
 
   <!-- Confirmación de acciones irreversibles (p. ej. enviar correo) -->

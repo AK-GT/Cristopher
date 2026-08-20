@@ -6,7 +6,7 @@ Registro selectivo (`episodio_registrar`) y consulta por periodo
 Funciones finas que devuelven texto legible (observación para el bucle ReAct); los
 errores se devuelven como texto, nunca se ocultan. El razonamiento sobre lo devuelto
 (contar, comparar, narrar) lo hace el modelo — aquí no hay agregación ni estadística
-(MVP, ver PROMPT_memoria_episodica_para_claude_code.md).
+(MVP deliberado).
 """
 
 from __future__ import annotations

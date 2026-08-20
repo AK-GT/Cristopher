@@ -41,7 +41,7 @@ _cache: dict = {
 _DB_LOCK = threading.RLock()  # RLock: _historial_anterior/_guardar_historial toman
 # el lock y LUEGO llaman _db(), que vuelve a tomarlo si aún no hay conexión —
 # con Lock normal eso era un deadlock seguro en la primera llamada (bug real,
-# encontrado en la verificación en vivo de Fase 1, ver PLAN "Modo redes").
+# encontrado en la verificación en vivo de Fase 1, ver CLAUDE.md).
 _conn: Optional[sqlite3.Connection] = None
 
 
@@ -152,7 +152,7 @@ def _fetchers_detalle() -> dict:
 
 def _calcular_tips(plataforma: str, alias: str, datos: dict) -> list[dict]:
     """Reglas puras sobre `datos` (el dict recién obtenido) y el historial ya
-    guardado — sin LLM, ver PLAN "Modo redes"."""
+    guardado — sin LLM, ver CLAUDE.md."""
     tips: list[dict] = []
     seguidores = datos.get("suscriptores", datos.get("seguidores"))
     ultima_publicacion = datos.get("ultima_publicacion")

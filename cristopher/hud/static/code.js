@@ -3,7 +3,7 @@
    según el flag activo), sesiones (lista + sesión activa, reutilizando /sesiones*),
    tareas (solo lectura) y un motor de drag/resize propio y deliberadamente simple
    para los 4 widgets (un único layout autoguardado, sin distribuciones con nombre
-   como el modo normal). Ver PLAN_CRISTOPHER_CODE.md Fase 1. */
+   como el modo normal). Ver CLAUDE.md (modo code). */
 (function () {
   "use strict";
 

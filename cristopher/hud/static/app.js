@@ -1311,6 +1311,227 @@
   notasTick();
   setInterval(notasTick, 4000);
 
+  // ---------- MODO SEGURO · PERSONAS (lista blanca, por polling como notas) ----------
+  function pintarSeguroPersonas(d) {
+    const el = $("seguro-personas");
+    if (!el) return;
+    const list = (d && d.personas) || [];
+    if (!list.length) { el.innerHTML = '<div class="empty">nadie autorizado todavía</div>'; return; }
+    el.innerHTML = list.map((p) => {
+      const fecha = (p.creado || "").replace("T", " ").slice(0, 16);
+      return `<div class="item"><small>${esc(p.fotos)} foto(s)${fecha ? " · desde " + esc(fecha) : ""}</small>${esc(p.nombre)}</div>`;
+    }).join("");
+  }
+  function seguroPersonasTick() {
+    fetch("/seguro/personas").then((r) => r.json()).then(pintarSeguroPersonas).catch(() => {});
+  }
+  seguroPersonasTick();
+  setInterval(seguroPersonasTick, 5000);
+
+  // ---------- MODO SEGURO · VISTA DE CÁMARA (panel flotante + icono que parpadea) ----------
+  (function () {
+    const toggle = $("seguro-preview-toggle");
+    const panel = $("seguro-preview-panel");
+    const close = $("seguro-preview-close");
+    const img = $("seguro-preview-img");
+    const empty = $("sp-empty");
+    const stats = $("sp-stats");
+    if (!toggle || !panel) return;
+
+    const btnArmar = $("sp-armar");
+    const modo = $("sp-modo");
+    const lista = $("sp-deteccion");
+    const enrol = $("sp-enrol");
+    const btnPausa = $("sp-pausa");
+    let enrolando = false;
+    let armadoActual = false;
+    let activoActual = false;
+    let hayFrame = false;
+    let rapido = null;   // poll acelerado, solo mientras el panel está abierto
+
+    const post = (ruta, cuerpo) =>
+      fetch(ruta, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cuerpo || {}),
+      }).then((r) => r.json());
+
+    // Una cara por línea, con el MOTIVO escrito: es así como se ajustan los umbrales
+    // viendo lo que ve el modo, en vez de tocar números a ciegas.
+    function pintarDeteccion(caras) {
+      if (!caras || !caras.length) {
+        lista.innerHTML = '<div class="empty">sin caras a la vista</div>';
+        return;
+      }
+      lista.innerHTML = caras.map((c) => {
+        const detalle = [`${c.altura_px}px`, `mirada ${c.mirada}°`];
+        if (c.sim != null) detalle.push(`sim ${c.sim.toFixed(2)}`);
+        if (c.estado === "desconocido") detalle.push(`${c.frames_ok}/${c.tope} frames`);
+        return `<div class="sp-cara sp-${esc(c.estado)}">${esc(c.texto)}` +
+               `<small>${esc(detalle.join(" · "))}</small></div>`;
+      }).join("");
+    }
+
+    // Sesión guiada en curso: instrucción + cuenta atrás. El panel se abre SOLO cuando
+    // arranca una (la lanzas por chat o por voz, así que no tienes por qué tenerlo
+    // abierto) — pero sin activar nada: durante el enrolamiento la cámara la tiene
+    // seguro.enrolar(), y un POST /seguro/activar aquí se la disputaría.
+    function pintarEnrolamiento(en) {
+      enrol.hidden = !en;
+      enrolando = !!en;
+      if (!en) return;
+      $("sp-enrol-quien").textContent = en.nombre || "";
+      $("sp-enrol-paso").textContent = `pose ${en.indice}/${en.total} · ${en.hecho} guardadas`;
+      $("sp-enrol-instr").textContent = en.instruccion || "";
+      enrol.classList.toggle("sp-en-pausa", !!en.pausado);
+      btnPausa.textContent = en.pausado ? "SEGUIR (ESPACIO)" : "PAUSA (ESPACIO)";
+      const c = $("sp-enrol-cuenta");
+      c.classList.toggle("sp-ya", !en.pausado && en.cuenta === 0);
+      c.classList.toggle("sp-mal", !en.pausado && !!en.motivo);
+      c.classList.toggle("sp-pausa", !!en.pausado);
+      if (en.pausado) c.textContent = "EN PAUSA";
+      else c.textContent = en.motivo ? en.motivo : (en.cuenta === 0 ? "¡FOTO!" : String(en.cuenta));
+    }
+
+    // El icono vive al día siempre (poll lento), esté o no abierto el panel: ámbar fijo
+    // = cámara abierta mirando; rojo pulsante = armado, puede bloquear la sesión.
+    function actualizar() {
+      fetch("/seguro/estado").then((r) => r.json()).then((e) => {
+        activoActual = !!e.activo;
+        armadoActual = !!e.armado;
+        toggle.classList.toggle("sp-armado", armadoActual);
+        toggle.classList.toggle("sp-vista", activoActual && !armadoActual);
+        if (e.enrolamiento && panel.hidden) abrirSoloVer();
+        if (panel.hidden) return;   // el resto solo importa con el panel abierto
+        pintarEnrolamiento(e.enrolamiento);
+
+        modo.textContent = armadoActual ? "armado · bloquea" : "vista · no bloquea";
+        modo.classList.toggle("sp-on", armadoActual);
+        btnArmar.textContent = armadoActual ? "DESARMAR" : "ARMAR";
+        btnArmar.disabled = !activoActual || e.fase === "BLOQUEADO" || e.fase === "GRACIA";
+
+        // Durante una sesión guiada la cámara la tiene seguro.enrolar(), no el hilo
+        // vigilante: hay imagen aunque el modo esté apagado.
+        const hayCamara = activoActual || !!e.enrolamiento;
+        img.style.display = hayCamara ? "block" : "none";
+        empty.style.display = hayCamara && hayFrame ? "none" : "flex";
+        if (hayCamara && !img.getAttribute("src")) {
+          hayFrame = false;
+          empty.textContent = "abriendo la cámara…";
+          img.src = "/seguro/preview?" + Date.now();
+        } else if (!hayCamara && img.getAttribute("src")) {
+          img.removeAttribute("src");
+          hayFrame = false;
+        }
+
+        // Durante el enrolamiento la lista de veredictos sobra: manda la instrucción.
+        pintarDeteccion(activoActual && !e.enrolamiento ? e.deteccion : []);
+        let linea = `fase: ${e.fase || "—"}`;
+        if (e.camara_ok === false) linea += ` · cámara: ${e.motivo_camara || "error"}`;
+        if (e.fase === "GRACIA" && e.gracia_restante_seg != null) linea += ` · gracia ${e.gracia_restante_seg}s`;
+        stats.textContent = linea;
+      }).catch(() => {});
+    }
+
+    // El primer frame del MJPEG es lo que dice que la cámara ya está dando imagen;
+    // hasta entonces se deja el cartel, en vez de un rectángulo negro sin explicar.
+    img.addEventListener("load", () => { hayFrame = true; empty.style.display = "none"; });
+    img.addEventListener("error", () => {
+      hayFrame = false;
+      empty.textContent = "no llega imagen de la cámara";
+      empty.style.display = "flex";
+    });
+
+    // Abrir el panel NO arma nada: enciende la cámara en modo vista. Armar es un
+    // segundo gesto, dentro del panel — un clic no puede acabar en "se me ha bloqueado
+    // la sesión" sin haberlo pedido.
+    // Abre el panel SIN tocar el estado del modo: para mirar una sesión de enrolamiento
+    // ya en marcha, que es dueña de la cámara.
+    function abrirSoloVer() {
+      panel.hidden = false;
+      if (rapido === null) rapido = setInterval(actualizar, 700);
+      if (!img.getAttribute("src")) {
+        hayFrame = false;
+        img.src = "/seguro/preview?" + Date.now();
+      }
+    }
+
+    async function abrir() {
+      panel.hidden = false;
+      lista.innerHTML = '<div class="empty">abriendo la cámara…</div>';
+      if (!activoActual) {
+        try {
+          const r = await post("/seguro/activar", { armado: false });
+          if (!r.activo) stats.textContent = r.mensaje || "No se pudo abrir la cámara.";
+        } catch (e) { stats.textContent = "No pude hablar con CRISTOPHER."; }
+      }
+      actualizar();
+      if (rapido === null) rapido = setInterval(actualizar, 700);
+    }
+
+    // Cerrar en VISTA apaga la cámara (nadie mira, nada vigila). Si está ARMADO, el
+    // panel se cierra pero la vigilancia sigue: es su trabajo.
+    async function cerrar() {
+      panel.hidden = true;
+      img.removeAttribute("src");   // corta el stream MJPEG en curso
+      hayFrame = false;
+      if (rapido !== null) { clearInterval(rapido); rapido = null; }
+      // Estado FRESCO del servidor, no las variables cacheadas: con dos clics seguidos
+      // el POST de abrir() sigue en vuelo y `activoActual` aún vale false, así que el
+      // "apaga la cámara" se saltaba y la webcam quedaba encendida con el panel cerrado.
+      let e = null;
+      try { e = await fetch("/seguro/estado").then((r) => r.json()); } catch (_) { return; }
+      if (e.activo && !e.armado) {
+        try { await post("/seguro/desactivar"); } catch (_) { /* el poll lo verá */ }
+      }
+      actualizar();
+    }
+
+    btnArmar.addEventListener("click", async () => {
+      const quiero = !armadoActual;
+      btnArmar.disabled = true;
+      try {
+        const r = await post("/seguro/armar", { armado: quiero });
+        if (!!r.armado !== quiero) stats.textContent = r.mensaje || "No se pudo cambiar el armado.";
+      } catch (e) {
+        stats.textContent = "No pude hablar con CRISTOPHER.";
+      }
+      actualizar();
+    });
+
+    // Cerrojo de re-entrada: abrir/cerrar encienden y apagan una cámara de verdad, así
+    // que dos clics seguidos no pueden solaparse a medio POST.
+    let ocupado = false;
+    async function alternar() {
+      if (ocupado) return;
+      ocupado = true;
+      try { await (panel.hidden ? abrir() : cerrar()); } finally { ocupado = false; }
+    }
+    // Pausa: botón del panel y barra espaciadora. El atajo GLOBAL (pynput, en
+    // seguro.py) es el que vale estando de pie lejos del teclado; este es el mismo
+    // gesto cuando la ventana del HUD tiene el foco, y por eso ambos van a la misma
+    // ruta. Guardas: solo durante una sesión, y nunca si estás escribiendo — si no,
+    // el espacio dejaría de escribirse en la consola.
+    async function alternarPausa() {
+      if (!enrolando) return;
+      try { await post("/seguro/enrolar/pausa"); } catch (e) { /* el poll lo verá */ }
+      actualizar();
+    }
+    btnPausa.addEventListener("click", alternarPausa);
+    document.addEventListener("keydown", (ev) => {
+      if (ev.code !== "Space" || !enrolando) return;
+      if (ev.repeat || escribiendo() || ev.ctrlKey || ev.altKey || ev.metaKey) return;
+      ev.preventDefault();
+      alternarPausa();
+    });
+
+    toggle.addEventListener("click", alternar);
+    close.addEventListener("click", () => { if (!ocupado) { ocupado = true; cerrar().finally(() => { ocupado = false; }); } });
+
+    actualizar();
+    setInterval(actualizar, 3000);   // continuo: es lo que mantiene el icono al día
+  })();
+
   // ---------- PROGRAMADAS (cola del programador de tareas, por polling) ----------
   function pintarProgramadas(d) {
     const el = $("programadas");
@@ -1507,6 +1728,32 @@
     panelAutoArreglos.tick();
   });
   $("autoarreglos-close").addEventListener("click", () => { $("autoarreglos-overlay").hidden = true; });
+
+  // ---------- Reinicio total ----------
+  // Mata el proceso de CRISTOPHER y lo relanza desde cero (ver
+  // hud/__main__.py::_reiniciar_total) — pensado para cuando se prueba un cambio de
+  // código y no compensa cerrar la consola y volver a teclear `python -m cristopher`
+  // a mano. El proceso muere en cuanto responde, así que tras el POST solo queda
+  // sondear /estado hasta que el HUD nuevo levante y recargar la pestaña sola.
+  $("reiniciar-toggle").addEventListener("click", () => {
+    if (!window.confirm("¿Reiniciar CRISTOPHER? Mata el proceso entero y lo relanza.")) return;
+    const btn = $("reiniciar-toggle");
+    btn.disabled = true;
+    btn.title = "Reiniciando…";
+    fetch("/reiniciar", { method: "POST" }).catch(() => {});
+    let intentos = 0;
+    const esperar = setInterval(() => {
+      intentos++;
+      fetch("/estado", { cache: "no-store" })
+        .then((r) => { if (r.ok) { clearInterval(esperar); location.reload(); } })
+        .catch(() => {});
+      if (intentos > 60) {
+        clearInterval(esperar);
+        btn.disabled = false;
+        btn.title = "No respondió tras reiniciar — revisa data/reinicio.log";
+      }
+    }, 1000);
+  });
 
   // ---------- Reloj ----------
   function tick() { $("clock").textContent = new Date().toLocaleTimeString("es-ES"); }
