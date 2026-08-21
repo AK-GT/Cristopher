@@ -120,6 +120,23 @@ class Detector:
         )
         self._landmarker = vision.FaceLandmarker.create_from_options(opciones)
 
+    def cerrar(self) -> None:
+        """Libera el grafo nativo de MediaPipe. Hay que llamarlo: cada Detector abre un
+        FaceLandmarker con su delegado XNNPACK, y se creaba uno nuevo por cada activación
+        del modo y por cada sesión de enrolamiento, sin cerrar ninguno. Idempotente."""
+        landmarker, self._landmarker = getattr(self, "_landmarker", None), None
+        if landmarker is not None:
+            try:
+                landmarker.close()
+            except Exception:
+                pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self.cerrar()
+
     def detectar(
         self,
         frame_bgr: np.ndarray,

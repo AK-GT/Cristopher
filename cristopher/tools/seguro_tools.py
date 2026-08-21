@@ -24,6 +24,21 @@ def seguro_desactivar() -> str:
     return seguro.desactivar()
 
 
+def seguro_ver_camara() -> str:
+    """Abre en el HUD la ventanita con la vista de la cámara: la imagen en vivo con un
+    recuadro por cara y, escrito debajo, qué ve y qué decide de cada una (autorizada,
+    desconocida, o descartada con el motivo). Si la cámara estaba apagada la enciende en
+    modo vista, que mira y evalúa pero NO bloquea el PC. Si la vigilancia ya estaba
+    armada, la deja armada: esto solo abre la ventana."""
+    return seguro.ver_camara()
+
+
+def seguro_ocultar_camara() -> str:
+    """Cierra la ventanita de la cámara del HUD. Si solo estaba abierta para mirar,
+    apaga además la cámara; si la vigilancia estaba armada, sigue armada."""
+    return seguro.ocultar_camara()
+
+
 def seguro_estado() -> str:
     """Dice si el Modo Seguro está activo, en qué fase de vigilancia está (vigilando/
     bloqueado/en gracia tras desbloqueo) y si hay algún problema con la cámara."""

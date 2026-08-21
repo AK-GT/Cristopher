@@ -124,6 +124,11 @@ def main() -> int:
         return 1
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    # Buffer de 1: la camara entrega a ~30fps y aqui se lee mucho mas lento, asi que
+    # sin esto cap.read() devuelve el frame MAS VIEJO de la cola y se decide (y se
+    # guarda la foto del intruso) sobre imagen retrasada. DSHOW puede ignorarlo, pero
+    # pedirlo no cuesta nada y donde se respeta lo arregla del todo.
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     mostrar_malla = False
     tiempos = deque(maxlen=30)
@@ -186,6 +191,7 @@ def main() -> int:
             cfg["yaw_max_grados"] += 5
 
     cap.release()
+    detector.cerrar()
     cv2.destroyAllWindows()
     return 0
 

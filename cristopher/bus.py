@@ -175,6 +175,15 @@ def set_seguro(snapshot: dict) -> None:
     _emit("seguro", snapshot)
 
 
+def set_seguro_panel(abierto: bool) -> None:
+    """Abrir/cerrar el panel de cámara del HUD desde el lado Python (tools
+    seguro_ver_camara / seguro_ocultar_camara). EFÍMERO a propósito, solo `_emit` y no
+    `_estado`: es una ORDEN puntual al navegador, no un estado que deba reproducirse a
+    quien se reconecte más tarde — igual que `add_sesion_entrada`. Que el panel esté
+    abierto o no lo sabe el navegador, no el servidor."""
+    _emit("seguro_panel", {"abierto": bool(abierto)})
+
+
 def add_sesion_entrada(nombre: str, entrada: dict) -> None:
     """Nueva entrada de transcript de una sesión, para pintarla en vivo en el HUD.
     Efímera (no se guarda en el snapshot), igual que `pedir_confirmacion`."""

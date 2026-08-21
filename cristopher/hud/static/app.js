@@ -798,6 +798,12 @@
         case "modo_code": setModo(m.datos); break;
         case "modo_redes": setModoRedes(m.datos); break;
         case "modo_voz": setModoVoz(m.datos); break;
+        // Abrir/cerrar la vista de cámara pedido desde el chat o por voz (tools
+        // seguro_ver_camara / seguro_ocultar_camara). Hook como el de code.js: el
+        // panel vive en su propia IIFE más abajo, y el widget flotante no lo tiene.
+        case "seguro_panel":
+          window.__hudSeguroPanel && window.__hudSeguroPanel(m.datos);
+          break;
         case "sesion_entrada":
           panelAgentes.onEntrada(m.datos);
           panelAutoArreglos.onEntrada(m.datos);
@@ -1527,6 +1533,20 @@
 
     toggle.addEventListener("click", alternar);
     close.addEventListener("click", () => { if (!ocupado) { ocupado = true; cerrar().finally(() => { ocupado = false; }); } });
+
+    // Orden llegada por SSE desde las tools. Al abrir se usa abrirSoloVer() y no
+    // abrir(): la cámara ya la encendió el lado Python, así que el navegador solo tiene
+    // que enseñar la ventana — un POST /seguro/activar de más aquí podría pisar el
+    // estado de armado que la tool acaba de respetar.
+    window.__hudSeguroPanel = (d) => {
+      if (d && d.abierto) {
+        abrirSoloVer();
+        actualizar();
+      } else if (!ocupado) {
+        ocupado = true;
+        cerrar().finally(() => { ocupado = false; });
+      }
+    };
 
     actualizar();
     setInterval(actualizar, 3000);   // continuo: es lo que mantiene el icono al día

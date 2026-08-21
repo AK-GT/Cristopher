@@ -276,6 +276,8 @@ def main() -> int:
     print(f"\n[calibrar] Escrito {_CALIBRACION_JSON}")
     print("[calibrar] umbral_alto/umbral_bajo actualizados en data/seguro.json")
 
+    detector.cerrar()
+
     lineas = galeria.matriz_parecidos(t_alto)
     if lineas:
         print("\n[calibrar] Parecidos entre personas de la galería:")

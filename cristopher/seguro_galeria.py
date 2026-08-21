@@ -8,7 +8,9 @@ descarga su propio modelo ONNX (~250MB), autocontenida en este módulo igual que
 
 from __future__ import annotations
 
+import os
 import shutil
+import time
 import urllib.request
 from pathlib import Path
 
@@ -236,16 +238,41 @@ class Galeria:
         self.cargar()
 
     def cargar(self):
-        if self._ruta.exists():
+        if not self._ruta.exists():
+            return
+        try:
+            z = np.load(self._ruta, allow_pickle=False)
+            self._personas = {k: z[k] for k in z.files}
+        except Exception as exc:
+            # Antes esto se tragaba la excepción y devolvía una galería VACÍA sin decir
+            # nada: todo el mundo pasaba a DESCONOCIDO y el usuario no tenía forma de
+            # saber que había perdido a toda su gente. Peor aún, el primer `guardar()`
+            # posterior machacaba el archivo dañado con uno vacío. Ahora se aparta el
+            # original (recuperable) y se grita.
+            self._personas = {}
+            aparte = self._ruta.with_suffix(f".corrupta-{int(time.time())}.npz")
             try:
-                z = np.load(self._ruta, allow_pickle=False)
-                self._personas = {k: z[k] for k in z.files}
+                self._ruta.rename(aparte)
+            except OSError:
+                aparte = None
+            aviso = (f"seguro: la galería no se pudo leer ({exc}). Nadie queda "
+                     "autorizado hasta reenrolar.")
+            if aparte is not None:
+                aviso += f" El archivo dañado se guardó en {aparte.name}."
+            try:
+                from cristopher import bus
+                bus.log("error", aviso)
             except Exception:
-                self._personas = {}
+                print(f"[seguro] {aviso}")
 
     def guardar(self):
+        """Atómica (tmp + os.replace). Es la lista blanca entera: una escritura
+        interrumpida a mitad la dejaba ilegible, y `cargar()` la daba por vacía."""
         self._ruta.parent.mkdir(parents=True, exist_ok=True)
-        np.savez(self._ruta, **self._personas)
+        # np.savez añade .npz si el nombre no lo lleva, así que el temporal ya lo trae.
+        tmp = self._ruta.with_suffix(".tmp.npz")
+        np.savez(tmp, **self._personas)
+        os.replace(tmp, self._ruta)
 
     def anadir(self, nombre: str, emb: np.ndarray):
         if nombre in self._personas:

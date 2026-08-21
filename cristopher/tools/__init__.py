@@ -44,6 +44,8 @@ from cristopher.tools.concentracion_tools import (
 )
 from cristopher.tools.seguro_tools import (
     seguro_activar,
+    seguro_ocultar_camara,
+    seguro_ver_camara,
     seguro_configurar,
     seguro_configurar_contrasena,
     seguro_desactivar,
@@ -2456,6 +2458,34 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": seguro_desactivar,
+    },
+    {
+        "name": "seguro_ver_camara",
+        "description": (
+            "Abre en el HUD la ventanita con la vista de la cámara del Modo Seguro: la "
+            "imagen en vivo con un recuadro por cara y, debajo, qué ve y qué decide de "
+            "cada una (autorizada con su nombre y parecido, desconocida con el contador "
+            "de frames, o descartada con el motivo escrito: 'muy lejos (62px)', 'no mira "
+            "(pitch 32°)'). Úsala cuando el usuario pida ver la cámara, ver lo que ves, "
+            "abrir la vista o comprobar si te reconoce — así no tiene que ir a pinchar el "
+            "botón de la cámara. Si la cámara estaba apagada la enciende en modo VISTA, "
+            "que mira y evalúa pero NO bloquea el PC; si la vigilancia ya estaba armada "
+            "la deja armada, porque esto solo abre una ventana."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": seguro_ver_camara,
+    },
+    {
+        "name": "seguro_ocultar_camara",
+        "description": (
+            "Cierra la ventanita de la cámara del Modo Seguro en el HUD. Si solo estaba "
+            "abierta para mirar, apaga además la cámara; si la vigilancia estaba armada, "
+            "sigue armada (cerrar una ventana no desprotege el equipo). Úsala cuando el "
+            "usuario diga que ya ha visto bastante, que cierres la vista o que quites la "
+            "ventana de la cámara."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": seguro_ocultar_camara,
     },
     {
         "name": "seguro_estado",

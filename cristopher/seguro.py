@@ -152,37 +152,67 @@ def configurar(
     """Actualiza los campos indicados de data/seguro.json (los que se omitan no
     cambian). Nunca toca password_hash/salt/umbrales — esos van por su propia función
     o los escribe calibrar_seguro.py en Fase 2."""
+    # TOPES POR ARRIBA, no solo por abajo. Sin ellos, un solo `frames_para_disparar=9999`
+    # o `min_altura_cara_px=5000` deja el modo encendido y en verde pero completamente
+    # inerte — no hace falta apagar la protección para anularla, basta con subir un
+    # número. Es la superficie que aprovecharía una inyección desde una web o un correo.
     cambios = []
+    avisos = []
     with _CFG_LOCK:
         cfg = _leer_config()
         if min_altura_cara_px is not None:
-            cfg["min_altura_cara_px"] = max(20, int(min_altura_cara_px))
+            v = int(min_altura_cara_px)
+            cfg["min_altura_cara_px"] = max(20, min(400, v))
+            if v != cfg["min_altura_cara_px"]:
+                avisos.append(f"altura mínima acotada a {cfg['min_altura_cara_px']}px (pediste {v})")
             cambios.append(f"altura mínima de cara: {cfg['min_altura_cara_px']}px")
         if yaw_max_grados is not None:
-            cfg["yaw_max_grados"] = max(5, float(yaw_max_grados))
+            v = float(yaw_max_grados)
+            cfg["yaw_max_grados"] = max(5.0, min(90.0, v))
+            if v != cfg["yaw_max_grados"]:
+                avisos.append(f"yaw acotado a {cfg['yaw_max_grados']:.0f}° (pediste {v:.0f}°)")
             cambios.append(f"yaw máximo: {cfg['yaw_max_grados']:.0f}°")
         if pitch_max_grados is not None:
-            cfg["pitch_max_grados"] = max(5, float(pitch_max_grados))
+            v = float(pitch_max_grados)
+            cfg["pitch_max_grados"] = max(5.0, min(90.0, v))
+            if v != cfg["pitch_max_grados"]:
+                avisos.append(f"pitch acotado a {cfg['pitch_max_grados']:.0f}° (pediste {v:.0f}°)")
             cambios.append(f"pitch máximo: {cfg['pitch_max_grados']:.0f}°")
         if frames_para_disparar is not None:
-            cfg["frames_para_disparar"] = max(1, int(frames_para_disparar))
+            v = int(frames_para_disparar)
+            # 60 frames a 4 fps son 15 segundos mirando la pantalla: más que eso ya no
+            # es "persistencia", es desactivar el disparo por la puerta de atrás.
+            cfg["frames_para_disparar"] = max(1, min(60, v))
+            if v != cfg["frames_para_disparar"]:
+                avisos.append(f"frames acotados a {cfg['frames_para_disparar']} (pediste {v})")
             cambios.append(f"frames para disparar: {cfg['frames_para_disparar']}")
         if segundos_gracia_tras_desbloqueo is not None:
-            cfg["segundos_gracia_tras_desbloqueo"] = max(0, int(segundos_gracia_tras_desbloqueo))
+            # Media hora de gracia es dejar la vigilancia apagada, no "dar un margen".
+            cfg["segundos_gracia_tras_desbloqueo"] = max(0, min(1800, int(segundos_gracia_tras_desbloqueo)))
             cambios.append(f"gracia tras desbloqueo: {cfg['segundos_gracia_tras_desbloqueo']}s")
         if segundos_entre_capturas is not None:
-            cfg["segundos_entre_capturas"] = max(0, int(segundos_entre_capturas))
+            cfg["segundos_entre_capturas"] = max(0, min(3600, int(segundos_entre_capturas)))
             cambios.append(f"mínimo entre capturas: {cfg['segundos_entre_capturas']}s")
         if bloquear_windows is not None:
             cfg["bloquear_windows"] = bool(bloquear_windows)
             cambios.append(f"bloquear Windows: {'sí' if cfg['bloquear_windows'] else 'no'}")
+            if not cfg["bloquear_windows"]:
+                # Sin el bloqueo real de Windows solo queda el overlay, que se esquiva
+                # con Alt+F4 o Win+D. Que quede dicho en la respuesta, no enterrado.
+                avisos.append(
+                    "OJO: sin bloquear Windows, el modo seguro solo muestra un aviso en "
+                    "pantalla que cualquiera puede cerrar — deja de proteger de verdad"
+                )
         if guardar_captura_intruso is not None:
             cfg["guardar_captura_intruso"] = bool(guardar_captura_intruso)
             cambios.append(f"guardar captura del intruso: {'sí' if cfg['guardar_captura_intruso'] else 'no'}")
         if not cambios:
             return "No indicaste ningún cambio de configuración."
         _escribir_config(cfg)
-    return "Configuración del modo seguro actualizada: " + "; ".join(cambios) + "."
+    texto = "Configuración del modo seguro actualizada: " + "; ".join(cambios) + "."
+    if avisos:
+        texto += " " + ". ".join(avisos) + "."
+    return texto
 
 
 def configurar_contrasena(password: str) -> str:
@@ -337,6 +367,50 @@ def desactivar() -> str:
     return "Modo seguro desactivado. La cámara se libera en un instante."
 
 
+def _publicar_panel(abierto: bool) -> None:
+    try:
+        from cristopher import bus
+        bus.set_seguro_panel(abierto)
+    except Exception:
+        pass  # el HUD es opcional: nunca debe romper nada de esto
+
+
+def ver_camara() -> str:
+    """Abre el panel de cámara del HUD sin tocar el ratón, y enciende la cámara en VISTA
+    si estaba apagada.
+
+    Clave: si el modo YA está armado, NO lo desarma — solo abre la ventana. Enseñar la
+    imagen y bajar la guardia son dos cosas distintas, y confundirlas aquí sería la
+    forma más tonta de desactivar la protección sin querer."""
+    with _LOCK:
+        ya_activo = _estado["activo"]
+        armado = _estado["armado"]
+    mensaje = "" if ya_activo else activar(armado=False)
+    _publicar_panel(True)
+    if not ya_activo:
+        return f"Abro la vista de la cámara. {mensaje}"
+    if armado:
+        return ("Abro la vista de la cámara. Sigue ARMADO: bloquearé el PC ante una "
+                "cara que no reconozca.")
+    return "Abro la vista de la cámara. Sigue en vista: veo y evalúo, pero no bloqueo."
+
+
+def ocultar_camara() -> str:
+    """Cierra el panel. Igual que el aspa del propio panel: si solo estaba en VISTA,
+    apaga también la cámara (nadie mira, nada vigila); si está ARMADO, la vigilancia
+    sigue — cerrar una ventana no puede desproteger el equipo."""
+    _publicar_panel(False)
+    with _LOCK:
+        activo = _estado["activo"]
+        armado = _estado["armado"]
+    if activo and not armado:
+        desactivar()
+        return "Cierro la vista y apago la cámara."
+    if armado:
+        return "Cierro la vista. La vigilancia sigue armada."
+    return "Cierro la vista de la cámara."
+
+
 def armar(armado: bool = True) -> str:
     """Pasa de VISTA a VIGILANDO y al revés SIN cerrar la cámara (el panel del HUD lo
     usa para armar/desarmar en caliente). Se niega mientras hay un bloqueo en curso:
@@ -416,12 +490,28 @@ def _notificar_remoto_si_procede(texto: str) -> None:
             pass
 
 
+def _escribir_jpg(ruta, imagen) -> bool:
+    """cv2.imwrite NO sabe escribir en rutas con caracteres no ASCII en Windows: usa la
+    API ANSI y devuelve False en silencio (no lanza), así que un `except` no se entera.
+    Ya nos costó las fotos de enrolamiento de «dueño», que se perdieron enteras sin un
+    solo mensaje. Se codifica en memoria y escribe Python, que sí habla Unicode."""
+    import cv2
+
+    ok, buf = cv2.imencode(".jpg", imagen)
+    if not ok:
+        return False
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_bytes(buf.tobytes())
+    return True
+
+
 def _guardar_captura(frame_limpio) -> None:
     try:
-        import cv2
-        _CAPTURAS_DIR.mkdir(parents=True, exist_ok=True)
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        cv2.imwrite(str(_CAPTURAS_DIR / f"{ts}.jpg"), frame_limpio)
+        # Milisegundos en el nombre: con solo segundos, dos disparos en el mismo
+        # segundo se pisaban el archivo.
+        marca = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
+        if not _escribir_jpg(_CAPTURAS_DIR / f"{marca}.jpg", frame_limpio):
+            raise OSError("cv2.imencode no pudo codificar el JPEG")
     except Exception as exc:
         try:
             from cristopher import bus
@@ -613,11 +703,11 @@ def _aviso_recalibracion(n_personas_actual: int) -> str:
 
 def _guardar_recorte_enrolamiento(nombre: str, crop, ts: float) -> None:
     try:
-        carpeta = _ENROLAMIENTO_DIR / nombre
-        carpeta.mkdir(parents=True, exist_ok=True)
-        import cv2
         marca = f"{time.strftime('%Y%m%d_%H%M%S')}_{int(ts * 1000) % 1000:03d}"
-        cv2.imwrite(str(carpeta / f"{marca}.jpg"), crop)
+        # Ojo: la carpeta lleva el NOMBRE de la persona, o sea que puede traer ñ o
+        # tildes — ver _escribir_jpg, que es justo el caso que rompía cv2.imwrite.
+        if not _escribir_jpg(_ENROLAMIENTO_DIR / nombre / f"{marca}.jpg", crop):
+            raise OSError("cv2.imencode no pudo codificar el JPEG")
     except Exception as exc:
         try:
             from cristopher import bus
@@ -969,6 +1059,11 @@ def _enrolar_modo_inactivo(nombre: str) -> "tuple[int, list[str]]":
         return 0, ["no se pudo abrir la webcam (¿otra app la tiene, Zoom/Teams/Meet?)"]
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    # Buffer de 1: la camara entrega a ~30fps y aqui se lee mucho mas lento, asi que
+    # sin esto cap.read() devuelve el frame MAS VIEJO de la cola y se decide (y se
+    # guarda la foto del intruso) sobre imagen retrasada. DSHOW puede ignorarlo, pero
+    # pedirlo no cuesta nada y donde se respeta lo arregla del todo.
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     t0 = time.time()
 
@@ -996,6 +1091,7 @@ def _enrolar_modo_inactivo(nombre: str) -> "tuple[int, list[str]]":
         return _sesion_guiada(nombre, obtener_frame, publicar_vista)
     finally:
         cap.release()
+        detector.cerrar()   # el grafo de MediaPipe no se libera solo
         _enrolando_event.clear()
         _publicar_enrolamiento(None)
         with _PREVIEW_LOCK:
@@ -1262,6 +1358,7 @@ def _ciclo_vigilancia() -> None:
                 _marcar_camara_bien()
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # ver nota en _enrolar_modo_inactivo
 
             ok, frame = cap.read()
             if not ok:
@@ -1423,6 +1520,7 @@ def _ciclo_vigilancia() -> None:
     finally:
         if cap is not None:
             cap.release()
+        detector.cerrar()   # una activacion del modo = un FaceLandmarker que cerrar
         with _TRACKER_LOCK:
             _tracker = None
         with _FRAME_LOCK:

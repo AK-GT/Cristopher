@@ -141,6 +141,11 @@ def main() -> int:
         return 1
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    # Buffer de 1: la camara entrega a ~30fps y aqui se lee mucho mas lento, asi que
+    # sin esto cap.read() devuelve el frame MAS VIEJO de la cola y se decide (y se
+    # guarda la foto del intruso) sobre imagen retrasada. DSHOW puede ignorarlo, pero
+    # pedirlo no cuesta nada y donde se respeta lo arregla del todo.
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     print(f"\n=== Enrolamiento guiado de «{nombre}» ({previas} foto(s) ya en la galería) ===")
     print("=== Colócate como te pida el rótulo y pulsa ENTER cuando esté en VERDE. ===\n")
@@ -210,6 +215,7 @@ def main() -> int:
                 idx += 1
     finally:
         cap.release()
+        detector.cerrar()
         cv2.destroyAllWindows()
 
     total = dict(galeria.resumen()).get(nombre, 0)

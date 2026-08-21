@@ -341,7 +341,12 @@ MAX_STEPS = 40
 # y captura fotos en segundo plano; enseñar "seguro_enrolar(nombre=...)" y el
 # resultado técnico en el pensamiento no aporta nada al usuario, que ya ve el
 # resumen en la respuesta final — solo añade ruido de una operación de fondo.
-_HERRAMIENTAS_SIN_TRAZA = {"seguro_enrolar"}
+# `seguro_enrolar` por ruido (es una sesión larga que se narra sola por voz).
+# `seguro_configurar_contrasena` por SEGURIDAD: la traza es literalmente
+# `nombre({'password': 'loquesea'})` y acaba en la consola del HUD, en el deque de
+# `bus._log` y en todos los navegadores conectados por SSE. Volcar una credencial en
+# un log está prohibido en §8 de CLAUDE.md.
+_HERRAMIENTAS_SIN_TRAZA = {"seguro_enrolar", "seguro_configurar_contrasena"}
 
 
 def _to_gemini_type(node: Any) -> Any:
