@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from typing import Optional
 
 from cristopher.config import MUSICA_VOLUMEN, VLC_DIR
@@ -56,6 +57,13 @@ def _preparar_libvlc() -> None:
         pass
 
 
+# Margen para que VLC confirme que una pista arrancó DE VERDAD. Medido en esta máquina:
+# un archivo local llega a Playing en 0,03s y un stream web entre 2s y 6s; un fallo (host
+# muerto, 403, formato ilegible) llega a Ended entre 0,25s y 5,4s. 8s separa los dos casos
+# sin cortar un arranque lento de red.
+_CONFIRMAR_ARRANQUE_SEG = 8.0
+
+
 def _descr(track: Track) -> str:
     """Descripción corta de una pista para mensajes al usuario."""
     titulo = track.get("titulo") or track.get("consulta") or "(desconocido)"
@@ -76,6 +84,9 @@ class Reproductor:
         self._indice: int = -1         # -1 = nada cargado
         self._pausado: bool = False
         self._parado: bool = True      # True = no hay reproducción activa
+        # True mientras `_arrancar` establece una pista: el hilo de avance no debe tocar
+        # la cola en esa ventana (confirma y puede reintentar con una URL nueva).
+        self._arrancando: bool = False
         self._volumen: int = max(0, min(100, MUSICA_VOLUMEN))
         # Hook opcional que se invoca al arrancar una pista (lo cablea get_reproductor a
         # la biblioteca para el historial). Guardado: nunca debe romper la reproducción.
@@ -174,6 +185,65 @@ class Reproductor:
             resuelto["titulo"] = track["titulo"]
         return resuelto
 
+    def _confirmar_arranque(self, timeout: float = _CONFIRMAR_ARRANQUE_SEG) -> bool:
+        """Espera, FUERA del lock, a que VLC diga si la pista arrancó de verdad.
+
+        True si llegó a sonar, o si al agotarse el margen sigue abriendo (red lenta, que
+        no es un fallo). False si VLC la rechazó. Sin esto `reproducir()` contestaba
+        "Sonando" y el medio podía morir cinco segundos después sin que nadie se enterase:
+        así estuvo la reproducción web —muda y dándose por buena— hasta que se midió
+        (§1, "nunca finjas éxito").
+        """
+        import vlc  # seguro: solo se llega aquí después de _ensure_vlc()
+        limite = time.monotonic() + timeout
+        while time.monotonic() < limite:
+            estado = self._player.get_state()
+            if estado in (vlc.State.Playing, vlc.State.Paused):
+                return True
+            if estado == vlc.State.Error:
+                return False
+            # Ended con el reloj a 0 = nunca arrancó. Con reloj > 0 sería una pista más
+            # corta que este margen, que sí sonó.
+            if estado == vlc.State.Ended and self._player.get_time() <= 0:
+                return False
+            time.sleep(0.05)
+        return True
+
+    def _arrancar(self, objetivo: int, track: Track) -> Track:
+        """Pone `track` a sonar en la posición `objetivo` y CONFIRMA que arrancó.
+
+        Si VLC la rechaza y era un stream web, re-resuelve UNA vez y reintenta: una URL de
+        googlevideo puede venir muerta o estrangulada (medido: falló 1 de cada 3 canciones
+        con la URL recién resuelta) y una nueva suele arreglarlo. Devuelve la pista que
+        suena de verdad, o lanza MusicaError sin fingir que algo suena.
+
+        Llamar con el lock LIBRE: espera y puede resolver.
+        """
+        ultimo = _descr(track)
+        for intento in (1, 2):
+            try:
+                with self._lock:
+                    self._arrancando = True
+                    self._indice = objetivo
+                    self._cola[objetivo] = track
+                    self._sonar_locked(track)
+                arranco = self._confirmar_arranque()
+            finally:
+                with self._lock:
+                    self._arrancando = False
+                    # El EncounteredError del intento fallido ya queda tratado aquí; si no
+                    # lo limpiamos, el hilo de avance saltaría de pista por su cuenta.
+                    self._fin.clear()
+            if arranco:
+                return track
+            ultimo = _descr(track)
+            if intento == 2 or (track.get("fuente") or "") != "web":
+                break
+            track = resolver(track.get("consulta") or track.get("titulo") or "")
+        with self._lock:
+            self._detener_locked()
+        raise MusicaError(f"VLC no pudo abrir «{ultimo}»: medio rechazado.")
+
     # --- API pública (control directo) -----------------------------------------
     def reproducir(self, consulta: str) -> str:
         """Resuelve y suena AHORA, reemplazando la cola por esta pista. Feedback o error
@@ -182,8 +252,7 @@ class Reproductor:
         self._ensure_vlc()
         with self._lock:
             self._cola = [track]
-            self._indice = 0
-            self._sonar_locked(track)
+        track = self._arrancar(0, track)  # confirma que suena o lanza MusicaError
         return f"Sonando: {_descr(track)}"
 
     def encolar(self, consulta: str) -> str:
@@ -194,10 +263,10 @@ class Reproductor:
             self._cola.append(track)
             pos = len(self._cola)
             # Si no hay reproducción activa, empieza a sonar esta.
-            if self._parado or self._indice < 0:
-                self._indice = len(self._cola) - 1
-                self._sonar_locked(track)
-                return f"Sonando: {_descr(track)}"
+            arrancar = self._parado or self._indice < 0
+        if arrancar:
+            track = self._arrancar(pos - 1, track)
+            return f"Sonando: {_descr(track)}"
         return f"Añadida a la cola (posición {pos}): {_descr(track)}"
 
     def pausar(self) -> str:
@@ -230,16 +299,9 @@ class Reproductor:
             objetivo = self._indice + 1
             track = self._cola[objetivo]
         try:
-            track = self._asegurar_resuelto(track)
+            track = self._arrancar(objetivo, self._asegurar_resuelto(track))
         except MusicaError as exc:
-            return f"No pude cargar la siguiente pista: {exc}"
-        with self._lock:
-            self._cola[objetivo] = track
-            self._indice = objetivo
-            try:
-                self._sonar_locked(track)
-            except MusicaError as exc:
-                return f"No pude reproducir la siguiente pista: {exc}"
+            return f"No pude poner la siguiente pista: {exc}"
         return f"Siguiente: {_descr(track)}"
 
     def anterior(self) -> str:
@@ -252,16 +314,9 @@ class Reproductor:
             objetivo = self._indice - 1
             track = self._cola[objetivo]
         try:
-            track = self._asegurar_resuelto(track)
+            track = self._arrancar(objetivo, self._asegurar_resuelto(track))
         except MusicaError as exc:
-            return f"No pude cargar la pista anterior: {exc}"
-        with self._lock:
-            self._cola[objetivo] = track
-            self._indice = objetivo
-            try:
-                self._sonar_locked(track)
-            except MusicaError as exc:
-                return f"No pude reproducir la pista anterior: {exc}"
+            return f"No pude poner la pista anterior: {exc}"
         return f"Anterior: {_descr(track)}"
 
     def _auto_siguiente(self) -> None:
@@ -269,6 +324,8 @@ class Reproductor:
         que no se puedan cargar. Si no queda nada, se detiene. Corre en el hilo de avance."""
         while True:
             with self._lock:
+                if self._arrancando:
+                    return  # una orden explícita está estableciendo su pista: no la pises
                 if self._indice + 1 >= len(self._cola):
                     self._detener_locked()
                     return
@@ -276,15 +333,9 @@ class Reproductor:
                 self._indice = objetivo  # avanza el índice aunque falle (para no repetir)
                 track = self._cola[objetivo]
             try:
-                track = self._asegurar_resuelto(track)
+                self._arrancar(objetivo, self._asegurar_resuelto(track))
             except MusicaError:
-                continue  # pista rota: prueba la siguiente
-            with self._lock:
-                self._cola[objetivo] = track
-                try:
-                    self._sonar_locked(track)
-                except MusicaError:
-                    continue  # VLC no pudo abrirla: prueba la siguiente
+                continue  # no resuelve o VLC la rechaza: prueba la siguiente
             return
 
     def set_volumen(self, nivel: int) -> str:
@@ -369,8 +420,7 @@ class Reproductor:
         self._ensure_vlc()
         with self._lock:
             self._cola = [primero] + [dict(t) for t in tracks[1:]]
-            self._indice = 0
-            self._sonar_locked(primero)
+        primero = self._arrancar(0, primero)
         n = len(tracks)
         return f"Reproduciendo {n} pista{'s' if n != 1 else ''}. Sonando: {_descr(primero)}"
 

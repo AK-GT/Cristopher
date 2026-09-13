@@ -100,6 +100,11 @@ def _resolver_web(consulta: str) -> Track:
         "noplaylist": True,
         "default_search": "ytsearch1",
         "skip_download": True,
+        # Sin tope de tiempo, una resolución estrangulada por YouTube cuelga el ÚNICO
+        # hilo worker del agente: medido hasta 76s en una sola canción. Preferimos
+        # rendirnos y decirlo a dejar a CRISTOPHER mudo un minuto y medio.
+        "socket_timeout": 20,
+        "retries": 2,
     }
     try:
         with YoutubeDL(opts) as ydl:
