@@ -25,7 +25,7 @@ import threading
 from typing import Optional
 
 from cristopher.config import MUSICA_VOLUMEN, VLC_DIR
-from cristopher.musica.resolver import MusicaError, Track, resolver
+from cristopher.musica.resolver import MusicaError, Track, caducada, resolver
 
 
 def _preparar_libvlc() -> None:
@@ -102,9 +102,13 @@ class Reproductor:
             # --no-video: solo audio, sin abrir ventana de vídeo para streams web.
             self._instance = vlc.Instance("--no-video", "--quiet")
             self._player = self._instance.media_player_new()
-            self._player.event_manager().event_attach(
-                vlc.EventType.MediaPlayerEndReached, self._on_fin
-            )
+            em = self._player.event_manager()
+            # OJO: un medio que no se puede abrir (URL de stream caducada, formato roto)
+            # NO emite EndReached, emite EncounteredError. Con solo EndReached enganchado,
+            # una pista rota dejaba el reproductor colgado para siempre diciendo que
+            # sonaba. Los dos eventos significan lo mismo aquí: esta pista se acabó.
+            em.event_attach(vlc.EventType.MediaPlayerEndReached, self._on_fin)
+            em.event_attach(vlc.EventType.MediaPlayerEncounteredError, self._on_fin)
         except Exception as exc:
             raise MusicaError(f"No pude inicializar VLC: {exc}") from exc
 
@@ -127,7 +131,17 @@ class Reproductor:
         """Carga la pista en VLC y la reproduce. Asume lock adquirido y track resuelto."""
         media = self._instance.media_new(track["ubicacion"])
         self._player.set_media(media)
-        self._player.play()
+        if self._player.play() == -1:
+            # Rechazo EN EL ACTO de libvlc (raro: abre el medio en diferido, así que ni
+            # un archivo inexistente falla aquí — ese caso lo caza EncounteredError).
+            # Dejamos el estado coherente (nada suena) ANTES de lanzar: si no, `estado()`
+            # seguiría diciendo "sonando" con la pista que nunca arrancó.
+            self._parado = True
+            self._pausado = False
+            raise MusicaError(
+                f"VLC no pudo abrir «{track.get('titulo') or track.get('consulta')}» "
+                "(¿formato no soportado o archivo ilegible?)."
+            )
         # El volumen a veces no "pega" hasta que hay media cargada: lo fijamos aquí.
         self._player.audio_set_volume(self._volumen)
         self._pausado = False
@@ -147,13 +161,17 @@ class Reproductor:
 
     @staticmethod
     def _asegurar_resuelto(track: Track) -> Track:
-        """Si la pista aún no tiene ubicación reproducible, la resuelve (fuera del lock).
-        Puede lanzar MusicaError."""
-        if track.get("ubicacion"):
+        """Resuelve la pista si hace falta (fuera del lock): porque aún no tiene ubicación
+        reproducible, o porque la que tiene es un stream web ya caducado. Puede lanzar
+        MusicaError."""
+        if track.get("ubicacion") and not caducada(track):
             return track
-        resuelto = resolver(track.get("consulta", ""))
-        # Conserva metadatos que ya tuviéramos (p. ej. título de una lista guardada).
-        resuelto.setdefault("titulo", track.get("titulo", ""))
+        resuelto = resolver(track.get("consulta") or track.get("titulo") or "")
+        # Conserva el título que ya tuviéramos (p. ej. el guardado en una lista). Antes
+        # esto era un `setdefault` que NUNCA hacía nada: resolver() siempre rellena
+        # "titulo", así que el título guardado se perdía en cada re-resolución.
+        if track.get("titulo"):
+            resuelto["titulo"] = track["titulo"]
         return resuelto
 
     # --- API pública (control directo) -----------------------------------------
@@ -218,7 +236,10 @@ class Reproductor:
         with self._lock:
             self._cola[objetivo] = track
             self._indice = objetivo
-            self._sonar_locked(track)
+            try:
+                self._sonar_locked(track)
+            except MusicaError as exc:
+                return f"No pude reproducir la siguiente pista: {exc}"
         return f"Siguiente: {_descr(track)}"
 
     def anterior(self) -> str:
@@ -237,7 +258,10 @@ class Reproductor:
         with self._lock:
             self._cola[objetivo] = track
             self._indice = objetivo
-            self._sonar_locked(track)
+            try:
+                self._sonar_locked(track)
+            except MusicaError as exc:
+                return f"No pude reproducir la pista anterior: {exc}"
         return f"Anterior: {_descr(track)}"
 
     def _auto_siguiente(self) -> None:
@@ -257,7 +281,10 @@ class Reproductor:
                 continue  # pista rota: prueba la siguiente
             with self._lock:
                 self._cola[objetivo] = track
-                self._sonar_locked(track)
+                try:
+                    self._sonar_locked(track)
+                except MusicaError:
+                    continue  # VLC no pudo abrirla: prueba la siguiente
             return
 
     def set_volumen(self, nivel: int) -> str:

@@ -13,6 +13,7 @@ lo convierte en observación de texto para el modelo — nunca crashea el agente
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -29,6 +30,22 @@ class MusicaError(RuntimeError):
 # Track = dict simple (MVP): título, artista, fuente ('local'|'web'), ubicación
 # (ruta de archivo o URL de stream) y la consulta original (para resolución perezosa).
 Track = dict[str, Any]
+
+# Las URL de stream que devuelve yt-dlp CADUCAN (medido: ~6h de margen en YouTube), y una
+# URL muerta no falla al arrancar VLC — falla asíncronamente y dejaría la pista muda. Por
+# eso cada pista web se sella con `resuelto_en` y se re-resuelve si lleva más de esto.
+TTL_WEB_SEG = 3600
+
+
+def caducada(track: Track) -> bool:
+    """True si la pista es un stream WEB resuelto hace demasiado y hay que re-resolverlo.
+    Un archivo local nunca caduca."""
+    if (track.get("fuente") or "") != "web":
+        return False
+    try:
+        return (time.time() - float(track.get("resuelto_en") or 0)) > TTL_WEB_SEG
+    except (TypeError, ValueError):
+        return True  # sello ilegible: re-resolver es lo barato y seguro
 
 
 def _es_url(consulta: str) -> bool:
@@ -114,6 +131,7 @@ def _resolver_web(consulta: str) -> Track:
         "fuente": "web",
         "ubicacion": url,
         "consulta": consulta,
+        "resuelto_en": time.time(),  # para `caducada()`: la URL de stream no vive siempre
     }
 
 
