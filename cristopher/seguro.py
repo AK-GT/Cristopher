@@ -39,7 +39,11 @@ _DEFAULTS: dict = {
     "camara_indice": 0,
     "min_altura_cara_px": 90,
     "yaw_max_grados": 35,
-    "pitch_max_grados": 25,
+    # 25 disparaba en la práctica: con la webcam por encima de la línea de ojos (portátil
+    # en mesa normal) mirar de frente ya da 26-32° de pitch, así que el filtro descartaba
+    # casi todo como "no mira" y el 32° ocasional que sí colaba salía DESCONOCIDO y
+    # bloqueaba al propio dueño. Medido en vivo contra esta cámara real.
+    "pitch_max_grados": 40,
     "usar_mirada": True,
     "signo_mirada": 1,            # lo fija el usuario con scripts/probar_seguro_vision.py
     "grados_mirada_max": 35,

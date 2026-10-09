@@ -32,9 +32,11 @@ _estado: dict[str, Any] = {
     "concentracion": {"activo": False},  # snapshot de concentracion.estado_actual()
     "modo_code": False,           # snapshot de estado_code.esta_activo() (Cristopher Code)
     "modo_redes": False,          # snapshot de estado_redes.esta_activo() (Modo redes)
+    "modo_calendario": False,     # snapshot de estado_calendario.esta_activo()
     # Arranca leyendo el flag real (CRISTOPHER_MODO_SALIDA=voz lo pone a True), no un
     # False fijo: el toggle del HUD debe reflejar el estado, no imponerlo.
     "modo_voz": estado_voz.esta_activo(),
+    "modo_auto": False,           # snapshot de estado_auto.esta_activo() (botón ⚡)
     "control_total": False,       # snapshot de estado_control_total.esta_activo() (Fase 4)
     "control_total_actividad": "reposo",  # "reposo"|"trabajando" del bucle (Fase 2)
     "seguro": {"activo": False, "fase": "INACTIVO"},  # snapshot de seguro.estado_actual()
@@ -128,6 +130,25 @@ def set_modo_redes(activo: bool) -> None:
     _emit("modo_redes", activo)
 
 
+def set_modo_calendario(activo: bool) -> None:
+    """Flag del Modo calendario (pantalla de agenda). Lo mueve pantalla.py."""
+    with _LOCK:
+        _estado["modo_calendario"] = activo
+    _emit("modo_calendario", activo)
+
+
+def calendario_foco(fecha: str, borrador: dict | None = None) -> None:
+    """ORDEN puntual a la pantalla de calendario: ir a `fecha` (YYYY-MM-DD) y, si
+    hay `borrador` ({titulo, inicio, fin} en ISO), pintarlo en fantasma mientras se
+    pide la confirmación. Efímera, como `set_seguro_panel`: no es estado."""
+    _emit("calendario_foco", {"fecha": fecha, "borrador": borrador})
+
+
+def calendario_cambio() -> None:
+    """Se creó/movió/borró un evento: la pantalla recarga al momento."""
+    _emit("calendario_cambio", None)
+
+
 def set_modo_voz(activo: bool) -> None:
     """Flag de la respuesta hablada (estado.py). El HUD lo usa para pintar su toggle 🔊,
     y hay que publicarlo también cuando lo mueve el propio CRISTOPHER por intención
@@ -135,6 +156,13 @@ def set_modo_voz(activo: bool) -> None:
     with _LOCK:
         _estado["modo_voz"] = activo
     _emit("modo_voz", activo)
+
+
+def set_modo_auto(activo: bool) -> None:
+    """Flag del modo automático (estado_auto.py): confirmaciones aprobadas solas."""
+    with _LOCK:
+        _estado["modo_auto"] = activo
+    _emit("modo_auto", activo)
 
 
 def set_control_total(activo: bool) -> None:

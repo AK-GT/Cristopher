@@ -7,9 +7,9 @@ tono — no usa `memory.py` porque estos temas deben regir siempre que se genere
 briefing, no solo cuando el recuerdo semántico los considere relevantes.
 
 `generar()` reutiliza las herramientas ya existentes de Google/búsqueda
-(`google_tools.buscar_correos`, `elite_search.busqueda_elite`) y solo añade lógica
-propia para la agenda de hoy (por rango de fecha, distinto de `proximo_evento`) y los
-recordatorios pendientes de hoy. Cada sección degrada de forma independiente: si una
+(`google_tools.buscar_correos`, `calendario.eventos_rango` para la agenda de hoy,
+`elite_search.busqueda_elite`) y solo añade lógica propia para los recordatorios
+pendientes de hoy. Cada sección degrada de forma independiente: si una
 falla, las demás igual se muestran (§1 "fallos explícitos", nunca fingir éxito).
 """
 
@@ -20,7 +20,6 @@ import threading
 from datetime import datetime, timedelta
 
 from cristopher.config import DATA
-from cristopher.google_auth import GoogleAuthError, get_calendar
 from cristopher.recordatorios import get_recordatorios
 
 _PATH = DATA / "briefing.json"
@@ -86,36 +85,18 @@ def listar_temas() -> list[str]:
 
 # --- Secciones del briefing (cada una degrada de forma independiente) --------
 def _seccion_agenda() -> str:
+    # calendario.py directo y no la tool ver_agenda: esa abre la pantalla de
+    # calendario del HUD, y pedir un briefing no debe cambiarte la pantalla.
+    from cristopher import calendario
+
     try:
-        svc = get_calendar()
-        inicio = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
-        fin = inicio + timedelta(days=1)
-        events = (
-            svc.events()
-            .list(
-                calendarId="primary",
-                timeMin=inicio.isoformat(),
-                timeMax=fin.isoformat(),
-                singleEvents=True,
-                orderBy="startTime",
-            )
-            .execute()
-            .get("items", [])
-        )
-    except GoogleAuthError as exc:
-        return f"ERROR de autenticación con Google: {exc}"
+        hoy = calendario.inicio_de_dia(datetime.now().date())
+        eventos = calendario.eventos_rango(hoy, hoy + timedelta(days=1))
     except Exception as exc:
         return f"ERROR al leer el calendario: {exc}"
-
-    if not events:
+    if not eventos:
         return "No tienes eventos hoy."
-    lines = []
-    for e in events:
-        start = e.get("start", {}).get("dateTime", e.get("start", {}).get("date", "?"))
-        title = e.get("summary", "(sin título)")
-        where = e.get("location", "")
-        lines.append(f"- {start} · {title}" + (f" · {where}" if where else ""))
-    return "\n".join(lines)
+    return "\n".join(calendario.fmt_evento(e) for e in eventos)
 
 
 def _seccion_correos() -> str:

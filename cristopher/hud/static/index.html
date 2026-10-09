@@ -32,6 +32,7 @@
       <button type="button" id="autoarreglos-toggle" class="edit-toggle" title="Auto-arreglos en curso">🛠️</button>
       <button type="button" id="code-toggle" class="edit-toggle" title="Modo code (gestión de sesiones)">🔴</button>
       <button type="button" id="redes-toggle" class="edit-toggle" title="Modo redes (YouTube/Instagram/TikTok)">🟣</button>
+      <button type="button" id="calendario-toggle" class="edit-toggle" title="Calendario (agenda semana/mes)">📅</button>
       <button type="button" id="seguro-preview-toggle" class="edit-toggle" title="Vista de cámara (Modo Seguro)">📷</button>
       <button type="button" id="reiniciar-toggle" class="edit-toggle" title="Reinicio total (mata y relanza el proceso)">🔁</button>
       <button type="button" id="edit-toggle" class="edit-toggle" title="Editar distribución (E)">⚙</button>
@@ -155,6 +156,7 @@
           <button type="button" data-modo="libre" title="Audio libre: habla sin pulsar nada">♾</button>
         </div>
         <button type="button" id="btn-tts" title="Respuesta hablada">🔇</button>
+        <button type="button" id="btn-auto" title="Modo automático: desactivado">⚡</button>
         <button type="button" id="btn-adjuntar" title="Adjuntar imagen o audio">📎</button>
         <button type="button" id="btn-grabar" title="Grabar audio">🎤</button>
         <button type="submit">enviar</button>
@@ -298,6 +300,37 @@
         </form>
       </div>
     </div>
+
+    <!-- Modo calendario: pantalla de agenda, solo visible con
+         body[data-modo="calendario"]. Comparte hueco con code/redes (pantalla.py).
+         Barra (navegación + vista) · cuerpo que pinta calendario.js (semana o mes) ·
+         barra de chat espejo, igual que redes: por voz se usa el modo de entrada de
+         siempre, y un clic en el calendario deja la frase preparada aquí. -->
+    <div class="hud-calendario">
+      <div class="cal-barra panel">
+        <i class="bracket"></i>
+        <span class="cal-barra-titulo">AGENDA</span>
+        <button type="button" class="cal-btn" id="cal-prev" title="Anterior">◀</button>
+        <button type="button" class="cal-btn cal-hoy" id="cal-hoy">hoy</button>
+        <button type="button" class="cal-btn" id="cal-next" title="Siguiente">▶</button>
+        <span class="cal-titulo" id="cal-titulo"></span>
+        <span class="cal-aviso" id="cal-aviso" hidden></span>
+        <div class="cal-vistas">
+          <button type="button" class="cal-btn" data-vista="semana">semana</button>
+          <button type="button" class="cal-btn" data-vista="mes">mes</button>
+        </div>
+      </div>
+      <div class="cal-cuerpo panel" id="cal-cuerpo"><i class="bracket"></i></div>
+      <div class="redes-chat cal-chat panel">
+        <i class="bracket"></i>
+        <div class="log redes-chat-log" id="cal-chat-log"></div>
+        <form class="input" id="cal-form" autocomplete="off">
+          <span class="prompt">›</span>
+          <input id="cal-entrada" type="text" placeholder="Pídeme qué agendar, o haz clic en una hora libre…" />
+          <button type="submit">enviar</button>
+        </form>
+      </div>
+    </div>
   </div>
 
   <!-- Toolbar de distribuciones (solo visible en modo edición) -->
@@ -415,6 +448,7 @@
   <script src="widgets.js"></script>
   <script src="code.js"></script>
   <script src="redes.js"></script>
+  <script src="calendario.js"></script>
   <script src="bg.js"></script>
 </body>
 </html>

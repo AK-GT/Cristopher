@@ -107,21 +107,38 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-conexion
-  .iniciar({
-    mostrarQr: false,
-    // El chat "Note to self" (yo hablandome a mi mismo) llega de Baileys con
-    // fromMe:true igual que cualquier mensaje saliente; sin este flag el store
-    // nunca lo veria como "nuevo" (ver store.js::guardarMensaje). getSelfIds() (no
-    // solo getSelfId()) porque en cuentas migradas a LID el chatId real es
-    // creds.me.lid, distinto del JID de telefono de siempre.
-    onMensaje: (m) =>
-      store.guardarMensaje({ ...m, esSelfChat: conexion.getSelfIds().includes(m.chatId) }),
-  })
-  .catch((exc) => {
-    console.error("No se pudo iniciar la conexion de WhatsApp:", exc);
-  });
+// Baileys lanza a veces rechazos sueltos (p. ej. "Connection Closed" desde
+// sendRetryRequest) que antes tumbaban el proceso; uno de esos cierres pillo a
+// creds.json a mitad de escritura y lo dejo vacio. Se registran y se sigue.
+process.on("unhandledRejection", (exc) => {
+  console.error("Rechazo no capturado (ignorado):", (exc && exc.message) || exc);
+});
+process.on("uncaughtException", (exc) => {
+  console.error("Excepcion no capturada (ignorada):", (exc && exc.message) || exc);
+});
+
+// Si el puerto ya esta cogido, otro server.js esta sirviendo: salimos SIN haber
+// conectado a WhatsApp. Antes se conectaba primero y dos procesos con la misma
+// sesion se echaban el uno al otro (bucle de reconexion cada pocos segundos).
+server.on("error", (exc) => {
+  console.error("No puedo escuchar en el puerto, salgo:", exc.code || exc.message);
+  process.exit(1);
+});
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Servicio de WhatsApp escuchando en 127.0.0.1:${PORT}`);
+  conexion
+    .iniciar({
+      mostrarQr: false,
+      // El chat "Note to self" (yo hablandome a mi mismo) llega de Baileys con
+      // fromMe:true igual que cualquier mensaje saliente; sin este flag el store
+      // nunca lo veria como "nuevo" (ver store.js::guardarMensaje). getSelfIds() (no
+      // solo getSelfId()) porque en cuentas migradas a LID el chatId real es
+      // creds.me.lid, distinto del JID de telefono de siempre.
+      onMensaje: (m) =>
+        store.guardarMensaje({ ...m, esSelfChat: conexion.getSelfIds().includes(m.chatId) }),
+    })
+    .catch((exc) => {
+      console.error("No se pudo iniciar la conexion de WhatsApp:", exc);
+    });
 });

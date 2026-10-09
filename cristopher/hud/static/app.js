@@ -550,6 +550,9 @@
   // así que el orden de precedencia de abajo es solo defensivo.
   let modoRedes = false;
   const REDES_COL = 0xB15CFF;
+  // Modo calendario: tercer modo de la misma pantalla (pantalla.py), color verde.
+  let modoCalendario = false;
+  const CAL_COL = 0x3DDC97;
   // Modo Control Total (Fase 4): mismo mecanismo, color azul, independiente de
   // modoCode (ver setModoControlTotal más abajo) — si algún día coexistieran,
   // modoCode manda (orden de la línea de abajo), caso raro sin resolver a propósito.
@@ -579,7 +582,8 @@
     // Color del estado: todas las capas convergen al mismo tono suavemente. En modo
     // code, el rojo manda sobre el color del estado (reposo/pensando/…); en Modo
     // Control Total (Fase 4), el azul manda igual salvo que modo code esté activo.
-    targetCol.set(modoCode ? CODE_COL : (modoRedes ? REDES_COL : (modoControlTotal ? CONTROL_COL : target.col)));
+    targetCol.set(modoCode ? CODE_COL : (modoRedes ? REDES_COL : (modoCalendario ? CAL_COL
+      : (modoControlTotal ? CONTROL_COL : target.col))));
     U.uCol.value.lerp(targetCol, 0.04);
 
     flash *= 0.9;  // decae solo (destello de un solo disparo al entrar en "pensando")
@@ -656,7 +660,8 @@
   function _actualizarDatasetModo() {
     // modoCode manda si ambos llegaran a estar true por una carrera rara — la
     // exclusión mutua real vive en el backend (hud/__main__.py), esto es defensivo.
-    document.body.dataset.modo = modoCode ? "code" : (modoRedes ? "redes" : "normal");
+    document.body.dataset.modo = modoCode ? "code" : (modoRedes ? "redes"
+      : (modoCalendario ? "calendario" : "normal"));
   }
   function setModo(activo) {
     modoCode = !!activo;
@@ -669,6 +674,12 @@
     modoRedes = !!activo;
     _actualizarDatasetModo();
     window.__hudRedesSetModo && window.__hudRedesSetModo(modoRedes);
+  }
+  // Modo calendario: mismo mecanismo; calendario.js carga datos al entrar.
+  function setModoCalendario(activo) {
+    modoCalendario = !!activo;
+    _actualizarDatasetModo();
+    window.__hudCalendarioSetModo && window.__hudCalendarioSetModo(modoCalendario);
   }
   // Modo Control Total (Fase 4): mismo mecanismo que setModo, atributo booleano
   // INDEPENDIENTE (data-control-total, no data-modo — no reemplaza al modo code,
@@ -745,6 +756,7 @@
     // abajo es un espejo del mismo hilo, porque allí la consola normal está oculta.
     // Por eso se refleja Y se sigue pintando abajo, sin el `return` de arriba.
     window.__hudRedesLog && window.__hudRedesLog(e);
+    window.__hudCalendarioLog && window.__hudCalendarioLog(e);   // mismo espejo
     const d = document.createElement("div");
     d.className = "l " + e.kind;
     const pref = { user: "tú", answer: "CRIS", thought: "···", tool_call: "→", observation: "obs", error: "!!" }[e.kind] || e.kind;
@@ -758,7 +770,9 @@
     setEstado(s.estado || "reposo");
     setModo(s.modo_code);
     setModoRedes(s.modo_redes);
+    setModoCalendario(s.modo_calendario);
     setModoVoz(s.modo_voz);
+    setModoAuto(s.modo_auto);
     setModoControlTotal(s.control_total);
     if (s.metricas) setMetricas(s.metricas);
     setTarea(s.tarea); setRoster(s.subagentes);
@@ -797,7 +811,11 @@
         case "concentracion": setConcentracion(m.datos); break;
         case "modo_code": setModo(m.datos); break;
         case "modo_redes": setModoRedes(m.datos); break;
+        case "modo_calendario": setModoCalendario(m.datos); break;
+        case "calendario_foco": window.__hudCalendarioFoco && window.__hudCalendarioFoco(m.datos); break;
+        case "calendario_cambio": window.__hudCalendarioCambio && window.__hudCalendarioCambio(); break;
         case "modo_voz": setModoVoz(m.datos); break;
+        case "modo_auto": setModoAuto(m.datos); break;
         // Abrir/cerrar la vista de cámara pedido desde el chat o por voz (tools
         // seguro_ver_camara / seguro_ocultar_camara). Hook como el de code.js: el
         // panel vive en su propia IIFE más abajo, y el widget flotante no lo tiene.
@@ -1152,6 +1170,28 @@
     }).catch(() => setModoVoz(!activo));
   });
   setModoVoz(false);
+
+  // ---------- Modo automático (⚡) ----------
+  // Las confirmaciones se aprueban solas (menos los guardarraíles de Control Total).
+  // Solo este botón lo mueve: CRISTOPHER no tiene tool para encenderlo.
+  const btnAuto = $("btn-auto");
+  let autoActivo = false;
+  function setModoAuto(activo) {
+    autoActivo = !!activo;
+    btnAuto.classList.toggle("sel", autoActivo);
+    btnAuto.title = autoActivo
+      ? "Modo automático: ACTIVADO (no pide confirmación)"
+      : "Modo automático: desactivado";
+  }
+  btnAuto.addEventListener("click", () => {
+    const activo = !autoActivo;
+    setModoAuto(activo);   // optimista; el SSE confirma o corrige
+    fetch("/modo_auto", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ activo }),
+    }).catch(() => setModoAuto(!activo));
+  });
+  setModoAuto(false);
 
   $("form").addEventListener("submit", (e) => {
     e.preventDefault();

@@ -5,6 +5,7 @@
  * persistida en data/whatsapp/session/ y server.js la reutiliza sin pedir QR de nuevo.
  */
 
+const http = require("http");
 const path = require("path");
 const qrcodeTerminal = require("qrcode-terminal");
 const qrcode = require("qrcode");
@@ -36,7 +37,31 @@ function esperarConexion(conexion) {
   });
 }
 
+function servidorVivo() {
+  const port = parseInt(process.env.CRISTOPHER_WHATSAPP_PORT || "8766", 10);
+  return new Promise((resolve) => {
+    const req = http.get({ host: "127.0.0.1", port, path: "/health", timeout: 1500 }, (res) => {
+      res.resume();
+      resolve(true);
+    });
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
 async function main() {
+  // Dos procesos con la misma sesion se echan el uno al otro (error 440) y pisan
+  // creds.json: hay que vincular con server.js parado.
+  if (await servidorVivo()) {
+    console.error(
+      "ERROR: el servicio de WhatsApp (server.js) esta corriendo. Cierra CRISTOPHER " +
+        "(o mata ese node) antes de vincular."
+    );
+    process.exit(1);
+  }
   console.log("Preparando conexion con WhatsApp...");
   const conexion = new ConexionWhatsApp(SESSION_DIR);
 

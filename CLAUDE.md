@@ -140,6 +140,13 @@ Agente personal orquestado (tipo Jarvis) sobre Gemini. Este archivo manda: léel
   avisarme): `whatsapp_send` (el "OK" es la propia frase del usuario en ese turno),
   `notificar_remoto.py` (aviso urgente de nivel 3, lo genera el sistema) y las tools de
   notas/tareas/episodios/diario (datos locales sin efecto externo).
+- **Modo automático** (botón ⚡ del HUD, `estado_auto.py`): pedido explícitamente por el
+  usuario, con el riesgo de inyección asumido. Mientras está encendido, `google_tools._confirm`
+  aprueba solo TODO el gate (correo, redes, calendario, archivos, PC, sesiones) y deja
+  `[auto-aprobado] …` en el log. Tres límites que no se tocan: (a) solo lo mueve el botón
+  (`POST /modo_auto`), **nunca una tool** — el modelo no puede quitarse el gate; (b) los
+  guardarraíles de Control Total llaman con `permitir_auto=False` y siguen preguntando;
+  (c) no se persiste: un reinicio lo apaga.
 - **Kill-switch por encima de todo:** `Ctrl+F3` corta el Modo Control Total en seco y deja
   el flag, el widget y el borde coherentes (`killswitch.set_on_disparo_extra` →
   `desactivar_control_total`). No hay ruta que lo pueda desactivar desde el modelo.
@@ -179,6 +186,7 @@ backlog, no vuelvas a tratarlas como diseño sin código):
 | Modo Control Total | `control_total/`, `estado_control_total.py`, `hud/widget_flotante.py`, `hud/control_overlay.py` | ratón/teclado autónomos con kill-switch |
 | Voces en la nube | `voz.py` (+ `tools/voz_tools.py`) | ElevenLabs junto a Piper |
 | Auto-arreglos | `tools/auto_arreglos_tools.py` | abre sesión de Claude Code sobre su propio código |
+| Pantalla de calendario | `calendario.py`, `pantalla.py`, `estado_calendario.py`, `tools/calendario_modo_tools.py`, `hud/static/calendario.js` | agenda semana/mes, se abre sola por intención |
 
 **Fase 9 (pulido, pendiente):** interrupciones de voz (barge-in) también en el
 modo de audio libre del HUD, streaming de respuesta, "habla mientras trabaja" en tareas
@@ -260,6 +268,21 @@ salen a la vez (a) la declaración de function calling que ve Gemini y (b) el di
 por nombre (`call_tool`). El system prompt (`agent.build_system_prompt`) enumera estas
 mismas herramientas, así que **añadir una herramienta = añadir una entrada en `TOOLS`**;
 nunca hay una lista de capacidades separada que se pueda desincronizar del código.
+El system prompt lleva **solo los nombres**: las descripciones y parámetros ya van en
+las declaraciones, y repetirlas en texto costaba ~10.700 tokens en cada paso (32% de la
+petición) sin cambiar el enrutado (medido: mismo tool elegido, misma latencia). La
+única excepción es el cofundador de `proactivo.py`, que llama SIN declaraciones y por eso
+pide `build_system_prompt(descripciones_completas=True)`.
+
+**Ventana de historial** (`agent._recortar_historial`, en cada `send`): se conservan los
+últimos `HISTORIAL_TURNOS` (8) turnos del usuario; los 2 más recientes íntegros y los
+anteriores comprimidos una sola vez (observaciones a 800 caracteres con aviso de
+"vuelve a llamar a X", adjuntos fuera, bloque de memoria fuera, de cada respuesta solo
+lo dicho tras `===RESPUESTA===`). Nunca se quita un `function_call` ni su respuesta —
+Gemini exige el par y la firma de pensamiento — y el corte cae siempre antes de un
+mensaje real del usuario. Antes el historial crecía sin límite todo el día; ahora se
+estabiliza (~1.400 tokens medidos tras 10 turnos con herramientas). Lo de largo plazo
+vive en `memory.py`/episódica, que no dependen de esta ventana.
 
 **Cadena de modelos con degradación** (`agent.py::_generate`): modelo principal
 (`MODEL`) con reintento acotado ante 429/500/503, y si se agotan los reintentos cae al
@@ -317,12 +340,25 @@ siempre se comería la cuota). También registra el kill-switch, recupera las ta
 programadas huérfanas de un cierre anterior y, si detecta que ya hay otro HUD vivo, no
 apila un segundo proceso: reabre la pestaña.
 
-**Modo code y modo redes comparten la misma pantalla dedicada del HUD y son mutuamente
-excluyentes**: activar uno desactiva el otro. La exclusión está replicada en los dos
-caminos (botón del HUD en `hud/__main__.py` y tools `activar_modo_code`/
-`activar_modo_redes`) para que hablar y pinchar hagan exactamente lo mismo. Los flags de
-modo viven cada uno en su módulo (`estado.py` voz, `estado_diario.py`, `estado_code.py`,
-`estado_redes.py`, `estado_control_total.py`); los demás sí coexisten entre sí.
+**Modo code, modo redes y modo calendario comparten la misma pantalla dedicada del HUD
+y son mutuamente excluyentes**: activar uno desactiva los otros. La exclusión vive UNA
+sola vez en `pantalla.py` (`activar(modo)`/`desactivar(modo)`), que llaman igual el botón
+del HUD (`hud/__main__.py`) y las tools, para que hablar y pinchar hagan exactamente lo
+mismo. Los flags de modo viven cada uno en su módulo (`estado.py` voz,
+`estado_diario.py`, `estado_code.py`, `estado_redes.py`, `estado_calendario.py`,
+`estado_control_total.py`); los que no son de pantalla sí coexisten entre sí.
+
+**Pantalla de calendario** (`hud/static/calendario.js`, `GET /calendario`): semana
+(por defecto) o mes, con huecos libres rayados. Se abre SOLA cuando el agente usa una
+tool de calendario (`ver_agenda`, `buscar_hueco`, `crear/modificar/borrar_evento` llaman a
+`calendario_modo_tools.mostrar`), sin gastar un paso del bucle en abrirla; mientras se
+confirma crear/mover, el evento se pinta en **fantasma ámbar** donde caería, y el modal
+de confirmación en este modo no difumina el fondo, a propósito. Agendar es por voz/chat:
+el clic en una hora o un evento **solo prepara la frase en el chat**, nunca escribe en
+Google desde el navegador (no hay excepción nueva al gate §9). El servidor cachea 60 s
+por rango y `calendario.set_on_cambio` vacía la caché y avisa por SSE tras cada cambio.
+La vista elegida se guarda en `localStorage`; los eventos persisten en Google. El
+briefing NO usa `ver_agenda` (abriría la pantalla): lee `calendario.py` directo.
 
 **Entrada por voz en el HUD:** la barra de la consola tiene un selector de **modo de
 entrada** (`#modo-entrada` en `app.js`) con tres opciones — *texto*, *audio pulsando* y
@@ -363,7 +399,16 @@ cambia el propio CRISTOPHER por intención.
   `workspace/subagents/<carpeta>/`; nunca hereda permisos amplios (`--permission-mode
   bypassPermissions` solo dentro de esa carpeta).
 - `google_auth.py` / `login_google.py` — flujo OAuth de escritorio para Calendar/Gmail;
-  token persistido en `data/google/token.json` (gitignored).
+  token persistido en `data/google/token.json` (gitignored). El servicio se cachea
+  **por hilo** (`threading.local`): httplib2 no es thread-safe y lo usan a la vez el
+  worker, el demonio proactivo y el hilo HTTP del HUD.
+- `calendario.py` — acceso ÚNICO a Google Calendar (rango, próximos, huecos libres,
+  solapes, crear/modificar/borrar sin gate); `tools/google_tools.py` pone encima la
+  confirmación §9 (`ver_agenda`, `buscar_hueco`, `crear_evento`, `modificar_evento`,
+  `borrar_evento`) y `briefing.py`/`proactivo.py` lo reutilizan. Fechas siempre con el
+  offset DE LA FECHA del evento (`parse_dt`), nunca el de hoy: el horario de verano
+  desplazaba 1 h los eventos de la otra mitad del año. El agente sabe qué día es por el
+  bloque `# AHORA` de `agent.build_system_prompt`.
 - `vision.py` — llamada multimodal de un solo turno (misma cadena principal→respaldo
   que el bucle) que usa `navegador_captura` cuando el HTML no basta para guiarse.
 - `voz.py` — STT/TTS real que usan `voz_repl.py`, el HUD (modo voz activo) y

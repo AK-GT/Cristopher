@@ -24,16 +24,24 @@ from __future__ import annotations
 
 import ctypes
 import json
+import logging
 import os
 import socket
 import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.request
 from pathlib import Path
 
-from cristopher.config import HUD_PORT, ROOT, SEGURO_OVERLAY_PID
+from cristopher.config import (
+    HUD_PORT,
+    ROOT,
+    SEGURO_OVERLAY_LOG,
+    SEGURO_OVERLAY_PID,
+    SEGURO_WEBVIEW_CACHE,
+)
 
 TITULO = "CRISTOPHER — MODO SEGURO"
 
@@ -46,6 +54,44 @@ FALLOS_MAX = 10
 
 class OverlayError(RuntimeError):
     """El overlay no pudo arrancar."""
+
+
+class _WebView2Fallido(RuntimeError):
+    """La ventana SÍ se crea pero WebView2 nunca inicializa (evento interno
+    de pywebview `on_webview_ready` con `IsSuccess=False`, típicamente
+    `E_ABORT`/0x80004004 en `CreateCoreWebView2ControllerAsync`). pywebview
+    se limita a loguearlo y seguir — no re-lanza, no cierra la ventana — así
+    que sin esto quedaría una ventana en blanco, siempre-encima, atascada:
+    lo único que el usuario ve es un "crash". Visto en vivo: intermitente,
+    el mismo comando repetido sin cambios arranca bien la siguiente vez."""
+
+
+class _VigiaFalloWebView2(logging.Handler):
+    """Escucha el logger propio de pywebview ('pywebview') para detectar el
+    fallo de inicialización que la librería no expone de otra forma (ni
+    excepción, ni callback, ni valor de retorno)."""
+
+    def __init__(self, evento: threading.Event) -> None:
+        super().__init__()
+        self._evento = evento
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if "WebView2 initialization failed" in record.getMessage():
+                self._evento.set()
+        except Exception:
+            pass
+
+
+def _vigilar_fallo_webview2(window, evento: threading.Event) -> None:
+    """Si el fallo llega, fuerza el cierre de la ventana en blanco para que
+    `webview.start()` devuelva el control y `lanzar()` pueda convertirlo en
+    una excepción real (`main()` ya sabe reintentar ante eso)."""
+    if evento.wait(timeout=8.0):
+        try:
+            window.destroy()
+        except Exception:
+            pass
 
 
 def _hud_vivo() -> bool:
@@ -218,10 +264,33 @@ def lanzar() -> None:
 
     window.events.closed += _on_closed
 
+    fallo_webview2 = threading.Event()
+    vigia = _VigiaFalloWebView2(fallo_webview2)
+    logging.getLogger("pywebview").addHandler(vigia)
+
     threading.Thread(target=_robar_foco, daemon=True).start()
     threading.Thread(target=_sondear_cierre, args=(window, detenido), daemon=True).start()
+    threading.Thread(
+        target=_vigilar_fallo_webview2, args=(window, fallo_webview2), daemon=True
+    ).start()
 
-    webview.start()
+    try:
+        # Causa raíz real del E_ABORT en CreateCoreWebView2ControllerAsync
+        # (visto en vivo, reproducido en consola): con private_mode=True (el
+        # default de pywebview) el user-data-folder de WebView2 sale de
+        # `tempfile.TemporaryDirectory().name` sin guardar el objeto en
+        # ninguna variable — su refcount cae a 0 en la misma línea y CPython
+        # lo borra del disco casi en el acto, ANTES de que WebView2 termine
+        # de inicializar sobre esa carpeta. storage_path fijo evita esa rama
+        # por completo (mismo cache_dir estable en cada arranque; no hace
+        # falta persistencia real, es una pantalla de contraseña estática).
+        SEGURO_WEBVIEW_CACHE.mkdir(parents=True, exist_ok=True)
+        webview.start(storage_path=str(SEGURO_WEBVIEW_CACHE))
+    finally:
+        logging.getLogger("pywebview").removeHandler(vigia)
+
+    if fallo_webview2.is_set():
+        raise _WebView2Fallido("WebView2 no inicializó (ver seguro_overlay.log)")
 
 
 # --- PID-guard: no abrir un segundo overlay si ya hay uno vivo -------------------
@@ -279,15 +348,69 @@ def lanzar_proceso() -> None:
     _guardar_pid(proc.pid)
 
 
+def _log_crash(mensaje: str) -> None:
+    """Bajo pythonw, sys.stdout/sys.stderr son `None` (bpo-13120): un
+    traceback no capturado revienta al intentar escribirse y el proceso
+    muere sin dejar rastro de por qué "crasheó". Todo fallo real se escribe
+    aquí en vez de a consola."""
+    try:
+        SEGURO_OVERLAY_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(SEGURO_OVERLAY_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {mensaje}\n")
+    except OSError:
+        pass
+
+
+_ENV_REINTENTO = "CRISTOPHER_SEGURO_OVERLAY_REINTENTO"
+
+
+def _reintentar_en_proceso_nuevo() -> None:
+    """Relanza el overlay en un proceso completamente nuevo en vez de volver
+    a llamar a `lanzar()` en este mismo proceso: `webview.start()` ya dejó
+    WinForms/el CLR en un estado a medio inicializar tras el fallo, así que
+    reintentar in-process es terreno movedizo. Un proceso limpio no arrastra
+    ese estado. Marca `_ENV_REINTENTO` para que ese proceso, si también
+    falla, no vuelva a reintentar (como mucho dos intentos en total)."""
+    creationflags = 0
+    if os.name == "nt":
+        creationflags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    env = dict(os.environ)
+    env[_ENV_REINTENTO] = "1"
+    proc = subprocess.Popen(
+        [_pythonw(), "-m", "cristopher.seguro_overlay"],
+        cwd=str(ROOT), creationflags=creationflags, env=env,
+    )
+    _guardar_pid(proc.pid)  # el pid-guard pasa a apuntar al proceso nuevo
+
+
 def main() -> int:
+    """El fallo real visto en vivo (WebView2 `E_ABORT` en
+    `CreateCoreWebView2ControllerAsync`, dentro de `webview.start()`) salió
+    intermitente, no determinista — el mismo comando, lanzado otra vez sin
+    cambiar nada, arrancó bien. De ahí el único reintento (en proceso nuevo,
+    ver `_reintentar_en_proceso_nuevo`) antes de darse por vencido."""
+    ya_reintentado = os.environ.get(_ENV_REINTENTO) == "1"
     try:
         lanzar()
     except OverlayError as exc:
-        print(f"[seguro_overlay] {exc}")
-        return 1
-    finally:
+        _log_crash(f"HUD no disponible: {exc}")
         _borrar_pid()
-    return 0
+        return 1
+    except Exception:
+        _log_crash(f"fallo (reintento={ya_reintentado}):\n{traceback.format_exc()}")
+        if ya_reintentado:
+            _borrar_pid()
+            return 1
+        time.sleep(1.0)
+        try:
+            _reintentar_en_proceso_nuevo()
+        except Exception:
+            _log_crash(f"no pude relanzar el reintento:\n{traceback.format_exc()}")
+            _borrar_pid()
+        return 1
+    else:
+        _borrar_pid()
+        return 0
 
 
 if __name__ == "__main__":

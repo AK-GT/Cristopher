@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from cristopher import bus, estado, voz
+from cristopher import bus, estado, estado_auto, voz
 from cristopher.agent import Cristopher, split_final
 from cristopher.config import (
     HUD_PORT,
@@ -497,18 +497,12 @@ def _sesiones_parar(nombre: str) -> dict:
 # --- Modo code (Fase 1): entrar/salir por botón + tareas para el widget -----------
 # `estado_code` es un flag sin lock propio (como estado.py/estado_diario.py), así que
 # es seguro leerlo/mutarlo directamente desde el hilo HTTP, igual que música/notas.
-# Modo code y Modo redes ocupan la misma pantalla dedicada del HUD (ver style.css
-# body[data-modo=...]) — activar uno desactiva el otro, así el frontend nunca tiene
-# que resolver la ambigüedad de dos flags true a la vez.
+# Code, redes y calendario ocupan la misma pantalla dedicada del HUD (ver style.css
+# body[data-modo=...]); pantalla.py aplica la exclusión mutua en un solo sitio, el
+# mismo que usan las tools, así el frontend nunca ve dos flags true a la vez.
 def _modo_code_set(activo: bool) -> dict:
-    from cristopher import estado_code, estado_redes
-    if activo:
-        estado_code.activar()
-        estado_redes.desactivar()
-        bus.set_modo_redes(False)
-    else:
-        estado_code.desactivar()
-    bus.set_modo_code(activo)
+    from cristopher import pantalla
+    (pantalla.activar if activo else pantalla.desactivar)("code")
     return {"ok": True, "activo": activo}
 
 
@@ -528,23 +522,78 @@ def _modo_voz_set(activo: bool) -> dict:
     return {"ok": True, "activo": activo}
 
 
+# --- Modo automático: botón ⚡ del HUD (ver estado_auto.py) ---------------------
+# Solo se enciende desde aquí, nunca por una tool: el modelo no puede quitarse el gate.
+def _modo_auto_set(activo: bool) -> dict:
+    (estado_auto.activar if activo else estado_auto.desactivar)()
+    bus.set_modo_auto(activo)
+    bus.log("observation", f"[modo automático] {'ACTIVADO: no pediré confirmación' if activo else 'desactivado'}")
+    return {"ok": True, "activo": activo}
+
+
 # --- Modo redes: dashboard de YouTube/Instagram/TikTok (ver CLAUDE.md) ----
 # Mismo mecanismo que Modo code (arriba), en espejo. Al activar, dispara un refresco
 # en un hilo aparte para no dejar la pantalla vacía mientras responde /modo_redes;
 # el hilo de sondeo (_redes_poll_loop) se encarga de mantenerlo fresco mientras el
 # modo siga activo.
 def _modo_redes_set(activo: bool) -> dict:
-    from cristopher import estado_code, estado_redes
+    from cristopher import pantalla
     if activo:
-        estado_redes.activar()
-        estado_code.desactivar()
-        bus.set_modo_code(False)
+        pantalla.activar("redes")
         from cristopher import redes_dashboard
         threading.Thread(target=redes_dashboard.refrescar_todo, daemon=True).start()
     else:
-        estado_redes.desactivar()
-    bus.set_modo_redes(activo)
+        pantalla.desactivar("redes")
     return {"ok": True, "activo": activo}
+
+
+# --- Modo calendario: pantalla de agenda (semana/mes) --------------------------
+# Directo en el hilo HTTP, como redes/tareas: el servicio de Google es por hilo
+# (google_auth), así que no pisa al worker. Caché corta por rango para que el sondeo
+# del navegador no gaste cuota; se vacía en cuanto calendario.py avisa de un cambio.
+_CAL_CACHE: dict[tuple[str, int], tuple[float, dict]] = {}
+_CAL_LOCK = threading.Lock()
+_CAL_TTL = 60.0
+
+
+def _modo_calendario_set(activo: bool) -> dict:
+    from cristopher import pantalla
+    (pantalla.activar if activo else pantalla.desactivar)("calendario")
+    return {"ok": True, "activo": activo}
+
+
+def _on_calendario_cambio() -> None:
+    with _CAL_LOCK:
+        _CAL_CACHE.clear()
+    bus.calendario_cambio()
+
+
+def _calendario_json(desde: str, dias: int) -> dict:
+    """Eventos + huecos libres (≥30 min) de [desde, desde+dias). Errores explícitos
+    en el JSON (p. ej. sin token de Google) para que la pantalla los enseñe."""
+    from datetime import date, timedelta
+    from cristopher import calendario
+    dias = max(1, min(int(dias), 42))
+    clave = (desde, dias)
+    with _CAL_LOCK:
+        hit = _CAL_CACHE.get(clave)
+        if hit and time.time() - hit[0] < _CAL_TTL:
+            return hit[1]
+    try:
+        ini = calendario.inicio_de_dia(date.fromisoformat(desde))
+        fin = calendario.inicio_de_dia(date.fromisoformat(desde) + timedelta(days=dias))
+        eventos = calendario.eventos_rango(ini, fin)
+        huecos = calendario.huecos_libres(ini, fin, 30, eventos=eventos)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    datos = {
+        "ok": True,
+        "eventos": [calendario.a_json(e) for e in eventos],
+        "huecos": [[a.isoformat(), b.isoformat()] for a, b in huecos],
+    }
+    with _CAL_LOCK:
+        _CAL_CACHE[clave] = (time.time(), datos)
+    return datos
 
 
 def _redes_dashboard_json() -> dict:
@@ -667,6 +716,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(_sesiones_conflictos())
         if self.path == "/tareas":
             return self._json(_tareas_listar())
+        if self.path.startswith("/calendario?"):
+            qs = parse_qs(urlparse(self.path).query)
+            desde = (qs.get("desde") or [""])[0]
+            dias = int((qs.get("dias") or ["7"])[0])
+            return self._json(_calendario_json(desde, dias))
         if self.path == "/redes/dashboard":
             return self._json(_redes_dashboard_json())
         if self.path.startswith("/redes/detalle"):
@@ -796,8 +850,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._post_modo_code()
         if self.path == "/modo_redes":
             return self._post_modo_redes()
+        if self.path == "/modo_calendario":
+            return self._json(_modo_calendario_set(bool(self._body_json().get("activo"))))
         if self.path == "/modo_voz":
             return self._post_modo_voz()
+        if self.path == "/modo_auto":
+            return self._post_modo_auto()
         if self.path == "/redes/refrescar":
             return self._json(_redes_refrescar_json())
         if self.path == "/reiniciar":
@@ -1040,6 +1098,10 @@ class Handler(BaseHTTPRequestHandler):
         data = self._body_json()
         self._json(_modo_voz_set(bool(data.get("activo"))))
 
+    def _post_modo_auto(self):
+        data = self._body_json()
+        self._json(_modo_auto_set(bool(data.get("activo"))))
+
     def _post_reiniciar(self):
         # Responde ANTES de matar el proceso: si se hiciera al revés, el navegador
         # se quedaría esperando una respuesta que nunca llega (la conexión muere con
@@ -1097,6 +1159,20 @@ def _demonio_proactivo():
         pass  # degrada con elegancia si no hay Google/permiso
 
 
+def _precalentar_voz():
+    """Carga los modelos de voz (STT y TTS) nada más arrancar, en segundo plano.
+
+    Son ~3 s que hoy paga la PRIMERA frase de cada sesión, mientras el usuario ya
+    está esperando respuesta. Aquí no molestan: el servidor HTTP ya está sirviendo y
+    esto ocurre en su propio hilo daemon. Si falla, se dice (§1) pero no se tumba
+    nada: el primer uso real volverá a intentarlo y dará el error completo."""
+    try:
+        bus.log("observation", "[voz] precalentando modelos…")
+        bus.log("observation", f"[voz] lista: {voz.precalentar()}")
+    except Exception as exc:
+        bus.log("error", f"precalentado de voz: {exc}")
+
+
 def _whatsapp_comandos_watcher():
     try:
         from cristopher import whatsapp_comandos
@@ -1143,26 +1219,50 @@ def _reiniciar_total():
     desde cero, para cuando se prueban cambios de código y no compensa cerrar la
     consola y volver a teclear `python -m cristopher` a mano.
 
-    El relanzamiento pasa por un `cmd /c timeout` en vez de un `subprocess.Popen`
-    directo al nuevo proceso: `_otra_instancia_viva()` decide "ya hay un HUD vivo"
-    con solo poder conectar al puerto, así que si el proceso nuevo arrancara antes
-    de que este suelte el socket, se confundiría y se limitaría a reabrir la
-    pestaña en vez de levantar un HUD de verdad. El `timeout` le da margen de sobra
-    (este proceso muere con os._exit casi al instante después de lanzarlo).
+    El proceso nuevo NO debe arrancar mientras este siga escuchando:
+    `_otra_instancia_viva()` decide "ya hay un HUD vivo" con solo poder conectar al
+    puerto, y entonces se limitaría a reabrir la pestaña. Por eso el hijo es un
+    Python que primero ESPERA a que el puerto deje de responder y solo entonces
+    arranca `cristopher` (runpy, mismo efecto que `-m cristopher`).
+
+    Antes esto pasaba por `cmd /c "timeout ... & "python" -m cristopher"` y nunca
+    relanzaba: subprocess escapaba las comillas internas como \\" (cmd no lo
+    entiende → "no se reconoce como un comando") y, además, `timeout` aborta sin
+    consola ("No es compatible la redirección de entradas"). El botón mataba
+    CRISTOPHER y lo dejaba muerto. Sin cmd de por medio, no hay comillas que escapar.
     """
     time.sleep(0.3)  # deja salir la respuesta HTTP antes de morir
+    espera_y_arranca = (
+        "import runpy, socket, time\n"
+        "fin = time.time() + 20\n"
+        "while time.time() < fin:\n"
+        "    try:\n"
+        f"        socket.create_connection(('127.0.0.1', {HUD_PORT}), timeout=0.5).close()\n"
+        "    except OSError:\n"
+        "        break\n"
+        "    time.sleep(0.3)\n"
+        "runpy.run_module('cristopher', run_name='__main__', alter_sys=True)\n"
+    )
     try:
         log = open(REINICIO_LOG, "a", encoding="utf-8")
-        comando = f'timeout /t 2 /nobreak >nul & "{sys.executable}" -m cristopher'
+        log.write(f"\n--- reinicio {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+        log.flush()
         subprocess.Popen(
-            ["cmd", "/c", comando],
+            [sys.executable, "-c", espera_y_arranca],
             cwd=str(ROOT),
             stdout=log,
             stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            # Grupo propio: que no muera con este proceso ni reciba su Ctrl+C.
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
         )
-    except Exception:
-        pass  # aunque falle el relanzamiento, seguimos matando este proceso
+    except Exception as exc:
+        # Aunque falle el relanzamiento, seguimos matando este proceso — pero que
+        # quede escrito por qué (§1: fallos explícitos), no tragado en silencio.
+        try:
+            with open(REINICIO_LOG, "a", encoding="utf-8") as f:
+                f.write(f"ERROR relanzando: {exc}\n")
+        except Exception:
+            pass
     os._exit(0)
 
 
@@ -1200,6 +1300,8 @@ def main() -> int:
     get_gestor_sesiones().set_on_evento(_on_evento_sesion)
     from cristopher.programador import get_programador
     get_programador().recuperar_huerfanas()
+    from cristopher import calendario
+    calendario.set_on_cambio(_on_calendario_cambio)
     # Kill-switch del Modo Control Total (Fase 1): registrado desde el arranque del
     # sistema vivo, no desde un script aparte — queda escuchando todo lo que dure este
     # proceso. Inofensivo mientras no haya ninguna primitiva de control_total en marcha
@@ -1218,6 +1320,7 @@ def main() -> int:
     threading.Thread(target=_whatsapp_comandos_watcher, daemon=True).start()
     threading.Thread(target=_redes_poll_loop, daemon=True).start()
     threading.Thread(target=_seguro_vigilante_thread, daemon=True).start()
+    threading.Thread(target=_precalentar_voz, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", HUD_PORT), Handler)
     url = f"http://localhost:{HUD_PORT}"
     # Mismo guard que cristopher/__main__.py: bajo pythonw (sin consola) sys.stdout es

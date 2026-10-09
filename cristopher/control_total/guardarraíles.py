@@ -91,7 +91,7 @@ def evaluar(
             f"CRISTOPHER (Modo Control Total) quiere ejecutar {accion}({args}) — "
             f"parece un caso de {riesgo.replace('_', ' ')}. ¿Confirmas?"
         )
-        aprobado = confirmar_accion(prompt)
+        aprobado = confirmar_accion(prompt, permitir_auto=False)
         log.info(
             "guardarraíl %s -> %s (%s%s)",
             riesgo, "ejecutar" if aprobado else "omitir", accion, args,
@@ -104,7 +104,8 @@ def evaluar(
         if CONTROL_TOTAL_GESTOR_CONTRASENAS_HOTKEY:
             aprobado = confirmar_accion(
                 "Veo un campo de contraseña. ¿Disparo el atajo de tu gestor de "
-                "contraseñas para rellenarla?"
+                "contraseñas para rellenarla?",
+                permitir_auto=False,
             )
             log.info(
                 "guardarraíl password -> %s (atajo del gestor)",
@@ -117,14 +118,16 @@ def evaluar(
                 )
             return "omitir", "", {}
         confirmar_accion(
-            "Veo un campo de contraseña. Rellénalo tú a mano y confirma para seguir."
+            "Veo un campo de contraseña. Rellénalo tú a mano y confirma para seguir.",
+            permitir_auto=False,
         )
         log.info("guardarraíl password -> omitir (sin gestor configurado, rellenar a mano)")
         return "omitir", "", {}
 
     # captcha
     confirmar_accion(
-        "Veo lo que parece un CAPTCHA. Resuélvelo tú a mano y confirma para seguir."
+        "Veo lo que parece un CAPTCHA. Resuélvelo tú a mano y confirma para seguir.",
+        permitir_auto=False,
     )
     log.info("guardarraíl captcha -> omitir (resolver a mano)")
     return "omitir", "", {}

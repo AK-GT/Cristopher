@@ -288,15 +288,50 @@ def _voz_block() -> str:
     )
 
 
-def build_system_prompt() -> str:
+_DIAS_SEMANA = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+
+
+def _ahora_block() -> str:
+    """Fecha y hora locales. Sin esto el modelo no sabe qué día es y resuelve mal
+    "el viernes a las 10" al pasar fechas ISO a crear_evento/recordatorios/programadas.
+    Se recompone en cada paso del bucle, así que nunca queda desfasado. Día de la
+    semana a mano: el locale de Windows no es fiable para strftime('%A')."""
+    ahora = datetime.datetime.now().astimezone()
+    return (
+        "# AHORA\n"
+        f"Hoy es {_DIAS_SEMANA[ahora.weekday()]} {ahora:%Y-%m-%d}, son las "
+        f"{ahora:%H:%M} (hora local, UTC{ahora:%z}). Usa esto para resolver fechas "
+        "relativas ('mañana', 'el jueves', 'la semana que viene') a ISO 8601 exacto."
+    )
+
+
+def build_system_prompt(descripciones_completas: bool = False) -> str:
     """Compone el system prompt: identidad + capacidades AUTO-GENERADAS desde el
     registro TOOLS + personalidad (base fija + directivas adaptables que CRISTOPHER
     mismo guarda en personalidad.py) + bloque de modo diario si está activo. Se llama
     de nuevo en cada turno (Cristopher.send) para que una autoedición de personalidad
     o un cambio de modo a mitad de conversación rija de inmediato, sin reiniciar el
-    proceso."""
-    lines = [f"- {t['name']}: {t['description']}" for t in TOOLS]
-    tools_block = "# 6. HERRAMIENTAS QUE TENGO\n" + "\n".join(lines)
+    proceso.
+
+    Por defecto la sección de herramientas lleva SOLO los nombres: el bucle ya manda
+    nombre + descripción + parámetros de cada una en las declaraciones de function
+    calling, y repetir aquí las descripciones costaba ~10.700 tokens en CADA paso (un
+    32% de la petición) sin dar nada nuevo. Los nombres se quedan para que el
+    auto-conocimiento (§3) siga saliendo del registro real. `descripciones_completas`
+    es para quien usa este prompt SIN declaraciones (el cofundador de proactivo.py),
+    que si no se quedaría sin saber qué hace cada herramienta."""
+    if descripciones_completas:
+        tools_block = "# 6. HERRAMIENTAS QUE TENGO\n" + "\n".join(
+            f"- {t['name']}: {t['description']}" for t in TOOLS
+        )
+    else:
+        tools_block = (
+            f"# 6. HERRAMIENTAS QUE TENGO ({len(TOOLS)})\n"
+            "Estas son TODAS tus herramientas reales; qué hace cada una y sus "
+            "parámetros están en las declaraciones de función que recibes con cada "
+            "petición. Si te preguntan qué sabes hacer, responde desde ahí, sin "
+            "inventar capacidades:\n" + ", ".join(t["name"] for t in TOOLS)
+        )
     personality_block = PERSONALITY_BASE
     directivas = personalidad.formatear_para_prompt()
     if directivas:
@@ -311,6 +346,7 @@ def build_system_prompt() -> str:
     voz_block = _voz_block()
     if voz_block:
         parts.append(voz_block)
+    parts.append(_ahora_block())
     return "\n\n".join(parts)
 
 
@@ -347,6 +383,94 @@ MAX_STEPS = 40
 # `bus._log` y en todos los navegadores conectados por SSE. Volcar una credencial en
 # un log está prohibido en §8 de CLAUDE.md.
 _HERRAMIENTAS_SIN_TRAZA = {"seguro_enrolar", "seguro_configurar_contrasena"}
+
+
+# --- Ventana de historial ---------------------------------------------------------
+# Antes el historial de la sesión crecía sin límite y se reenviaba ENTERO en cada paso
+# del bucle (cada página leída, cada listado de correo, cada PDF adjunto): una sesión
+# larga acababa mandando decenas de miles de tokens viejos por paso, con más latencia
+# y más 429 por tokens/minuto. Ahora se conservan los últimos HISTORIAL_TURNOS turnos
+# del usuario; de esos, los HISTORIAL_COMPLETOS más recientes van íntegros y los
+# anteriores, comprimidos. Lo que importa a largo plazo ya lo guardan memory.py y la
+# memoria episódica, que no dependen de este historial.
+HISTORIAL_TURNOS = 8
+HISTORIAL_COMPLETOS = 2
+_OBS_MAX = 800        # caracteres que se conservan de una observación vieja
+_PENSAMIENTO_MAX = 300
+_FIN_MEMORIA = "[Fin de la memoria]\n\n"
+
+
+def _es_turno_usuario(c: types.Content) -> bool:
+    """Un mensaje REAL del usuario, no una function_response (que también va con
+    role='user' en la API de Gemini)."""
+    partes = c.parts or []
+    return c.role == "user" and not any(p.function_response for p in partes)
+
+
+def _recortar(texto: str, maximo: int, aviso: str) -> str:
+    if len(texto) <= maximo:
+        return texto
+    return f"{texto[:maximo]}… [{aviso}: {len(texto) - maximo} car. omitidos]"
+
+
+def _comprimir(c: types.Content) -> types.Content:
+    """Versión ligera de un mensaje viejo. Nunca quita una parte ni toca un
+    function_call: Gemini exige que cada llamada vaya seguida de su respuesta (si no,
+    400), y los function_call llevan un thought_signature que no se puede rearmar."""
+    nuevas: list[types.Part] = []
+    for p in c.parts or []:
+        if p.function_response:
+            fr = p.function_response
+            res = dict(fr.response or {})
+            if isinstance(res.get("result"), str):
+                res["result"] = _recortar(
+                    res["result"], _OBS_MAX,
+                    f"resultado viejo recortado; si te hace falta, vuelve a llamar a {fr.name}",
+                )
+            nuevas.append(types.Part(function_response=fr.model_copy(update={"response": res})))
+        elif getattr(p, "inline_data", None):
+            # Imágenes/PDF viejos son lo más caro del historial: fuera, con rastro.
+            nuevas.append(types.Part(text=f"[adjunto antiguo omitido: {p.inline_data.mime_type}]"))
+        elif p.text and c.role == "user":
+            # El bloque de memoria recordada se volverá a recuperar si viene a cuento.
+            texto = p.text.split(_FIN_MEMORIA, 1)[-1]
+            nuevas.append(types.Part(text=texto))
+        elif p.text and c.role == "model":
+            # De una respuesta final vieja basta lo que se le dijo al usuario; del
+            # razonamiento intermedio, el principio.
+            texto = p.text
+            if RESPONSE_MARKER in texto:
+                texto = texto.split(RESPONSE_MARKER, 1)[1].strip()
+            else:
+                texto = _recortar(texto, _PENSAMIENTO_MAX, "razonamiento viejo recortado")
+            nuevas.append(types.Part(text=texto))
+        else:
+            nuevas.append(p)  # function_call (con su firma) y cualquier otra cosa, intacto
+    return types.Content(role=c.role, parts=nuevas)
+
+
+def _recortar_historial(contents: list[types.Content]) -> None:
+    """Aplica la ventana EN SITIO (es el buffer del modo, no una copia), justo antes
+    de añadir el mensaje nuevo del usuario. El corte cae siempre justo antes de un
+    mensaje real del usuario, así que la conversación nunca empieza por una
+    function_response huérfana.
+
+    Se comprime SOLO el turno que acaba de salir de los HISTORIAL_COMPLETOS recientes
+    (se llama una vez por turno, así que cada turno se comprime exactamente una vez):
+    recomprimir lo ya comprimido perdería el marcador de respuesta y recortaría de
+    nuevo respuestas finales que ya eran solo lo dicho al usuario."""
+    inicios = [i for i, c in enumerate(contents) if _es_turno_usuario(c)]
+    previos = HISTORIAL_TURNOS - 1  # + el mensaje que se va a añadir = HISTORIAL_TURNOS
+    if len(inicios) > previos:
+        del contents[: inicios[-previos]]
+        inicios = [i for i, c in enumerate(contents) if _es_turno_usuario(c)]
+    # Con el mensaje nuevo que se va a añadir, el turno inicios[-HISTORIAL_COMPLETOS]
+    # pasa a ser el (COMPLETOS+1)-ésimo más reciente: ese es el que se comprime.
+    if len(inicios) >= HISTORIAL_COMPLETOS:
+        desde = inicios[-HISTORIAL_COMPLETOS]
+        hasta = inicios[-HISTORIAL_COMPLETOS + 1] if HISTORIAL_COMPLETOS > 1 else len(contents)
+        for i in range(desde, hasta):
+            contents[i] = _comprimir(contents[i])
 
 
 def _to_gemini_type(node: Any) -> Any:
@@ -672,6 +796,8 @@ class Cristopher:
         parts = [types.Part(text=context + user_message)]
         for data, mime_type in imagenes or []:
             parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
+        # Ventana de historial: que el coste por paso no crezca durante el día.
+        _recortar_historial(contents)
         contents.append(types.Content(role="user", parts=parts))
 
         for _ in range(MAX_STEPS):

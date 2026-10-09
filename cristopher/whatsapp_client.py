@@ -33,6 +33,7 @@ from cristopher.config import (
 )
 
 _BASE_URL = f"http://127.0.0.1:{WHATSAPP_PORT}"
+_LOG_MAX_BYTES = 20 * 1024 * 1024
 
 
 class WhatsAppError(RuntimeError):
@@ -72,6 +73,13 @@ def _spawn() -> subprocess.Popen:
     env["CRISTOPHER_WHATSAPP_SESSION_DIR"] = str(WHATSAPP_SESSION_DIR)
     env["CRISTOPHER_WHATSAPP_STORE_DIR"] = str(WHATSAPP_STORE_DIR)
 
+    # libsignal vuelca cada rotación de sesión por consola ("Closing session...") y el
+    # log llegó a 800 MB. Al lanzar, si pasa del tope, se aparta (una sola copia).
+    try:
+        if WHATSAPP_LOG.exists() and WHATSAPP_LOG.stat().st_size > _LOG_MAX_BYTES:
+            WHATSAPP_LOG.replace(WHATSAPP_LOG.with_suffix(".log.old"))
+    except OSError:
+        pass  # en Windows falla si otro proceso aún lo tiene abierto: se rota otro día
     log = open(WHATSAPP_LOG, "a", encoding="utf-8")
     # CREATE_NO_WINDOW: sin esto, cada intento de arranque (p. ej. si node crashea al
     # instante por un módulo que falta) abre y cierra una consola de Node visible —

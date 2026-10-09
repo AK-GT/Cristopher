@@ -20,6 +20,7 @@ const {
 const pino = require("pino");
 
 const BACKOFF_MS = [2000, 4000, 8000, 16000, 32000];
+const REPLACED_ESPERA_MS = 60000;
 
 function extraerTexto(mensaje) {
   const m = mensaje.message;
@@ -55,6 +56,35 @@ function detectarMedia(mensaje) {
     };
   }
   return null;
+}
+
+function jsonValido(ruta) {
+  try {
+    JSON.parse(fs.readFileSync(ruta, "utf-8"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * creds.json lo reescribe Baileys sin escritura atomica: si el proceso muere a mitad
+ * (ya paso: quedo en 0 bytes y se perdio la vinculacion), la sesion entera se va.
+ * Tras cada guardado bueno dejamos copia en creds.json.bak y al arrancar la
+ * restauramos si creds.json esta vacio o corrupto.
+ */
+function restaurarCredsSiRoto(sessionDir) {
+  const creds = path.join(sessionDir, "creds.json");
+  const bak = creds + ".bak";
+  if (fs.existsSync(creds) && !jsonValido(creds) && jsonValido(bak)) {
+    fs.copyFileSync(bak, creds);
+    console.error("creds.json estaba corrupto: restaurado desde creds.json.bak");
+  }
+}
+
+function respaldarCreds(sessionDir) {
+  const creds = path.join(sessionDir, "creds.json");
+  if (jsonValido(creds)) fs.copyFileSync(creds, creds + ".bak");
 }
 
 function sanearNombreArchivo(id) {
@@ -127,6 +157,7 @@ class ConexionWhatsApp {
     this._onQr = onQr;
     this._onMensaje = onMensaje;
 
+    restaurarCredsSiRoto(this.sessionDir);
     const { state, saveCreds } = await useMultiFileAuthState(this.sessionDir);
     this._authState = state;
 
@@ -147,9 +178,20 @@ class ConexionWhatsApp {
       printQRInTerminal: false,
     });
 
-    this.sock.ev.on("creds.update", saveCreds);
+    this.sock.ev.on("creds.update", async () => {
+      await saveCreds();
+      try {
+        respaldarCreds(this.sessionDir);
+      } catch (exc) {
+        console.error("No pude respaldar creds.json:", exc && exc.message);
+      }
+    });
 
+    const sock = this.sock;
     this.sock.ev.on("connection.update", (update) => {
+      // Un socket viejo que aun emita eventos no debe disparar otra reconexion:
+      // dos sockets con las mismas claves se echan el uno al otro en bucle.
+      if (sock !== this.sock) return;
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
@@ -171,10 +213,25 @@ class ConexionWhatsApp {
           lastDisconnect.error &&
           lastDisconnect.error.output &&
           lastDisconnect.error.output.statusCode;
+        console.error(`[${new Date().toISOString()}] conexion cerrada, motivo=${razon}`);
 
         if (razon === DisconnectReason.loggedOut) {
           this.estado = "logged_out";
           return; // sesion invalidada: no reintentar, hace falta re-escanear
+        }
+
+        if (razon === DisconnectReason.connectionReplaced) {
+          // 440: otro proceso (setup_qr.js, otro server.js...) abrio la MISMA sesion.
+          // Reintentar aqui era el bucle de "conectado" cada pocos segundos: cada
+          // instancia echaba a la otra y volvia a entrar. Cedemos y solo volvemos a
+          // probar pasado un minuto (p. ej. cuando setup_qr.js ya haya terminado).
+          this.estado = "close";
+          setTimeout(() => {
+            this.iniciar({ mostrarQr, onQr: this._onQr, onMensaje: this._onMensaje }).catch(() => {
+              this.estado = "close";
+            });
+          }, REPLACED_ESPERA_MS);
+          return;
         }
 
         if (this._onQr === null && this.estado === "qr_required") {

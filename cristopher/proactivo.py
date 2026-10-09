@@ -123,7 +123,10 @@ def _redactar_respuesta_sesion(sesion: dict, transcript: list[dict]) -> tuple[st
         client = genai.Client(api_key=get_api_key())
     except Exception as exc:
         return "", f"(no pude redactar una propuesta: {exc})"
-    system_instruction = build_system_prompt()
+    # Completas: esta llamada NO lleva declaraciones de function calling, así que la
+    # lista de nombres a secas (lo que usa el bucle) le dejaría sin saber qué hace cada
+    # herramienta al proponer respuestas.
+    system_instruction = build_system_prompt(descripciones_completas=True)
     for model in [CLASSIFIER_MODEL, FALLBACK_MODEL]:
         if not model:
             continue
@@ -248,36 +251,20 @@ class Demonio:
     # --- Fuentes de avisos: devuelven [(clave, mensaje), ...] ------------------
     def _avisos_calendario(self) -> list[tuple[str, str]]:
         try:
-            from cristopher.google_auth import get_calendar
+            from cristopher import calendario
 
-            svc = get_calendar()
-            now = datetime.now(timezone.utc)
-            events = (
-                svc.events()
-                .list(
-                    calendarId="primary", timeMin=now.isoformat(), singleEvents=True,
-                    orderBy="startTime", maxResults=10,
-                )
-                .execute()
-                .get("items", [])
-            )
+            events = calendario.proximos(10)
         except Exception:
             return []
         avisos = []
         for e in events:
-            start = e.get("start", {}).get("dateTime")
-            if not start:
+            if e["todo_el_dia"]:
                 continue  # eventos de día completo: no son avisos "inminentes"
-            try:
-                inicio = datetime.fromisoformat(start)
-            except ValueError:
-                continue
-            mins = (inicio - datetime.now(timezone.utc)).total_seconds() / 60
+            mins = (e["inicio"] - datetime.now(timezone.utc)).total_seconds() / 60
             if 0 <= mins <= LEAD_MINUTOS:
-                titulo = e.get("summary", "(sin título)")
-                hora = inicio.astimezone().strftime("%H:%M")
+                hora = e["inicio"].strftime("%H:%M")
                 avisos.append(
-                    (f"cal:{e.get('id')}", f"Tienes «{titulo}» a las {hora} (en {int(mins)} min).")
+                    (f"cal:{e['id']}", f"Tienes «{e['titulo']}» a las {hora} (en {int(mins)} min).")
                 )
         return avisos
 

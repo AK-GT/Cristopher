@@ -8,7 +8,7 @@ a diferencia de sesiones.py, estado_code no necesita probarse aislado del HUD.
 
 from __future__ import annotations
 
-from cristopher import bus, estado_code, estado_redes
+from cristopher import pantalla
 
 
 def activar_modo_code() -> str:
@@ -18,12 +18,9 @@ def activar_modo_code() -> str:
     agentes/sesiones de programación ('vamos a gestionar unas sesiones de código',
     'ponme en modo code', 'quiero programar con agentes'). Si no está claro,
     pregúntale antes en lugar de activarlo."""
-    estado_code.activar()
-    # Modo code y Modo redes comparten la misma pantalla dedicada del HUD y son
-    # mutuamente excluyentes (ver redes_modo_tools.py / style.css body[data-modo]).
-    estado_redes.desactivar()
-    bus.set_modo_redes(False)
-    bus.set_modo_code(True)
+    # Comparte la pantalla dedicada del HUD con redes/calendario: pantalla.py apaga
+    # el que estuviera ocupándola.
+    pantalla.activar("code")
     return "Modo code activado: a gestionar sesiones."
 
 
@@ -31,6 +28,5 @@ def desactivar_modo_code() -> str:
     """Desactiva el modo code y vuelve al comportamiento normal. Úsalo cuando el
     usuario dé la sesión de trabajo con agentes por terminada ('ya está', 'salgamos
     de modo code', 'volvamos a lo normal')."""
-    estado_code.desactivar()
-    bus.set_modo_code(False)
+    pantalla.desactivar("code")
     return "Modo code desactivado."

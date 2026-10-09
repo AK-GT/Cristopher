@@ -24,6 +24,10 @@ from cristopher.tools.redes_modo_tools import (
     activar_modo_redes,
     desactivar_modo_redes,
 )
+from cristopher.tools.calendario_modo_tools import (
+    activar_modo_calendario,
+    desactivar_modo_calendario,
+)
 from cristopher.tools.control_total_tools import (
     activar_control_total,
     desactivar_control_total,
@@ -80,12 +84,15 @@ from cristopher.tools.control_pc_tools import (
 from cristopher.tools.delegate import analizar_proyecto, delegar_a_claude
 from cristopher.tools.elite_search import busqueda_elite
 from cristopher.tools.google_tools import (
+    borrar_evento,
     buscar_correos,
+    buscar_hueco,
     crear_evento,
     enviar_correo,
     marcar_leido,
-    proximo_evento,
+    modificar_evento,
     responder_correo,
+    ver_agenda,
 )
 from cristopher.tools.huella_tools import (
     huella_ampliar,
@@ -589,27 +596,57 @@ TOOLS: list[dict[str, Any]] = [
         "fn": busqueda_elite,
     },
     {
-        "name": "proximo_evento",
+        "name": "ver_agenda",
         "description": (
-            "Lee los próximos eventos del Google Calendar del usuario (fecha/hora, "
-            "título, lugar). Úsala para saber qué tiene agendado."
+            "Lee el Google Calendar del usuario: lo que tiene un día o entre dos fechas "
+            "('¿qué tengo el jueves?', 'mi semana'), o sin fechas los próximos eventos. "
+            "Cada evento sale con su [id:…], que necesitas para modificar_evento/"
+            "borrar_evento. Fechas ya resueltas a ISO (usa la fecha de # AHORA)."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "n": {"type": "integer", "description": "Cuántos eventos próximos (por defecto 1)."},
+                "desde": {
+                    "type": "string",
+                    "description": "Inicio: 'YYYY-MM-DD' o ISO con hora. Solo 'desde' con una fecha = ese día entero.",
+                },
+                "hasta": {"type": "string", "description": "Fin: 'YYYY-MM-DD' (inclusive) o ISO con hora."},
+                "n": {"type": "integer", "description": "Sin fechas: cuántos próximos eventos (por defecto 10)."},
             },
             "required": [],
         },
-        "fn": proximo_evento,
+        "fn": ver_agenda,
+    },
+    {
+        "name": "buscar_hueco",
+        "description": (
+            "Busca huecos LIBRES en el calendario (franja 8:00-22:00) de al menos cierta "
+            "duración. Úsala cuando el usuario quiera saber dónde le cabe algo o pida "
+            "agendar sin decir hora ('búscame una hora libre esta semana para el "
+            "gimnasio'); luego propón un hueco y crea con crear_evento."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "duracion_min": {"type": "integer", "description": "Minutos necesarios (por defecto 60)."},
+                "desde": {"type": "string", "description": "'YYYY-MM-DD' o ISO. Vacío = ahora."},
+                "hasta": {
+                    "type": "string",
+                    "description": "'YYYY-MM-DD' (inclusive) o ISO. Vacío = ese día si 'desde' es un día, o 7 días.",
+                },
+            },
+            "required": [],
+        },
+        "fn": buscar_hueco,
     },
     {
         "name": "crear_evento",
         "description": (
             "Crea un evento en el Google Calendar principal. SIEMPRE pide confirmación "
-            "del usuario antes de crear (acción con efectos); el usuario confirmará o "
-            "cancelará. 'inicio' y 'fin' deben ir en formato ISO 8601 con fecha y hora "
-            "ya resueltas (p. ej. '2026-07-17T10:00:00'), nunca lenguaje natural."
+            "del usuario antes de crear (acción con efectos) y el borrador avisa si se "
+            "solapa con algo. 'inicio'/'fin' en ISO 8601 ya resuelto (p. ej. "
+            "'2026-07-17T10:00:00'), nunca lenguaje natural. Sin 'fin' dura 1 hora. "
+            "Para día completo pasa solo la fecha ('2026-07-17')."
         ),
         "parameters": {
             "type": "object",
@@ -617,18 +654,56 @@ TOOLS: list[dict[str, Any]] = [
                 "titulo": {"type": "string", "description": "Título del evento."},
                 "inicio": {
                     "type": "string",
-                    "description": "Fecha/hora de inicio en ISO 8601, p. ej. '2026-07-17T10:00:00'.",
+                    "description": "Inicio en ISO 8601, p. ej. '2026-07-17T10:00:00', o 'YYYY-MM-DD' para día completo.",
                 },
                 "fin": {
                     "type": "string",
-                    "description": "Fecha/hora de fin en ISO 8601, p. ej. '2026-07-17T11:00:00'.",
+                    "description": "Fin en ISO 8601. Vacío = 1 hora. En día completo: último día (inclusive).",
                 },
                 "descripcion": {"type": "string", "description": "Descripción opcional."},
                 "ubicacion": {"type": "string", "description": "Lugar opcional."},
+                "todo_el_dia": {"type": "boolean", "description": "Evento de día completo."},
             },
-            "required": ["titulo", "inicio", "fin"],
+            "required": ["titulo", "inicio"],
         },
         "fn": crear_evento,
+    },
+    {
+        "name": "modificar_evento",
+        "description": (
+            "Modifica un evento existente: moverlo de día/hora, renombrarlo, cambiar "
+            "lugar o descripción. Pide confirmación enseñando antes/después. Necesita el "
+            "id: si no lo tienes, llama antes a ver_agenda. Los campos que no pases no se "
+            "tocan; cambiar solo 'inicio' conserva la duración."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "evento_id": {"type": "string", "description": "El [id:…] que da ver_agenda."},
+                "titulo": {"type": "string", "description": "Nuevo título."},
+                "inicio": {"type": "string", "description": "Nuevo inicio en ISO 8601."},
+                "fin": {"type": "string", "description": "Nuevo fin en ISO 8601."},
+                "descripcion": {"type": "string", "description": "Nueva descripción."},
+                "ubicacion": {"type": "string", "description": "Nuevo lugar."},
+            },
+            "required": ["evento_id"],
+        },
+        "fn": modificar_evento,
+    },
+    {
+        "name": "borrar_evento",
+        "description": (
+            "Borra un evento del calendario. Pide confirmación. Necesita el id: si no lo "
+            "tienes, llama antes a ver_agenda."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "evento_id": {"type": "string", "description": "El [id:…] que da ver_agenda."},
+            },
+            "required": ["evento_id"],
+        },
+        "fn": borrar_evento,
     },
     {
         "name": "buscar_correos",
@@ -1755,6 +1830,35 @@ TOOLS: list[dict[str, Any]] = [
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
         "fn": desactivar_modo_redes,
+    },
+    # --- Modo calendario (pantalla de agenda del HUD) ----------------------------
+    # ver_agenda/buscar_hueco/crear/modificar/borrar_evento ya abren la pantalla solas;
+    # estas dos son para "enséñame el calendario" y "ciérralo" sin pedir un dato.
+    {
+        "name": "activar_modo_calendario",
+        "description": (
+            "Abre en el HUD la pantalla de calendario (semana/mes con los huecos "
+            "libres). Úsala cuando el usuario quiera VER su calendario sin pedir un "
+            "dato concreto ('enséñame el calendario', 'abre la agenda', 'quiero ver "
+            "mi semana'). Para preguntas concretas usa ver_agenda, que ya la abre."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fecha": {"type": "string", "description": "Día en que centrar la vista ('YYYY-MM-DD'). Vacío = hoy."},
+            },
+            "required": [],
+        },
+        "fn": activar_modo_calendario,
+    },
+    {
+        "name": "desactivar_modo_calendario",
+        "description": (
+            "Cierra la pantalla de calendario y vuelve al HUD normal ('cierra el "
+            "calendario', 'ya está con la agenda')."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "fn": desactivar_modo_calendario,
     },
     # --- Modo Control Total (Fase 4: ratón/teclado autónomos) -------------------
     {

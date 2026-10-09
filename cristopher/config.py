@@ -238,6 +238,12 @@ VOICE_DIR = DATA / "voice"
 WHISPER_DIR = VOICE_DIR / "whisper"          # caché del modelo faster-whisper
 STT_MODEL = os.getenv("CRISTOPHER_STT_MODEL", "small")  # tamaño de faster-whisper
 STT_LANG = "es"
+# Dónde corre faster-whisper: "auto" (GPU si se puede, si no CPU), "cuda" o "cpu".
+# Medido en esta máquina con el modelo `small`: CPU int8 tarda ~1,5 s en transcribir
+# 3,3 s de audio (y NO escala con cpu_threads: 4/8/16 dan lo mismo), mientras que la
+# GPU lo hace en ~0,15 s. Es el mayor ahorro fijo del camino de voz, así que "auto"
+# intenta la GPU primero y cae a CPU sin drama si falta algo (ver voz._get_whisper).
+STT_DEVICE = os.getenv("CRISTOPHER_STT_DEVICE", "auto").strip().lower()
 VOZ_DEFECTO = "es_ES-davefx-medium"  # nombre de la voz Piper por defecto
 
 # --- Voz ElevenLabs (TTS en la nube, opcional) --------------------------------
@@ -434,6 +440,9 @@ CONTROL_TOTAL_OVERLAY_PID = DATA / "control_total_overlay.pid"
 
 # --- Fase 1: Modo Seguro (seguro.py) -------------------------------------------
 SEGURO_OVERLAY_PID = DATA / "seguro_overlay.pid"   # PID-guard del overlay de bloqueo
+SEGURO_OVERLAY_LOG = DATA / "seguro_overlay.log"   # crashes del overlay: corre bajo
+                                                    # pythonw, sin stdout/stderr (bpo-13120)
+SEGURO_WEBVIEW_CACHE = DATA / "seguro_webview_cache"  # ver seguro_overlay.py::lanzar
 
 
 class ConfigError(RuntimeError):

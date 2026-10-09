@@ -10,6 +10,7 @@ Errores explícitos y accionables si falta algo (§1: no fingir éxito).
 
 from __future__ import annotations
 
+import threading
 from typing import Optional
 
 from cristopher.config import (
@@ -24,8 +25,12 @@ class GoogleAuthError(RuntimeError):
     """Falta de credenciales o fallo de autenticación con Google."""
 
 
-# Servicios cacheados (build perezoso).
-_SERVICES: dict[str, object] = {}
+# Servicios cacheados POR HILO (build perezoso). El cliente de googleapiclient va sobre
+# httplib2, que no es thread-safe: compartir un único servicio entre el worker del
+# agente, el demonio proactivo y el hilo HTTP del HUD da errores SSL/respuestas
+# cruzadas intermitentes. build() usa el discovery estático, así que uno por hilo es
+# barato.
+_LOCAL = threading.local()
 
 
 def _load_credentials():
@@ -79,14 +84,17 @@ def _save_token(creds) -> None:
 
 
 def _get_service(name: str, version: str):
-    """Construye (y cachea) un servicio autorizado de la API de Google."""
+    """Construye (y cachea en este hilo) un servicio autorizado de la API de Google."""
+    servicios = getattr(_LOCAL, "servicios", None)
+    if servicios is None:
+        servicios = _LOCAL.servicios = {}
     key = f"{name}:{version}"
-    if key not in _SERVICES:
+    if key not in servicios:
         from googleapiclient.discovery import build
 
         creds = _load_credentials()
-        _SERVICES[key] = build(name, version, credentials=creds, cache_discovery=False)
-    return _SERVICES[key]
+        servicios[key] = build(name, version, credentials=creds, cache_discovery=False)
+    return servicios[key]
 
 
 def get_calendar():

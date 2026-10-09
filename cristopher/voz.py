@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -34,6 +35,7 @@ from cristopher.config import (
     ELEVENLABS_API_KEY,
     ELEVENLABS_CACHE_DIR,
     ELEVENLABS_MODEL,
+    STT_DEVICE,
     STT_LANG,
     STT_MODEL,
     VOICE_DIR,
@@ -44,7 +46,12 @@ from cristopher.config import (
 SR = 16000  # tasa de muestreo para el micrófono / STT
 
 _whisper = None
+_whisper_device: Optional[str] = None  # dispositivo REAL en uso ("cuda" o "cpu")
 _piper_cache: dict[str, Any] = {}  # nombre de voz -> PiperVoice cargada
+# Cargar un modelo tarda segundos y ahora hay DOS hilos que pueden pedirlo a la vez:
+# el precalentado del arranque (`precalentar`) y el hilo HTTP del HUD si el usuario
+# habla antes de que termine. Sin estos locks, ambos cargarían su propia copia.
+_carga_lock = threading.Lock()
 
 # Catálogo de voces Piper en español, de un único hablante. Las "oficial" están
 # verificadas contra el índice de rhasspy/piper-voices (se excluye es_ES-sharvard por
@@ -90,19 +97,105 @@ class VozError(RuntimeError):
 
 
 # --- STT ----------------------------------------------------------------------
-def _get_whisper():
-    global _whisper
-    if _whisper is None:
+def _registrar_dlls_cuda() -> None:
+    """Mete en la ruta de búsqueda de DLLs de Windows las de CUDA que vienen en los
+    wheels de pip (`nvidia-cublas-cu12`).
+
+    ctranslate2 ya trae su `cudnn64_9.dll` dentro del paquete, pero NO cuBLAS: sin
+    esto, `device="cuda"` muere con «Library cublas64_12.dll is not found or cannot
+    be loaded» (verificado en esta máquina).
+
+    Hacen falta LAS DOS cosas, y por motivos distintos: `add_dll_directory` porque
+    desde Python 3.8 en Windows el PATH ya no vale para las dependencias de un módulo
+    de extensión, y el PATH porque ctranslate2 NO carga cuBLAS al importarse ni al
+    construir el modelo, sino al ejecutar el primer cómputo — y esa carga tardía sí
+    pasa por el orden de búsqueda clásico. Solo con `add_dll_directory` el modelo se
+    construye sin quejarse y revienta luego, al transcribir (pisado, media hora de
+    depuración)."""
+    if not hasattr(os, "add_dll_directory"):
+        return  # no es Windows: el loader ya encuentra las .so por su cuenta
+    try:
+        import nvidia
+    except ImportError:
+        return  # sin los wheels de NVIDIA; _get_whisper caerá a CPU
+    dirs = [str(b) for raiz in getattr(nvidia, "__path__", []) for b in Path(raiz).glob("*/bin")]
+    if not dirs:
+        return
+    os.environ["PATH"] = os.pathsep.join(dirs) + os.pathsep + os.environ.get("PATH", "")
+    for bin_dir in dirs:
         try:
-            from faster_whisper import WhisperModel
+            os.add_dll_directory(bin_dir)
+        except OSError:
+            pass  # un directorio que ya no existe no debe tumbar el arranque
+
+
+def _cargar_whisper(device: str, compute_type: str):
+    from faster_whisper import WhisperModel
+
+    modelo = WhisperModel(
+        STT_MODEL, device=device, compute_type=compute_type,
+        download_root=str(WHISPER_DIR),
+    )
+    # Transcripción de prueba sobre medio segundo de silencio: en GPU, cargar el
+    # modelo NO es lo que falla (falla al ejecutarlo si falta una DLL o no cabe en
+    # VRAM), así que sin esto el error saldría en la primera frase real del usuario,
+    # cuando ya no hay a dónde caer. De paso calienta el VAD de Silero.
+    list(modelo.transcribe(np.zeros(SR // 2, dtype=np.float32), language=STT_LANG)[0])
+    return modelo
+
+
+def _get_whisper():
+    """Modelo faster-whisper cargado (perezoso y cacheado).
+
+    Elige dispositivo según `STT_DEVICE`: en "auto" intenta la GPU y cae a CPU sin
+    drama si falta cuBLAS o no hay tarjeta — la diferencia medida es grande (~1,5 s
+    vs ~0,15 s por frase con el modelo `small`), pero nunca a cambio de no poder
+    escuchar. En "cuda" el fallo es explícito (§1): si lo pediste a mano, no se
+    degrada en silencio."""
+    global _whisper, _whisper_device
+    with _carga_lock:
+        if _whisper is not None:
+            return _whisper
+        # ORDEN CRÍTICO: las DLL de CUDA se registran ANTES de importar
+        # faster_whisper. ctranslate2 fija su ruta de búsqueda al importarse, así que
+        # un add_dll_directory posterior no le sirve de nada: falla con «Library
+        # cublas64_12.dll is not found» teniendo el DLL instalado y registrado
+        # (pisado ya una vez, cuesta media hora de depuración encontrarlo).
+        if STT_DEVICE in ("auto", "cuda"):
+            _registrar_dlls_cuda()
+        try:
+            import faster_whisper  # noqa: F401
         except ImportError as exc:
             raise VozError("Falta faster-whisper: pip install faster-whisper") from exc
         WHISPER_DIR.mkdir(parents=True, exist_ok=True)
-        _whisper = WhisperModel(
-            STT_MODEL, device="cpu", compute_type="int8",
-            download_root=str(WHISPER_DIR),
-        )
-    return _whisper
+        modelo = None
+        if STT_DEVICE in ("auto", "cuda"):
+            try:
+                modelo = _cargar_whisper("cuda", "float16")
+                _whisper_device = "cuda"
+            except Exception as exc:
+                if STT_DEVICE == "cuda":
+                    raise VozError(
+                        f"Pediste STT en GPU (CRISTOPHER_STT_DEVICE=cuda) y no arrancó: {exc}. "
+                        "Suele faltar cuBLAS: pip install nvidia-cublas-cu12. "
+                        "Con CRISTOPHER_STT_DEVICE=auto tiraría de CPU sin fallar."
+                    ) from exc
+                modelo = None  # "auto": se sigue a CPU, más lento pero seguro
+        if modelo is None:
+            modelo = _cargar_whisper("cpu", "int8")
+            _whisper_device = "cpu"
+        # Publicar SOLO al final: `_whisper` es lo que mira el resto del código para
+        # saber si hay que cargar, y dejarlo a medias (o apuntando a un modelo que
+        # todavía no pasó el warm-up) haría que otro hilo lo diera por bueno.
+        _whisper = modelo
+        return _whisper
+
+
+def stt_dispositivo() -> Optional[str]:
+    """Dónde corre el STT REALMENTE ("cuda"/"cpu"), o None si aún no se ha cargado.
+    Lo usa el precalentado del HUD para decirlo en la consola: en "auto" la caída a
+    CPU es silenciosa por diseño, y hay que poder verla sin adivinar."""
+    return _whisper_device
 
 
 def transcribir(audio: np.ndarray, sr: int = SR) -> str:
@@ -264,7 +357,9 @@ def descargar_voz(nombre: str) -> None:
 
 def _get_piper(nombre: Optional[str] = None):
     nombre = nombre or voz_actual_nombre()
-    if nombre not in _piper_cache:
+    with _carga_lock:
+        if nombre in _piper_cache:
+            return _piper_cache[nombre]
         ruta = _ruta_voz(nombre)
         if not ruta.exists():
             raise VozError(
@@ -276,7 +371,7 @@ def _get_piper(nombre: Optional[str] = None):
         except ImportError as exc:
             raise VozError("Falta piper-tts: pip install piper-tts") from exc
         _piper_cache[nombre] = PiperVoice.load(str(ruta))
-    return _piper_cache[nombre]
+        return _piper_cache[nombre]
 
 
 def sintetizar(texto: str) -> tuple[np.ndarray, int]:
@@ -577,6 +672,29 @@ def hablar(texto: str) -> None:
         sd.wait()
     except Exception as exc:
         raise VozError(f"No pude reproducir audio (¿altavoz?): {exc}") from exc
+
+
+# --- Precalentado de modelos ---------------------------------------------------
+def precalentar() -> str:
+    """Carga en memoria los modelos de voz ANTES del primer uso y devuelve un resumen
+    de lo cargado.
+
+    Sin esto, la primera frase de cada sesión paga la carga de los modelos además de
+    su propio trabajo: medido en esta máquina, +1,2 a 1,8 s de faster-whisper y +1,6 s
+    de Piper — unos 3 s que el usuario percibe como "arranca lento" y que no se
+    repiten en el resto de la sesión. Lo llama el HUD en un hilo daemon al arrancar
+    (`hud/__main__.py::_precalentar_voz`).
+
+    Piper solo se precarga si es el proveedor activo: con ElevenLabs la síntesis es
+    una llamada HTTP y cargar un modelo local que no se va a usar solo gasta RAM."""
+    cargado = []
+    _get_whisper()
+    cargado.append(f"STT {STT_MODEL} en {stt_dispositivo()}")
+    if proveedor_actual() == "piper":
+        nombre = voz_actual_nombre()
+        _get_piper(nombre)
+        cargado.append(f"TTS Piper {nombre}")
+    return " · ".join(cargado)
 
 
 # --- Micrófono (push-to-talk) -------------------------------------------------
