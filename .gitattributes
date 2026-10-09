@@ -1,0 +1,3 @@
+# Scripts y unidades que se ejecutan en el servidor Linux: siempre LF, aunque este repo
+# use core.autocrlf=true en Windows (con CRLF, bash falla con "$'\r': command not found").
+deploy/** text eol=lf

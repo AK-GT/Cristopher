@@ -394,6 +394,10 @@ WHATSAPP_SESSION_DIR = WHATSAPP_DATA / "session"  # credenciales Baileys (useMul
 WHATSAPP_STORE_DIR = WHATSAPP_DATA / "store"      # histórico de mensajes en JSON por chat
 WHATSAPP_LOG = WHATSAPP_DATA / "server.log"       # stdout/stderr del proceso Node
 WHATSAPP_PORT = int(os.getenv("CRISTOPHER_WHATSAPP_PORT", "8766"))
+# Interruptor por máquina (plan.md, fase B): WhatsApp vive SOLO en el servidor. En el
+# PC se pone CRISTOPHER_WHATSAPP=off para que nunca lance Node ni vigile el chat — con
+# dos sesiones vinculadas, cada /Cristopher se ejecutaría dos veces.
+WHATSAPP_ACTIVO = os.getenv("CRISTOPHER_WHATSAPP", "on").strip().lower() != "off"
 WHATSAPP_START_TIMEOUT = 20   # s: esperando a que /health responda tras lanzar el proceso Node
 WHATSAPP_HTTP_TIMEOUT = 15    # s: timeout por request a la API del servicio Node
 

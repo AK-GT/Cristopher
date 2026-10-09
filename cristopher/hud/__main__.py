@@ -33,6 +33,7 @@ from cristopher.config import (
     POLL_WHATSAPP_COMANDOS,
     REINICIO_LOG,
     ROOT,
+    WHATSAPP_ACTIVO,
     WHATSAPP_HEARTBEAT_SEGUNDOS,
 )
 from cristopher.control_total import killswitch
@@ -1213,6 +1214,8 @@ def _precalentar_voz():
 
 
 def _whatsapp_comandos_watcher():
+    if not WHATSAPP_ACTIVO:
+        return  # WhatsApp vive en otra máquina: no vigilar nada (config.WHATSAPP_ACTIVO)
     try:
         from cristopher import whatsapp_comandos
         whatsapp_comandos.vigilar(_on_whatsapp_comando)

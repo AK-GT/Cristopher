@@ -23,6 +23,7 @@ from typing import Optional
 import requests
 
 from cristopher.config import (
+    WHATSAPP_ACTIVO,
     WHATSAPP_DIR,
     WHATSAPP_HTTP_TIMEOUT,
     WHATSAPP_LOG,
@@ -105,6 +106,13 @@ def _ensure_running() -> None:
     llamada (siguiente tool call o siguiente ciclo del demonio, ~60s después) lo
     intentará de nuevo — nunca reintenta dentro de esta misma llamada más de una vez.
     """
+    if not WHATSAPP_ACTIVO:
+        # Antes incluso de adoptar un servicio ya vivo: en esta máquina no se toca
+        # WhatsApp en absoluto (ver config.WHATSAPP_ACTIVO).
+        raise WhatsAppError(
+            "WhatsApp está desactivado en esta máquina (CRISTOPHER_WHATSAPP=off): "
+            "vive en el servidor. Usa el CRISTOPHER del servidor para WhatsApp."
+        )
     global _PROC
     with _LOCK:
         if _PROC is not None and _PROC.poll() is None:

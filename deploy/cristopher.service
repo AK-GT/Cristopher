@@ -1,0 +1,22 @@
+# CRISTOPHER en modo servidor (plan.md, fase B). Lo instala deploy/instalar.sh.
+# Logs: journalctl -u cristopher -f
+[Unit]
+Description=CRISTOPHER (modo servidor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=cristopher
+WorkingDirectory=/home/cristopher/Cristopher
+# Las claves van en .env (chmod 600), que carga config.py con python-dotenv.
+Environment=CRISTOPHER_MODO=servidor
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+ExecStart=/home/cristopher/Cristopher/.venv/bin/python -m cristopher
+Restart=always
+RestartSec=10
+# KillMode=control-group (por defecto): al parar, muere también el Node de WhatsApp que
+# lanza whatsapp_client.py. Un Node huérfano con la sesión abierta daría el error 440.
+
+[Install]
+WantedBy=multi-user.target
