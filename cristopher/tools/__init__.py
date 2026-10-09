@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from cristopher.config import MODO_SERVIDOR
 from cristopher.tools.code_tools import (
     activar_modo_code,
     desactivar_modo_code,
@@ -3049,6 +3050,47 @@ TOOLS: list[dict[str, Any]] = [
         "fn": auto_arreglo_lanzar_sesion,
     },
 ]
+
+# Modo servidor (config.MODO_SERVIDOR): sin pantalla, altavoz ni PC delante, estas tools
+# no tienen sobre qué actuar. Se quitan de TOOLS y con eso desaparecen a la vez de las
+# declaraciones, del dispatch y del system prompt (fuente única de verdad).
+_SOLO_ESCRITORIO: frozenset[str] = frozenset({
+    # Apps, arranque por palmadas y navegador visible (navegar_leer sí se queda).
+    "abrir_app", "cerrar_app", "cancion_arranque_cambiar", "cancion_arranque_ver",
+    "escucha_detener_sesion", "buscar_en_google", "navegador_ir", "navegador_click",
+    "navegador_scroll", "navegador_leer", "navegador_captura", "navegador_cerrar",
+    # Respuesta hablada por el altavoz del PC.
+    "activar_modo_voz", "desactivar_modo_voz",
+    # Música (VLC local).
+    "reproducir", "pausar", "reanudar", "siguiente", "anterior", "volumen", "que_suena",
+    "ver_cola", "anadir_a_cola", "quitar_de_cola", "vaciar_cola", "anadir_favorito",
+    "quitar_favorito", "listar_favoritos", "reproducir_favoritos", "crear_lista",
+    "anadir_a_lista", "quitar_de_lista", "reproducir_lista", "listar_listas",
+    # Pantallas dedicadas del HUD y Control Total.
+    "activar_modo_code", "desactivar_modo_code", "activar_modo_redes",
+    "desactivar_modo_redes", "activar_modo_calendario", "desactivar_modo_calendario",
+    "activar_control_total", "desactivar_control_total",
+    # Control del PC.
+    "leer_portapapeles", "capturar_pantalla", "capturar_ventana_activa",
+    "volumen_sistema", "bloquear_pc", "apagar", "reiniciar", "suspender",
+    "gestionar_ventana",
+    # Concentración (apps/música/volumen del PC) y Modo Seguro (webcam).
+    "concentracion_iniciar", "concentracion_terminar", "concentracion_estado",
+    "concentracion_configurar", "concentracion_app_distractora_agregar",
+    "concentracion_app_distractora_quitar",
+    "seguro_activar", "seguro_desactivar", "seguro_ver_camara", "seguro_ocultar_camara",
+    "seguro_estado", "seguro_configurar", "seguro_configurar_contrasena",
+    "seguro_enrolar", "seguro_listar_personas", "seguro_olvidar_persona",
+})
+
+# Un nombre que ya no exista (tool renombrada) dejaría el filtro roto en silencio:
+# mejor reventar al importar, en cualquier modo, que descubrirlo en el VPS.
+_desconocidas = _SOLO_ESCRITORIO - {t["name"] for t in TOOLS}
+if _desconocidas:
+    raise RuntimeError(f"_SOLO_ESCRITORIO nombra tools que no existen: {sorted(_desconocidas)}")
+
+if MODO_SERVIDOR:
+    TOOLS = [t for t in TOOLS if t["name"] not in _SOLO_ESCRITORIO]
 
 # Índice nombre -> callable, para el dispatch del bucle.
 _BY_NAME: dict[str, Callable[..., str]] = {t["name"]: t["fn"] for t in TOOLS}

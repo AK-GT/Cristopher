@@ -29,6 +29,7 @@ from cristopher.agent import Cristopher, split_final
 from cristopher.config import (
     HUD_PORT,
     HUD_UPLOADS_DIR,
+    MODO_SERVIDOR,
     POLL_WHATSAPP_COMANDOS,
     REINICIO_LOG,
     ROOT,
@@ -178,6 +179,45 @@ def _whatsapp_confirm(prompt: str, chat_id: str) -> bool:
     return ok
 
 
+def _self_chat_o_none() -> str | None:
+    try:
+        from cristopher import whatsapp_client
+        chat_id = whatsapp_client.self_chat_id()
+    except Exception as exc:
+        bus.log("error", f"confirmación §9: WhatsApp no disponible ({exc}); se cancela")
+        return None
+    if not chat_id:
+        bus.log("error", "confirmación §9: WhatsApp sin sesión vinculada; se cancela")
+    return chat_id
+
+
+def _servidor_confirm_texto(prompt: str, permite_texto: bool = True) -> "tuple[bool, str]":
+    """Modo servidor: no hay HUD donde pinchar, así que TODA confirmación (programadas,
+    cofundador, /enviar) va al chat "Note to self". El chat se resuelve en cada
+    llamada (la sesión de WhatsApp puede vincularse después de arrancar). Sin
+    WhatsApp, silencio = no (§8): nunca se aprueba sola."""
+    chat_id = _self_chat_o_none()
+    if not chat_id:
+        return False, ""
+    return _whatsapp_confirm_texto(prompt, chat_id, permite_texto)
+
+
+def _servidor_confirm(prompt: str) -> bool:
+    ok, _texto = _servidor_confirm_texto(prompt, permite_texto=False)
+    return ok
+
+
+def _confirmadores_por_defecto() -> None:
+    """Instala el confirmador de fuera de un turno de WhatsApp: clic en el HUD, o
+    WhatsApp "Note to self" en modo servidor. Lo llaman main() y _procesar al restaurar."""
+    if MODO_SERVIDOR:
+        set_confirmer(_servidor_confirm)
+        set_confirmer_texto(_servidor_confirm_texto)
+    else:
+        set_confirmer(_hud_confirm)
+        set_confirmer_texto(_hud_confirm_texto)
+
+
 def _whatsapp_heartbeat(chat_id: str) -> None:
     """Disparo único de un threading.Timer (ver _procesar): si el turno sigue en
     marcha pasados WHATSAPP_HEARTBEAT_SEGUNDOS, manda un aviso de que sigue
@@ -271,8 +311,7 @@ def _procesar(
         if heartbeat:
             heartbeat.cancel()
         if es_whatsapp:
-            set_confirmer(_hud_confirm)
-            set_confirmer_texto(_hud_confirm_texto)
+            _confirmadores_por_defecto()
 
 
 def _worker() -> None:
@@ -1283,49 +1322,65 @@ def main() -> int:
     if _otra_instancia_viva():
         # Ya hay un HUD real corriendo: reabre la pestaña en vez de apilar otro
         # proceso en silencio (ver _otra_instancia_viva). No es un fallo: es el
-        # mismo caso que resuelve escucha.py cuando ya está despierto.
+        # mismo caso que resuelve escucha.py cuando ya está despierto. En el
+        # servidor no hay pestaña que abrir: se dice y se sale.
         url = f"http://localhost:{HUD_PORT}"
         if sys.stdout is not None:
-            print(f"CRISTOPHER ya está corriendo en {url}; abro la pestaña.")
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
+            print(f"CRISTOPHER ya está corriendo en {url}"
+                  + ("." if MODO_SERVIDOR else "; abro la pestaña."))
+        if not MODO_SERVIDOR:
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
         return 0
     # En el HUD, la confirmación de acciones irreversibles (§9) es por clic, no por
     # stdin: el usuario escribe desde el navegador y no vería un input() del servidor.
-    set_confirmer(_hud_confirm)
-    set_confirmer_texto(_hud_confirm_texto)
+    # En modo servidor, por WhatsApp "Note to self" (ver _confirmadores_por_defecto).
+    _confirmadores_por_defecto()
     from cristopher.sesiones import get_gestor_sesiones
     get_gestor_sesiones().set_on_evento(_on_evento_sesion)
     from cristopher.programador import get_programador
     get_programador().recuperar_huerfanas()
     from cristopher import calendario
     calendario.set_on_cambio(_on_calendario_cambio)
-    # Kill-switch del Modo Control Total (Fase 1): registrado desde el arranque del
-    # sistema vivo, no desde un script aparte — queda escuchando todo lo que dure este
-    # proceso. Inofensivo mientras no haya ninguna primitiva de control_total en marcha
-    # (Fase 2/4 son quienes lo consumen de verdad); degrada solo con un log.warning si
-    # falta pynput o falla el registro (ver killswitch.iniciar_killswitch).
-    killswitch.iniciar_killswitch()
-    # Fase 4: el bucle narra en vivo (widget) y el kill-switch, si salta, deja el
-    # widget/borde/HUD coherentes (no solo el flag de bajo nivel del driver).
-    from cristopher.control_total import bucle
-    from cristopher.tools.control_total_tools import desactivar_control_total
-    bucle.set_on_evento(_on_evento_control_total)
-    killswitch.set_on_disparo_extra(lambda: desactivar_control_total())
+    if not MODO_SERVIDOR:
+        # Kill-switch del Modo Control Total (Fase 1): registrado desde el arranque del
+        # sistema vivo, no desde un script aparte — queda escuchando todo lo que dure este
+        # proceso. Inofensivo mientras no haya ninguna primitiva de control_total en marcha
+        # (Fase 2/4 son quienes lo consumen de verdad); degrada solo con un log.warning si
+        # falta pynput o falla el registro (ver killswitch.iniciar_killswitch).
+        killswitch.iniciar_killswitch()
+        # Fase 4: el bucle narra en vivo (widget) y el kill-switch, si salta, deja el
+        # widget/borde/HUD coherentes (no solo el flag de bajo nivel del driver).
+        from cristopher.control_total import bucle
+        from cristopher.tools.control_total_tools import desactivar_control_total
+        bucle.set_on_evento(_on_evento_control_total)
+        killswitch.set_on_disparo_extra(lambda: desactivar_control_total())
     threading.Thread(target=_worker, daemon=True).start()
-    threading.Thread(target=_muestreo_metricas, daemon=True).start()
     threading.Thread(target=_demonio_proactivo, daemon=True).start()
     threading.Thread(target=_whatsapp_comandos_watcher, daemon=True).start()
-    threading.Thread(target=_redes_poll_loop, daemon=True).start()
-    threading.Thread(target=_seguro_vigilante_thread, daemon=True).start()
     threading.Thread(target=_precalentar_voz, daemon=True).start()
+    if not MODO_SERVIDOR:
+        # Solo tienen sentido con PC y HUD delante: métricas del equipo, pantalla de
+        # redes (sondea solo con ella abierta) y la webcam del Modo Seguro.
+        threading.Thread(target=_muestreo_metricas, daemon=True).start()
+        threading.Thread(target=_redes_poll_loop, daemon=True).start()
+        threading.Thread(target=_seguro_vigilante_thread, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", HUD_PORT), Handler)
     url = f"http://localhost:{HUD_PORT}"
     # Mismo guard que cristopher/__main__.py: bajo pythonw (sin consola) sys.stdout es
     # None y print() revienta con AttributeError (bpo-13120), matando el proceso antes
     # de abrir el navegador o arrancar el servidor.
+    if MODO_SERVIDOR:
+        if sys.stdout is not None:
+            print(f"CRISTOPHER en modo servidor en {url}  (Ctrl+C para salir)")
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            if sys.stdout is not None:
+                print("\nServidor detenido.")
+        return 0
     if sys.stdout is not None:
         print(f"CRISTOPHER HUD en {url}  (Ctrl+C para salir)")
     try:

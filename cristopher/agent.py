@@ -18,7 +18,7 @@ from google import genai
 from google.genai import errors, types
 
 from cristopher import estado_code, estado_diario, personalidad, voz
-from cristopher.config import FALLBACK_MODEL, MODEL, get_api_key
+from cristopher.config import FALLBACK_MODEL, MODEL, MODO_SERVIDOR, get_api_key
 from cristopher.episodica import get_episodica
 from cristopher.memory import get_memory
 from cristopher.tools import TOOLS, call_tool
@@ -305,6 +305,19 @@ def _ahora_block() -> str:
     )
 
 
+# En modo servidor tools/__init__.py ya quita las tools de escritorio, pero IDENTITY y
+# las reglas siguen nombrando algunas (música, Control Total, Modo Seguro…): sin esto
+# el modelo gastaría un paso intentándolas para chocar con "herramienta desconocida".
+_SERVIDOR_BLOCK = (
+    "# MODO SERVIDOR\n"
+    "Ahora corres en un servidor remoto, sin pantalla, sin altavoz y sin acceso al PC "
+    "del usuario. Todo lo de escritorio (música, control del PC, apps, Control Total, "
+    "Modo Seguro, navegador visible, pantallas del HUD) NO está disponible aunque se "
+    "mencione más arriba: si te lo piden, dilo claramente en vez de intentarlo. Solo "
+    "cuentan las herramientas de la sección 6."
+)
+
+
 def build_system_prompt(descripciones_completas: bool = False) -> str:
     """Compone el system prompt: identidad + capacidades AUTO-GENERADAS desde el
     registro TOOLS + personalidad (base fija + directivas adaptables que CRISTOPHER
@@ -346,6 +359,8 @@ def build_system_prompt(descripciones_completas: bool = False) -> str:
     voz_block = _voz_block()
     if voz_block:
         parts.append(voz_block)
+    if MODO_SERVIDOR:
+        parts.append(_SERVIDOR_BLOCK)
     parts.append(_ahora_block())
     return "\n\n".join(parts)
 

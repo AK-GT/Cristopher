@@ -65,6 +65,12 @@ FALLBACK_MODEL = os.getenv("CRISTOPHER_FALLBACK_MODEL", "gemini-3.1-flash-lite-p
 MODO_SALIDA = os.getenv("CRISTOPHER_MODO_SALIDA", "texto").strip().lower()
 MOSTRAR_PENSAMIENTO = MODO_SALIDA != "voz"
 
+# Modo servidor (plan.md, fase A): el mismo código, sin nada de escritorio, para correr
+# en un VPS sin pantalla ni altavoz. Filtra las tools de PC (tools/__init__.py), no
+# arranca Chrome/kill-switch/cámara (hud/__main__.py) y pide las confirmaciones §9 por
+# WhatsApp "Note to self", porque no hay HUD donde pinchar.
+MODO_SERVIDOR = os.getenv("CRISTOPHER_MODO", "").strip().lower() == "servidor"
+
 # Directorio de trabajo donde CRISTOPHER clona repos / crea archivos temporales.
 WORKSPACE = ROOT / "workspace"
 
