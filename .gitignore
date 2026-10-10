@@ -26,3 +26,6 @@ Thumbs.db
 .DS_Store
 .vscode/
 .idea/
+
+# QR de vinculación de WhatsApp (lo regenera setup_qr.js)
+whatsapp/qr.png
